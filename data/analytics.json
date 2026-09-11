@@ -1,0 +1,44 @@
+{
+  "commands": 18,
+  "llm_errors": 6,
+  "module_crashes": 0,
+  "events_total": 3671,
+  "response_times": [
+    0.401
+  ],
+  "stt_latencies": [
+    2160.9,
+    39587.1
+  ],
+  "tts_latencies": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "model_latencies": [
+    1335.0,
+    1336.0,
+    1336.0
+  ],
+  "overall_latencies": [],
+  "wake_word_latencies": [],
+  "intent_latencies": [],
+  "interruptions": 0,
+  "cancelled_tasks": 0,
+  "false_wake_words": 0,
+  "recognition_samples": [
+    0.95,
+    0.95,
+    0.95,
+    0.95,
+    0.5855346694588661,
+    0.43185763888888884
+  ],
+  "session_start": 1786641512.7094805
+}

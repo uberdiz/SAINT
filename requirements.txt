@@ -1,0 +1,24 @@
+# SAINT v0.1 Core
+PySide6>=6.6.0
+requests>=2.31.0
+psutil>=5.9.0
+
+# --- Milestone 1: Voice Pipeline ---
+
+# Audio capture (cross-platform, numpy-native)
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# STT: faster-whisper (CTranslate2 Whisper with CUDA support)
+# Requires CUDA 11.8+ and cuDNN 8+ installed separately.
+faster-whisper>=1.0.3
+
+# TTS: kokoro-onnx with GPU acceleration via onnxruntime-gpu
+# NOTE: install onnxruntime-gpu INSTEAD of onnxruntime (not both).
+#   pip install onnxruntime-gpu   (for CUDA)
+#   pip install onnxruntime       (for CPU fallback)
+kokoro-onnx>=0.4.0
+
+# Testing
+pytest>=8.0.0
