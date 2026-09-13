@@ -1,0 +1,14 @@
+{
+    "env": {
+        "ANTHROPIC_BASE_URL": "http://localhost:20128/v1",
+        "ANTHROPIC_AUTH_TOKEN": "sk-981dfef5c170830b-8b1316-1baba6a8",
+        "ANTHROPIC_API_KEY": "",
+        "ANTHROPIC_MODEL": "auto/best-free",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "auto/",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "auto/best-free",
+        "ANTHROPIC_DEFAULT_FABLE_MODEL": "auto/best-free",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": "auto/best-free",
+        "CLAUDE_CODE_SUBAGENT_MODEL": "auto/best-free",
+        "CLAUDE_CODE_MAX_CONTENT_TOKENS": "2560000"
+    }
+}

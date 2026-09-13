@@ -24,10 +24,11 @@ import numpy as np
 # ---------------------------------------------------------------------------
 class RmsVAD:
     """
-    Lightweight RMS-based voice activity detector.
+    Lightweight RMS-based voice activity detector with hysteresis.
 
     Maintains a noise floor estimate via a running minimum over short
-    windows. Speech is detected when RMS exceeds (noise_floor + threshold).
+    windows. Speech is detected when RMS exceeds (noise_floor + start_threshold).
+    Speech ends when RMS falls below (noise_floor + end_threshold).
     """
 
     def __init__(
@@ -36,8 +37,12 @@ class RmsVAD:
         noise_suppression: bool = True,
         sample_rate: int = 16000,
         frame_ms: int = 30,
+        start_threshold: float = None,
+        end_threshold: float = None,
     ):
         self.threshold = threshold
+        self.start_threshold = start_threshold if start_threshold is not None else threshold
+        self.end_threshold = end_threshold if end_threshold is not None else threshold * 0.5
         self.noise_suppression = noise_suppression
         self.sample_rate = sample_rate
         self.frame_ms = frame_ms
@@ -48,6 +53,9 @@ class RmsVAD:
             maxlen=int(10_000 / frame_ms)
         )
         self._noise_floor: float = 0.0
+
+        # Hysteresis state
+        self._in_speech: bool = False
 
     def feed(self, chunk: np.ndarray) -> bool:
         """Return True if voice is detected in this chunk."""
@@ -62,7 +70,23 @@ class RmsVAD:
         else:
             effective_rms = rms
 
-        return effective_rms > self.threshold
+        # Hysteresis: different thresholds for entering vs leaving speech
+        if self._in_speech:
+            # Currently in speech - use lower end threshold to stay in speech
+            is_voice = effective_rms > self.end_threshold
+            if not is_voice:
+                self._in_speech = False
+        else:
+            # Currently in silence - use higher start threshold to enter speech
+            is_voice = effective_rms > self.start_threshold
+            if is_voice:
+                self._in_speech = True
+
+        return is_voice
+
+    def reset(self):
+        """Reset hysteresis state."""
+        self._in_speech = False
 
     @staticmethod
     def _rms(chunk: np.ndarray) -> float:
@@ -128,5 +152,13 @@ class SileroVAD:
 
 
 def make_vad(threshold: float = 0.015, noise_suppression: bool = True) -> RmsVAD:
-    """Factory — returns best available VAD."""
-    return RmsVAD(threshold=threshold, noise_suppression=noise_suppression)
+    """Factory — returns best available VAD with hysteresis thresholds from config."""
+    from core.config import config
+    start_threshold = config.get("voice.vad_start_threshold", threshold)
+    end_threshold = config.get("voice.vad_end_threshold", threshold * 0.5)
+    return RmsVAD(
+        threshold=threshold,
+        noise_suppression=noise_suppression,
+        start_threshold=start_threshold,
+        end_threshold=end_threshold,
+    )

@@ -2,11 +2,11 @@
   "theme": "Dark",
   "ai": {
     "provider": "ollama",
-    "model": "gpt-4o-mini",
-    "base_url": "https://api.openai.com/v1",
+    "model": "llama3.2:1b",
+    "base_url": "http://localhost:11434",
     "api_key": "",
     "temperature": 0.7,
-    "timeout_seconds": 30
+    "timeout_seconds": 60
   },
   "logging": {
     "level": "Verbose"
@@ -23,24 +23,59 @@
     "memory": false
   },
   "voice": {
-    "mode": "always_on",
-    "mic_device": 28,
+    "mode": "push_to_talk",
+    "mic_device": 2,
     "mic_sensitivity": 0.015,
-    "silence_duration_ms": 700,
+    "silence_duration_ms": 200,
+    "agent_response_delay_ms": 0,
     "noise_suppression": true,
+    "vad_start_threshold": 0.015,
+    "vad_end_threshold": 0.0075,
+    "min_speech_duration_ms": 300,
+    "min_speech_rms": 0.005,
     "stt_backend": "faster_whisper",
     "stt_model": "base.en",
     "stt_device": "cuda",
     "stt_compute_type": "float16",
     "stt_language": "en",
     "tts_backend": "kokoro",
+    "tts_model_dir": "data/tts",
     "tts_voice": "af_heart",
-    "tts_device": "cuda",
+    "tts_device": "cpu",
     "tts_speed": 1.0,
+    "tts_qwen_model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+    "tts_qwen_type": "custom_voice",
+    "tts_qwen_speaker": "eric",
+    "tts_qwen_language": "Auto",
+    "tts_qwen_dtype": "bfloat16",
+    "tts_qwen_voice_clone_audio": "",
+    "tts_qwen_voice_clone_text": "",
+    "tts_qwen_x_vector_only": false,
+    "tts_qwen_instruct": "",
+    "tts_qwen_flash_attention": "Auto",
     "wake_word_enabled": false,
     "wake_word": "saint",
     "wake_word_sensitivity": 0.5,
-    "max_context_turns": 6,
+    "max_context_turns": 5,
     "system_prompt": "You are SAINT, a helpful AI assistant. Be concise. Respond naturally. If the user interrupts you, adapt immediately without apologising."
+  },
+  "dashboard": {
+    "complexity": "Developer"
+  },
+  "automation": {
+    "enabled": true,
+    "permission_mode": "confirm",
+    "confirm_dangerous": true,
+    "command_timeout": 30
+  },
+  "memory": {
+    "enabled": true,
+    "retention_days": 30,
+    "max_conversation_turns": 100
+  },
+  "system": {
+    "startup_check": true,
+    "log_level": "Verbose",
+    "data_dir": "data"
   }
 }

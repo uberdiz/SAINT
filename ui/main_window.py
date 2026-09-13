@@ -18,14 +18,13 @@ from ui.analytics_ui import AnalyticsUI
 from ui.health_ui import HealthUI
 from ui.console_ui import ConsoleUI
 from ui.settings_ui import SettingsUI
-from ui.voice_ui import VoiceUI
 from ui.theme import stylesheet_for
 
 from core.config import config
 from core.events import event_bus, EventType
 
 
-PAGES = ["Dashboard", "Voice", "Module Manager", "Analytics", "Health", "Console", "Settings"]
+PAGES = ["Dashboard", "Module Manager", "Analytics", "Health", "Console", "Settings"]
 
 
 class MainWindow(QMainWindow):
@@ -55,7 +54,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack)
 
         self.dashboard = Dashboard()
-        self.voice_ui = VoiceUI()
         self.module_manager_ui = ModuleManagerUI()
         self.analytics_ui = AnalyticsUI()
         self.health_ui = HealthUI()
@@ -63,7 +61,7 @@ class MainWindow(QMainWindow):
         self.settings_ui = SettingsUI(on_theme_changed=self.apply_theme)
 
         for page in [
-            self.dashboard, self.voice_ui, self.module_manager_ui,
+            self.dashboard, self.module_manager_ui,
             self.analytics_ui, self.health_ui, self.console_ui, self.settings_ui,
         ]:
             self.stack.addWidget(page)

@@ -29,7 +29,7 @@ DEFAULT_CONFIG = {
     "auto_save": True,
     "modules": {
         "ai": True,
-        "voice": False,
+        "voice": True,
         "automation": False,
         "vision": False,
         "memory": False,
@@ -44,7 +44,16 @@ DEFAULT_CONFIG = {
         "mic_device": 0,                # sounddevice device index
         "mic_sensitivity": 0.015,       # RMS threshold for VAD (0.0–1.0)
         "silence_duration_ms": 700,     # ms of silence before utterance ends
+        "agent_response_delay_ms": 0,   # artificial delay before agent responds
         "noise_suppression": True,      # subtract rolling noise floor
+
+        # VAD hysteresis thresholds (for start/end detection)
+        "vad_start_threshold": 0.015,   # RMS threshold to START speech detection
+        "vad_end_threshold": 0.0075,    # RMS threshold to END speech detection (lower = hysteresis)
+
+        # Minimum speech validation (prevents false positives)
+        "min_speech_duration_ms": 300,  # minimum speech duration before STT
+        "min_speech_rms": 0.005,        # minimum RMS energy for valid speech
 
         # STT
         "stt_backend": "faster_whisper",  # "faster_whisper" | "mock"
@@ -54,10 +63,23 @@ DEFAULT_CONFIG = {
         "stt_language": "en",
 
         # TTS
-        "tts_backend": "kokoro",          # "kokoro" | "mock"
+        "tts_backend": "kokoro",          # "kokoro" | "qwen" | "mock"
+        "tts_model_dir": "data/tts",      # where Kokoro .onnx + voices .bin live
         "tts_voice": "af_heart",          # kokoro voice name
         "tts_device": "cuda",             # "cuda" | "cpu"
         "tts_speed": 1.0,
+
+        # Qwen TTS specific
+        "tts_qwen_model": "Qwen/Qwen3-TTS",  # HuggingFace model repo
+        "tts_qwen_type": "custom_voice",     # "custom_voice" | "voice_design" | "base"
+        "tts_qwen_speaker": "eric",        # CustomVoice speaker (validated at load; e.g. eric, serena, ryan, ...)
+        "tts_qwen_language": "Auto",         # language for generation
+        "tts_qwen_dtype": "bfloat16",        # "float16" | "bfloat16" | "float32"
+        "tts_qwen_voice_clone_audio": "",    # path to reference audio for Base model
+        "tts_qwen_voice_clone_text": "",     # reference text for ICL mode
+        "tts_qwen_x_vector_only": False,     # Base model: True = speaker embedding only
+        "tts_qwen_instruct": "",             # CustomVoice/VoiceDesign: style instruction
+        "tts_qwen_flash_attention": "Auto",  # "Auto" | "Enabled" | "Disabled" — FlashAttention2 is optional
 
         # Wake word (optional, disabled by default)
         "wake_word_enabled": False,
@@ -71,6 +93,41 @@ DEFAULT_CONFIG = {
             "Be concise. Respond naturally. "
             "If the user interrupts you, adapt immediately without apologising."
         ),
+    },
+
+    # ------------------------------------------------------------------
+    # Dashboard / Analytics
+    # ------------------------------------------------------------------
+    "dashboard": {
+        "complexity": "Standard",         # "Simple" | "Standard" | "Advanced" | "Developer"
+    },
+
+    # ------------------------------------------------------------------
+    # Automation / Permissions
+    # ------------------------------------------------------------------
+    "automation": {
+        "enabled": False,
+        "permission_mode": "confirm",     # "safe" | "confirm" | "autonomous"
+        "confirm_dangerous": True,        # Require confirmation for HIGH permission tools
+        "command_timeout": 30,            # seconds
+    },
+
+    # ------------------------------------------------------------------
+    # Memory
+    # ------------------------------------------------------------------
+    "memory": {
+        "enabled": False,
+        "retention_days": 30,             # Conversation history retention
+        "max_conversation_turns": 100,    # Max conversation turns to keep
+    },
+
+    # ------------------------------------------------------------------
+    # System / Diagnostics
+    # ------------------------------------------------------------------
+    "system": {
+        "startup_check": True,            # Run system check on startup
+        "log_level": "Verbose",
+        "data_dir": "data",
     },
 }
 

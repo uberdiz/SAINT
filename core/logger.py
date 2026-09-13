@@ -16,6 +16,7 @@ LOG_DIR = "data/logs"
 LOG_FILE = os.path.join(LOG_DIR, "saint.log")
 
 _logger = logging.getLogger("SAINT")
+_logger.propagate = False  # prevent duplicate emission to root logger
 _initialized = False
 
 
@@ -39,11 +40,9 @@ def init_logger(level="Verbose"):
 
     if not _logger.handlers:
         _logger.addHandler(handler)
-
-    # Also echo to stdout so `python app.py` shows activity in the terminal
-    stream = logging.StreamHandler()
-    stream.setFormatter(formatter)
-    if len(_logger.handlers) < 2:
+        # Echo to stdout so `python app.py` shows activity in the terminal
+        stream = logging.StreamHandler()
+        stream.setFormatter(formatter)
         _logger.addHandler(stream)
 
     def _on_event(ev):
@@ -52,6 +51,23 @@ def init_logger(level="Verbose"):
             _logger.error(msg)
         elif ev.type == "warning":
             _logger.warning(msg)
+        elif ev.type in (
+            "voice.audio.level",
+            "ai.stream.token",
+            "tts.speak.chunk",
+            "chat.message.update",
+            "voice.stt.debug",
+            "tts.inference.start",
+            "tts.inference.end",
+            "tts.audio.ready",
+            "tts.playback.start",
+            "tts.playback.end",
+            "latency.tts.inference",
+            "latency.tts.playback",
+            "tts.generation.start",
+            "tts.generation.end",
+        ):
+            pass
         else:
             _logger.info(msg)
 

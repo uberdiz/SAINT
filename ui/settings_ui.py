@@ -124,6 +124,13 @@ class SettingsUI(QWidget):
         self.silence_dur_spin.setValue(config.get("voice.silence_duration_ms", 400))
         form_voice_in.addRow("Silence Duration", self.silence_dur_spin)
 
+        self.response_delay_spin = QDoubleSpinBox()
+        self.response_delay_spin.setRange(0, 5000)
+        self.response_delay_spin.setSingleStep(100)
+        self.response_delay_spin.setSuffix(" ms")
+        self.response_delay_spin.setValue(config.get("voice.agent_response_delay_ms", 0))
+        form_voice_in.addRow("Agent Response Delay", self.response_delay_spin)
+
         self.noise_sup_checkbox = QCheckBox("Enabled")
         self.noise_sup_checkbox.setChecked(config.get("voice.noise_suppression", True))
         form_voice_in.addRow("Noise Suppression", self.noise_sup_checkbox)
@@ -170,12 +177,52 @@ class SettingsUI(QWidget):
         form_tts.setSpacing(10)
 
         self.tts_backend_combo = QComboBox()
-        self.tts_backend_combo.addItems(["kokoro", "mock"])
+        self.tts_backend_combo.addItems(["kokoro", "qwen", "mock"])
         self.tts_backend_combo.setCurrentText(config.get("voice.tts_backend", "kokoro"))
         form_tts.addRow("TTS Backend", self.tts_backend_combo)
 
         self.tts_voice_input = QLineEdit(config.get("voice.tts_voice", "af_heart"))
-        form_tts.addRow("Voice", self.tts_voice_input)
+        form_tts.addRow("Voice (Kokoro)", self.tts_voice_input)
+
+        # Qwen TTS settings
+        self.tts_qwen_model_input = QLineEdit(config.get("voice.tts_qwen_model", "Qwen/Qwen3-TTS"))
+        form_tts.addRow("Model (Qwen)", self.tts_qwen_model_input)
+
+        self.tts_qwen_type_combo = QComboBox()
+        self.tts_qwen_type_combo.addItems(["custom_voice", "voice_design", "base"])
+        self.tts_qwen_type_combo.setCurrentText(config.get("voice.tts_qwen_type", "custom_voice"))
+        form_tts.addRow("Model Type (Qwen)", self.tts_qwen_type_combo)
+
+        self.tts_qwen_speaker_input = QLineEdit(config.get("voice.tts_qwen_speaker", "Cheerful"))
+        form_tts.addRow("Speaker (Qwen CustomVoice)", self.tts_qwen_speaker_input)
+
+        self.tts_qwen_language_input = QLineEdit(config.get("voice.tts_qwen_language", "Auto"))
+        form_tts.addRow("Language (Qwen)", self.tts_qwen_language_input)
+
+        self.tts_qwen_dtype_combo = QComboBox()
+        self.tts_qwen_dtype_combo.addItems(["float16", "bfloat16", "float32"])
+        self.tts_qwen_dtype_combo.setCurrentText(config.get("voice.tts_qwen_dtype", "bfloat16"))
+        form_tts.addRow("Dtype (Qwen)", self.tts_qwen_dtype_combo)
+
+        self.tts_qwen_voice_clone_audio = QLineEdit(config.get("voice.tts_qwen_voice_clone_audio", ""))
+        form_tts.addRow("Voice Clone Audio (Qwen Base)", self.tts_qwen_voice_clone_audio)
+
+        self.tts_qwen_voice_clone_text = QLineEdit(config.get("voice.tts_qwen_voice_clone_text", ""))
+        form_tts.addRow("Voice Clone Text (Qwen Base ICL)", self.tts_qwen_voice_clone_text)
+
+        self.tts_qwen_x_vector_only = QCheckBox("Enabled")
+        self.tts_qwen_x_vector_only.setChecked(config.get("voice.tts_qwen_x_vector_only", False))
+        form_tts.addRow("X-Vector Only (Qwen Base)", self.tts_qwen_x_vector_only)
+
+        self.tts_qwen_instruct_input = QLineEdit(config.get("voice.tts_qwen_instruct", ""))
+        form_tts.addRow("Instruct (Qwen CustomVoice/VoiceDesign)", self.tts_qwen_instruct_input)
+
+        self.tts_qwen_flash_combo = QComboBox()
+        self.tts_qwen_flash_combo.addItems(["Auto", "Enabled", "Disabled"])
+        self.tts_qwen_flash_combo.setCurrentText(
+            config.get("voice.tts_qwen_flash_attention", "Auto")
+        )
+        form_tts.addRow("Flash Attention (Qwen)", self.tts_qwen_flash_combo)
 
         self.tts_device_combo = QComboBox()
         self.tts_device_combo.addItems(["cuda", "cpu"])
@@ -230,6 +277,93 @@ class SettingsUI(QWidget):
         root.addLayout(form_log)
 
         # ==================================================================
+        # Dashboard
+        # ==================================================================
+        root.addWidget(_section("Dashboard"))
+        form_dash = QFormLayout()
+        form_dash.setSpacing(10)
+
+        self.dash_complexity_combo = QComboBox()
+        self.dash_complexity_combo.addItems(["Simple", "Standard", "Advanced", "Developer"])
+        self.dash_complexity_combo.setCurrentText(config.get("dashboard.complexity", "Standard"))
+        form_dash.addRow("Complexity", self.dash_complexity_combo)
+
+        root.addLayout(form_dash)
+
+        # ==================================================================
+        # Automation / Permissions
+        # ==================================================================
+        root.addWidget(_section("Automation & Permissions"))
+        form_auto = QFormLayout()
+        form_auto.setSpacing(10)
+
+        self.auto_enabled_checkbox = QCheckBox("Enabled")
+        self.auto_enabled_checkbox.setChecked(config.get("automation.enabled", False))
+        form_auto.addRow("Automation", self.auto_enabled_checkbox)
+
+        self.auto_perm_combo = QComboBox()
+        self.auto_perm_combo.addItems(["safe", "confirm", "autonomous"])
+        self.auto_perm_combo.setCurrentText(config.get("automation.permission_mode", "confirm"))
+        form_auto.addRow("Permission Mode", self.auto_perm_combo)
+
+        self.auto_confirm_dangerous = QCheckBox("Enabled")
+        self.auto_confirm_dangerous.setChecked(config.get("automation.confirm_dangerous", True))
+        form_auto.addRow("Confirm Dangerous Actions", self.auto_confirm_dangerous)
+
+        self.auto_timeout_spin = QDoubleSpinBox()
+        self.auto_timeout_spin.setRange(5, 300)
+        self.auto_timeout_spin.setSingleStep(5)
+        self.auto_timeout_spin.setSuffix(" sec")
+        self.auto_timeout_spin.setValue(config.get("automation.command_timeout", 30))
+        form_auto.addRow("Command Timeout", self.auto_timeout_spin)
+
+        root.addLayout(form_auto)
+
+        # ==================================================================
+        # Memory
+        # ==================================================================
+        root.addWidget(_section("Memory"))
+        form_mem = QFormLayout()
+        form_mem.setSpacing(10)
+
+        self.mem_enabled_checkbox = QCheckBox("Enabled")
+        self.mem_enabled_checkbox.setChecked(config.get("memory.enabled", False))
+        form_mem.addRow("Memory", self.mem_enabled_checkbox)
+
+        self.mem_retention_spin = QDoubleSpinBox()
+        self.mem_retention_spin.setRange(1, 365)
+        self.mem_retention_spin.setDecimals(0)
+        self.mem_retention_spin.setSuffix(" days")
+        self.mem_retention_spin.setValue(config.get("memory.retention_days", 30))
+        form_mem.addRow("Retention", self.mem_retention_spin)
+
+        self.mem_max_turns_spin = QDoubleSpinBox()
+        self.mem_max_turns_spin.setRange(10, 1000)
+        self.mem_max_turns_spin.setDecimals(0)
+        self.mem_max_turns_spin.setValue(config.get("memory.max_conversation_turns", 100))
+        form_mem.addRow("Max Conversation Turns", self.mem_max_turns_spin)
+
+        root.addLayout(form_mem)
+
+        # ==================================================================
+        # System
+        # ==================================================================
+        root.addWidget(_section("System"))
+        form_sys = QFormLayout()
+        form_sys.setSpacing(10)
+
+        self.startup_check_checkbox = QCheckBox("Enabled")
+        self.startup_check_checkbox.setChecked(config.get("system.startup_check", True))
+        form_sys.addRow("Startup System Check", self.startup_check_checkbox)
+
+        self.log_level_combo = QComboBox()
+        self.log_level_combo.addItems(["Verbose", "Normal", "Errors Only"])
+        self.log_level_combo.setCurrentText(config.get("system.log_level", "Verbose"))
+        form_sys.addRow("Log Level", self.log_level_combo)
+
+        root.addLayout(form_sys)
+
+        # ==================================================================
         # Save button
         # ==================================================================
         save_btn = QPushButton("Save Settings")
@@ -255,6 +389,8 @@ class SettingsUI(QWidget):
                    self.sensitivity_slider.value() / 1000, persist=False)
         config.set("voice.silence_duration_ms",
                    int(self.silence_dur_spin.value()), persist=False)
+        config.set("voice.agent_response_delay_ms",
+                   int(self.response_delay_spin.value()), persist=False)
         config.set("voice.noise_suppression",
                    self.noise_sup_checkbox.isChecked(), persist=False)
 
@@ -269,6 +405,17 @@ class SettingsUI(QWidget):
         # TTS
         config.set("voice.tts_backend", self.tts_backend_combo.currentText(), persist=False)
         config.set("voice.tts_voice", self.tts_voice_input.text(), persist=False)
+        config.set("voice.tts_qwen_model", self.tts_qwen_model_input.text(), persist=False)
+        config.set("voice.tts_qwen_type", self.tts_qwen_type_combo.currentText(), persist=False)
+        config.set("voice.tts_qwen_speaker", self.tts_qwen_speaker_input.text(), persist=False)
+        config.set("voice.tts_qwen_language", self.tts_qwen_language_input.text(), persist=False)
+        config.set("voice.tts_qwen_dtype", self.tts_qwen_dtype_combo.currentText(), persist=False)
+        config.set("voice.tts_qwen_voice_clone_audio", self.tts_qwen_voice_clone_audio.text(), persist=False)
+        config.set("voice.tts_qwen_voice_clone_text", self.tts_qwen_voice_clone_text.text(), persist=False)
+        config.set("voice.tts_qwen_x_vector_only", self.tts_qwen_x_vector_only.isChecked(), persist=False)
+        config.set("voice.tts_qwen_instruct", self.tts_qwen_instruct_input.text(), persist=False)
+        config.set("voice.tts_qwen_flash_attention",
+                   self.tts_qwen_flash_combo.currentText(), persist=False)
         config.set("voice.tts_device", self.tts_device_combo.currentText(), persist=False)
         config.set("voice.tts_speed", self.tts_speed_spin.value(), persist=False)
 
@@ -279,6 +426,24 @@ class SettingsUI(QWidget):
         # Logging / Analytics
         config.set("logging.level", self.logging_combo.currentText(), persist=False)
         config.set("analytics.enabled", self.analytics_checkbox.isChecked(), persist=False)
+
+        # Dashboard
+        config.set("dashboard.complexity", self.dash_complexity_combo.currentText(), persist=False)
+
+        # Automation
+        config.set("automation.enabled", self.auto_enabled_checkbox.isChecked(), persist=False)
+        config.set("automation.permission_mode", self.auto_perm_combo.currentText(), persist=False)
+        config.set("automation.confirm_dangerous", self.auto_confirm_dangerous.isChecked(), persist=False)
+        config.set("automation.command_timeout", int(self.auto_timeout_spin.value()), persist=False)
+
+        # Memory
+        config.set("memory.enabled", self.mem_enabled_checkbox.isChecked(), persist=False)
+        config.set("memory.retention_days", int(self.mem_retention_spin.value()), persist=False)
+        config.set("memory.max_conversation_turns", int(self.mem_max_turns_spin.value()), persist=False)
+
+        # System
+        config.set("system.startup_check", self.startup_check_checkbox.isChecked(), persist=False)
+        config.set("system.log_level", self.log_level_combo.currentText(), persist=False)
 
         config.save()
         event_bus.emit_event(EventType.SETTINGS_CHANGED, {})

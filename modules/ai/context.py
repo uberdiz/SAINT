@@ -60,8 +60,9 @@ class ConversationContext:
                 partial = self._history[-1]["content"]
                 self._history[-1]["content"] = partial + " [interrupted]"
             elif self._history and self._history[-1]["role"] == "user":
-                # No assistant turn yet — just add the new user text below
-                pass
+                # No assistant turn yet — the user's question was interrupted
+                # before SAINT could respond. Mark the user's question.
+                self._history[-1]["content"] = self._history[-1]["content"] + " [interrupted]"
 
             self._history.append({
                 "role": "user",

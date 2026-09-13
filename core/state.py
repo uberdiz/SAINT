@@ -45,9 +45,15 @@ class AppState:
         return f"{h:02d}:{m:02d}:{s:02d}"
 
     def cpu_percent(self):
+        """Return process CPU usage as a percentage of total system capacity (0-100%)."""
         if not _HAS_PSUTIL:
             return 0.0
-        return self._process.cpu_percent(interval=None)
+        # cpu_percent() returns percentage of ONE core by default
+        # Divide by logical CPU count to get percentage of total system capacity
+        # This gives us 0-100% range regardless of core count
+        raw_percent = self._process.cpu_percent(interval=None)
+        cpu_count = psutil.cpu_count(logical=True) or 1
+        return min(100.0, raw_percent / cpu_count)
 
     def ram_mb(self):
         if not _HAS_PSUTIL:
