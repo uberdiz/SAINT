@@ -46,3 +46,7 @@ class ModuleManager:
         else:
             module.disable()
         config.set(f"modules.{key}", enabled)
+
+
+# Singleton
+module_manager = ModuleManager()
