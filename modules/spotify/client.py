@@ -26,6 +26,9 @@ class SpotifyClient:
         headers["Authorization"] = f"Bearer {token}"
         started = time.perf_counter()
         response = requests.request(method, BASE_URL + path, headers=headers, timeout=15, **kwargs)
+        if response.status_code == 429:
+            retry_after = response.headers.get("Retry-After", "unknown")
+            raise SpotifyAPIError(f"Spotify rate limit reached; retry after {retry_after} seconds.", 429)
         elapsed_ms = (time.perf_counter() - started) * 1000
         if response.status_code == 401:
             self.auth.clear()
