@@ -442,6 +442,11 @@ class ConversationController:
                 self._voice.set_saint_speaking(False)
                 return
 
+            # A cancelled generation must never publish or speak its
+            # partial response after a newer user turn has taken over.
+            if self._get_state() == ConvState.INTERRUPTED or self._active_turn_id != turn_id:
+                return
+
             event_bus.emit_event(EventType.AI_STREAM_END, {
                 "turn_id": turn_id,
                 "session_id": session_id,
