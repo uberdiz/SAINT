@@ -139,11 +139,77 @@ class KokoroTTS(TTSEngine):
         self._pipeline = None
         self._interrupt_event = threading.Event()
         self._speaking = False
-        self._active_turn_id: int = -1
+        self._currently_playing = False
+        self._playback_active = False
         self._lock = threading.Lock()
         self._load_lock = threading.Lock()
         self._load_error: Optional[Exception] = None
         self._load_attempted = False
+        self._active_turn_id: int = -1
+
+        import queue
+        self._audio_queue = queue.Queue()
+        self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
+        self._playback_thread.start()
+
+    def _playback_loop(self):
+        import sounddevice as sd
+        import time
+        from core.events import event_bus, EventType
+
+        sample_rate = 24000
+        stream = sd.OutputStream(samplerate=sample_rate, channels=1)
+        stream.start()
+
+        try:
+            while True:
+                if self._interrupt_event.is_set():
+                    while not self._audio_queue.empty():
+                        try:
+                            self._audio_queue.get_nowait()
+                        except:
+                            pass
+                    self._currently_playing = False
+                    self._playback_active = False
+                    time.sleep(0.05)
+                    continue
+
+                try:
+                    item = self._audio_queue.get(timeout=0.1)
+                except Exception:
+                    self._currently_playing = False
+                    self._playback_active = False
+                    continue
+
+                self._currently_playing = True
+                self._playback_active = True
+                samples, chunk_text, chunk_index, on_chunk_start, turn_id = item
+
+                if self._active_turn_id != -1 and turn_id != self._active_turn_id:
+                    self._currently_playing = False
+                    self._playback_active = False
+                    self._audio_queue.task_done()
+                    continue
+
+                if on_chunk_start and chunk_text:
+                    on_chunk_start(chunk_text)
+
+                event_bus.emit_event(EventType.TTS_PLAYBACK_START, {"word_index": chunk_index})
+
+                # Write blocks in smaller chunks to allow quick cancellation
+                chunk_size = sample_rate // 10  # 100ms chunks
+                for i in range(0, len(samples), chunk_size):
+                    if self._interrupt_event.is_set() or (self._active_turn_id != -1 and turn_id != self._active_turn_id):
+                        break
+                    stream.write(samples[i:i+chunk_size])
+
+                event_bus.emit_event(EventType.TTS_PLAYBACK_END, {"word_index": chunk_index})
+                self._audio_queue.task_done()
+        finally:
+            self._currently_playing = False
+            self._playback_active = False
+            stream.stop()
+            stream.close()
 
     def _load(self):
         """Lazy-load the KPipeline (downloads model + voices on first call)."""
@@ -167,7 +233,7 @@ class KokoroTTS(TTSEngine):
                 device = self._device
                 try:
                     self._pipeline = KPipeline(
-                        lang_code="en-us",
+                        lang_code="a",
                         device=device,
                     )
                 except RuntimeError as e:
@@ -176,7 +242,7 @@ class KokoroTTS(TTSEngine):
                         logging.warning(f"CUDA not fully supported on this GPU (sm_120), falling back to CPU for Kokoro TTS")
                         device = "cpu"
                         self._pipeline = KPipeline(
-                            lang_code="en-us",
+                            lang_code="a",
                             device=device,
                         )
                     else:
@@ -186,19 +252,32 @@ class KokoroTTS(TTSEngine):
                 raise self._load_error from e
 
     def warm_up(self):
+        """Pre-warm CUDA kernels with a short generation (no playback)."""
         self._load()
         try:
-            self.speak(".", on_chunk_start=None)
+            import torch
+            for _, _, audio in self._pipeline("Warming up.", voice=self._voice, speed=self._speed):
+                pass
+            if self._device == "cuda":
+                torch.cuda.synchronize()
         except Exception:
             pass
 
     def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
+        """Synthesise full text via the Kokoro pipeline and stream audio chunks.
+
+        The pipeline handles G2P and optimal text chunking internally (sentence
+        boundaries, 510-phoneme model limit).  Each yielded Result contains a
+        sentence-level audio tensor that we play while the next chunk is being
+        generated — giving ~30-40x realtime throughput on a modern GPU.
+        """
         import sounddevice as sd
         import torch
         import time
         import logging
 
         t_start = time.perf_counter()
+        sample_rate = 24000
 
         from core.events import event_bus, EventType
 
@@ -206,59 +285,45 @@ class KokoroTTS(TTSEngine):
         self._interrupt_event.clear()
         self._active_turn_id = turn_id
 
-        words = _split_words(text)
-        t_phoneme = time.perf_counter()
-        logging.info(f"tts.timing phonemization { (t_phoneme - t_start) * 1000:.1f}ms")
         with self._lock:
             self._speaking = True
 
         event_bus.emit_event(EventType.TTS_SPEAK_START, {
             "text": text,
-            "word_count": len(words),
+            "word_count": len(text.split()),
         })
 
         try:
-            for i, word in enumerate(words):
+            # Single pipeline call for the full text — the generator yields
+            # sentence-level Result objects with pre-synthesised audio.
+            t_infer_start = time.perf_counter()
+            generator = self._pipeline(
+                text,
+                voice=self._voice,
+                speed=self._speed,
+            )
+
+            for i, result in enumerate(generator):
                 if self._interrupt_event.is_set():
                     break
-                if not word.strip():
+
+                if result.audio is None:
                     continue
 
-                if on_chunk_start:
-                    on_chunk_start(word)
+                samples = result.audio.cpu().numpy()
+                if len(samples) == 0:
+                    continue
 
-                event_bus.emit_event(EventType.TTS_INFERENCE_START, {
-                    "word_index": i,
-                    "word": word,
-                })
-
-                t_inference_start = time.perf_counter()
-
-                # Use a quiet pipeline so we don't get the repo-id warning on
-                # every call; pass model=True to auto-load once, then reuse.
-                t_infer_start = time.perf_counter()
-                generator = self._pipeline(
-                    word,
-                    voice=self._voice,
-                    speed=self._speed,
-                    model=self._pipeline.model,
-                )
-                with torch.inference_mode():
-                    result = next(generator, None)
-                samples = result.audio.cpu().numpy() if result is not None and result.audio is not None else np.array([], dtype=np.float32)
                 t_infer_end = time.perf_counter()
-                logging.info(f"tts.timing inference { (t_infer_end - t_infer_start) * 1000:.1f}ms")
-                sample_rate = 24000
-
-                t_inference_end = time.perf_counter()
-                inference_ms = (t_inference_end - t_inference_start) * 1000
+                inference_ms = (t_infer_end - t_infer_start) * 1000
+                logging.info(f"tts.timing inference chunk {i}: {inference_ms:.1f}ms")
 
                 event_bus.emit_event(EventType.TTS_INFERENCE_END, {
                     "word_index": i,
                     "inference_ms": round(inference_ms, 1),
                     "sample_rate": sample_rate,
                     "samples": len(samples),
-                    "duration_ms": round(len(samples) / sample_rate * 1000, 1) if sample_rate > 0 else 0,
+                    "duration_ms": round(len(samples) / sample_rate * 1000, 1),
                 })
 
                 if self._interrupt_event.is_set():
@@ -269,36 +334,30 @@ class KokoroTTS(TTSEngine):
                     "samples": len(samples),
                     "sample_rate": sample_rate,
                     "channels": 1,
-                    "duration_ms": round(len(samples) / sample_rate * 1000, 1) if sample_rate > 0 else 0,
+                    "duration_ms": round(len(samples) / sample_rate * 1000, 1),
                 })
 
-                # Play audio — sd.play is non-blocking; sd.wait blocks here
-                event_bus.emit_event(EventType.TTS_PLAYBACK_START, {
-                    "word_index": i,
-                })
-                t_playback_start = time.perf_counter()
-                t_play_start = time.perf_counter()
-                sd.play(samples, sample_rate)
-                duration = len(samples) / sample_rate if sample_rate > 0 else 0
-                end_time = time.perf_counter() + duration
-                while time.perf_counter() < end_time:
-                    if self._interrupt_event.is_set():
-                        sd.stop()
-                        break
-                    time.sleep(0.01)
-                t_playback_end = time.perf_counter()
-                logging.info(f"tts.timing playback { (t_playback_end - t_play_start) * 1000:.1f}ms")
-                playback_ms = (t_playback_end - t_playback_start) * 1000
-                event_bus.emit_event(EventType.TTS_PLAYBACK_END, {
-                    "word_index": i,
-                    "playback_ms": round(playback_ms, 1),
-                })
+                # Queue the audio for the background playback thread
+                chunk_text = result.graphemes or ""
+                self._audio_queue.put((samples, chunk_text, i, on_chunk_start, turn_id))
+
+                # Reset inference timer for next chunk
+                t_infer_start = time.perf_counter()
+                
+            # Block until THIS sentence is fully written to the stream
+            # We don't want to return immediately, otherwise ConversationController
+            # state updates (like TTS_SPEAK_DONE) happen too early.
+            # But wait: if we block here until it's finished playing, we lose the 
+            # ability to start inference for the NEXT sentence!
+            # So we DO return immediately after inference!
         finally:
             with self._lock:
                 self._speaking = False
 
             t_total_end = time.perf_counter()
-            logging.info(f"tts.timing total { (t_total_end - t_start) * 1000:.1f}ms")
+            logging.info(f"tts.timing total {(t_total_end - t_start) * 1000:.1f}ms")
+            # We delay TTS_SPEAK_DONE to when the queue is empty? 
+            # No, ConversationController needs this to proceed to the next sentence.
             event_bus.emit_event(EventType.TTS_SPEAK_DONE, {
                 "text": text,
             })
@@ -317,7 +376,7 @@ class KokoroTTS(TTSEngine):
 
     def is_speaking(self) -> bool:
         with self._lock:
-            return self._speaking
+            return self._speaking or not self._audio_queue.empty() or self._currently_playing
 
 
 # ---------------------------------------------------------------------------

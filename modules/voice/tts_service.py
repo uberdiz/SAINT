@@ -255,19 +255,7 @@ class TTSService:
 
     def is_speaking(self) -> bool:
         with self._speaking_lock:
-            if self._is_speaking:
-                return True
-        # Also check the underlying engine — the engine may still be playing
-        # audio in a background playback thread even after synthesize() has
-        # returned and cleared _is_speaking. Without this delegation the
-        # voice module's barge-in detection never sees playback as active,
-        # _speaking is cleared prematurely, and TTS cannot be interrupted.
-        if self._engine is not None:
-            try:
-                return self._engine.is_speaking()
-            except Exception:
-                pass
-        return False
+            return self._is_speaking
 
     def get_diagnostics(self) -> Dict[str, Any]:
         """Get TTS diagnostics for UI display."""
@@ -631,8 +619,8 @@ class TTSService:
         Compatibility method for ConversationController.
 
         This wraps synthesize() to match the TTSEngine.speak() interface.
-        If turn_id is 0, the active turn_id from the service is used.
         """
+        # Use caller-provided turn_id, fall back to active turn
         if turn_id == 0:
             with self._turn_lock:
                 turn_id = self._active_turn_id

@@ -159,6 +159,49 @@ class Dashboard(QWidget):
         self.timer.start(2000)
         self.refresh_stats()
 
+        # Initialize TTS service in the background at startup
+        QTimer.singleShot(100, self._init_services)
+
+    def _init_services(self):
+        if self._controller is not None:
+            return
+
+        tts_service = get_tts_service()
+        tts_backend = config.get("voice.tts_backend", "kokoro")
+        tts_config = {}
+
+        if tts_backend == "qwen":
+            tts_config = {
+                "model_name": config.get("voice.tts_qwen_model", "Qwen/Qwen3-TTS"),
+                "model_type": config.get("voice.tts_qwen_type", "custom_voice"),
+                "speaker": config.get("voice.tts_qwen_speaker", "eric"),
+                "language": config.get("voice.tts_qwen_language", "Auto"),
+                "device": config.get("voice.tts_device", "cuda"),
+                "dtype": config.get("voice.tts_qwen_dtype", "bfloat16"),
+                "voice_clone_audio": config.get("voice.tts_qwen_voice_clone_audio", "") or None,
+                "voice_clone_text": config.get("voice.tts_qwen_voice_clone_text", "") or None,
+                "x_vector_only": config.get("voice.tts_qwen_x_vector_only", False),
+                "instruct": config.get("voice.tts_qwen_instruct", "") or None,
+                "speed": config.get("voice.tts_speed", 1.0),
+                "flash_attention": config.get("voice.tts_qwen_flash_attention", "Auto"),
+            }
+        elif tts_backend == "kokoro":
+            tts_config = {
+                "voice": config.get("voice.tts_voice", "af_heart"),
+                "device": config.get("voice.tts_device", "cuda"),
+                "speed": config.get("voice.tts_speed", 1.0),
+            }
+
+        # Initialize TTS service in background
+        tts_service.initialize(backend=tts_backend, blocking=False, **tts_config)
+        self._tts = tts_service
+
+        self._controller = init_controller(
+            ai_module=self._ai_module,
+            voice_module=self._voice_module,
+            tts_engine=tts_service,
+        )
+
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
@@ -437,6 +480,9 @@ class Dashboard(QWidget):
             self._stop_listening()
 
     def _start_listening(self):
+        if self._active:
+            return
+
         self._active = True
         self._start_btn.setText("■  Stop Listening")
         self._start_btn.setStyleSheet("background: #991b1b; color: white; font-weight: bold;")
@@ -444,48 +490,8 @@ class Dashboard(QWidget):
         from core.module_manager import module_manager as mm
         mm.set_enabled("voice", True)
 
-        if self._controller is None:
-            # Initialize TTS service
-            tts_service = get_tts_service()
-
-            tts_backend = config.get("voice.tts_backend", "kokoro")
-
-            # Prepare TTS configuration
-            tts_config = {}
-
-            if tts_backend == "qwen":
-                tts_config = {
-                    "model_name": config.get("voice.tts_qwen_model", "Qwen/Qwen3-TTS"),
-                    "model_type": config.get("voice.tts_qwen_type", "custom_voice"),
-                    "speaker": config.get("voice.tts_qwen_speaker", "eric"),
-                    "language": config.get("voice.tts_qwen_language", "Auto"),
-                    "device": config.get("voice.tts_device", "cuda"),
-                    "dtype": config.get("voice.tts_qwen_dtype", "bfloat16"),
-                    "voice_clone_audio": config.get("voice.tts_qwen_voice_clone_audio", "") or None,
-                    "voice_clone_text": config.get("voice.tts_qwen_voice_clone_text", "") or None,
-                    "x_vector_only": config.get("voice.tts_qwen_x_vector_only", False),
-                    "instruct": config.get("voice.tts_qwen_instruct", "") or None,
-                    "speed": config.get("voice.tts_speed", 1.0),
-                    "flash_attention": config.get("voice.tts_qwen_flash_attention", "Auto"),
-                }
-            elif tts_backend == "kokoro":
-                tts_config = {
-                    "voice": config.get("voice.tts_voice", "af_heart"),
-                    "device": config.get("voice.tts_device", "cuda"),
-                    "speed": config.get("voice.tts_speed", 1.0),
-                }
-
-            # Initialize TTS service in background
-            tts_service.initialize(backend=tts_backend, blocking=False, **tts_config)
-
-            # Get the underlying engine for compatibility
-            self._tts = tts_service
-
-            self._controller = init_controller(
-                ai_module=self._ai_module,
-                voice_module=self._voice_module,
-                tts_engine=tts_service,
-            )
+        # Ensure services are initialized
+        self._init_services()
 
         self._voice_module.start_listening()
         self._status_pill.set_listening()

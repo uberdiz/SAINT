@@ -36,7 +36,17 @@ from core.events import event_bus, EventType
 from core.config import config
 
 
-# Control tokens that should never be sent to TTS
+# Stop/override phrases that tell SAINT to cease speaking without starting a new turn
+STOP_PHRASES = {
+    "stop talking", "stop saying", "be quiet", "shut up", "hold on",
+    "wait wait", "that's enough", "that is enough", "never mind",
+    "nevermind", "forget it", "forget about it", "im done",
+    "i m done", "im finished", "i m finished", "i am done",
+    "not now", "not yet", "cancel that", "leave it",
+    "leave it alone", "i m done talking", "i am done talking",
+}
+
+STOP_WORDS = {"stop", "quit", "halt", "silence", "enough", "cancel", "done", "finished"}
 CONTROL_TOKENS = {
     "[silence]", "[SILENCE]", "<silence>", "[SILENT]", "<SILENT>",
     "[pause]", "[PAUSE]", "<pause>",
@@ -107,6 +117,12 @@ class ConversationController:
         self._stt_session_submitted: set = set()
         self._stt_session_lock = threading.Lock()
 
+        # Echo suppression state
+        self._current_ai_response = ""
+        self._last_ai_response = ""
+        self._last_tts_end_time = 0.0
+        self._echo_lock = threading.Lock()
+
         # TTS queue: decouple TTS playback from the AI streaming thread so
         # audio plays in a background thread while AI tokens keep flowing.
         self._tts_queue: queue.Queue = queue.Queue()
@@ -152,7 +168,8 @@ class ConversationController:
 
         if t == EventType.VOICE_STT_FINAL:
             session_id = ev.payload.get("session_id", 0)
-            self._handle_user_speech(ev.payload["text"], session_id)
+            confidence = ev.payload.get("confidence", 0.0)
+            self._handle_user_speech(ev.payload["text"], session_id, confidence)
 
         elif t == EventType.VOICE_INTERRUPT:
             self._handle_interrupt()
@@ -163,8 +180,67 @@ class ConversationController:
     # ------------------------------------------------------------------ #
     # Speech handling
     # ------------------------------------------------------------------ #
-    def _handle_user_speech(self, text: str, session_id: int = 0):
+    def _handle_user_speech(self, text: str, session_id: int = 0, confidence: float = 0.0):
+        import re
         state = self._get_state()
+        tts_recent = time.perf_counter() - self._last_tts_end_time < 5.0
+
+        # Check for stop/override commands first — these must never be suppressed as echo
+        if self._is_stop_command(text) and state in (ConvState.THINKING, ConvState.SPEAKING):
+            import logging
+            logging.getLogger("saint.conversation").info(f"voice.stop.detected: '{text}' → interrupting")
+            event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Stop command detected"})
+            self._cancel_current()
+            self._set_state(ConvState.LISTENING)
+            with self._turn_id_lock:
+                self._active_turn_id = -1
+            self._voice.set_saint_speaking(False)
+            return
+
+        # While SAINT is actively playing audio, suppress all STT input.
+        # The microphone picks up SAINT's own voice — any STT result during
+        # playback is either SAINT's echo or noise, never a genuine command
+        # the user didn't already say. Users can interrupt via the button or "stop".
+        if state == ConvState.SPEAKING:
+            import logging
+            logging.getLogger("saint.conversation").info(f"voice.suppressed: '{text}' during speaking")
+            event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Suppressed during playback"})
+            return
+
+        if state in (ConvState.THINKING, ConvState.SPEAKING) or tts_recent:
+            # During/after TTS: stricter validation — low-confidence results likely echo
+            is_during_tts = state in (ConvState.THINKING, ConvState.SPEAKING)
+            if confidence > 0 and confidence < 0.25 and (is_during_tts or tts_recent):
+                import logging
+                logging.getLogger("saint.conversation").info(
+                    f"voice.echo.suppressed: ignored '{text}' low confidence {confidence:.2f}"
+                )
+                event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
+                    "trace": "Echo suppressed (low confidence)",
+                })
+                return
+
+            # Check for echo
+            with self._echo_lock:
+                ai_text = self._current_ai_response or self._last_ai_response
+
+            t_clean = re.sub(r'[^\w\s]', '', text.lower()).strip()
+            ai_clean = re.sub(r'[^\w\s]', '', ai_text.lower()).strip()
+
+            if t_clean and ai_clean and (t_clean in ai_clean or ai_clean in t_clean):
+                import logging
+                logging.getLogger("saint.conversation").info(f"voice.echo.suppressed: ignored '{text}' as it matched AI output")
+                event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Echo suppressed"})
+                return
+
+            # Word-overlap echo detection for near-echoes and fragments
+            if t_clean and ai_clean:
+                overlap = self._word_overlap(t_clean, ai_clean)
+                if overlap > 0.25:
+                    import logging
+                    logging.getLogger("saint.conversation").info(f"voice.echo.suppressed: ignored '{text}' word overlap {overlap:.1%}")
+                    event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Echo suppressed (word overlap)"})
+                    return
 
         if state in (ConvState.THINKING, ConvState.SPEAKING):
             self._cancel_current()
@@ -197,21 +273,61 @@ class ConversationController:
                 self._active_turn_id = -1
             event_bus.emit_event(EventType.CONVERSATION_INTERRUPTED, {})
 
+    def _is_stop_command(self, text: str) -> bool:
+        """Check if the user's speech is a stop/override command."""
+        cleaned = re.sub(r'[^\w\s]', '', text.lower()).strip()
+        if not cleaned:
+            return False
+        for phrase in STOP_PHRASES:
+            if phrase in cleaned:
+                return True
+        words = set(cleaned.split())
+        if words & STOP_WORDS:
+            return True
+        return False
+
+    def _word_overlap(self, text1: str, text2: str) -> float:
+        """Jaccard similarity between word sets of two texts. Returns 0.0-1.0."""
+        if not text1 or not text2:
+            return 0.0
+        words1 = set(text1.split())
+        words2 = set(text2.split())
+        if not words1 or not words2:
+            return 0.0
+        intersection = words1 & words2
+        union = words1 | words2
+        if not union:
+            return 0.0
+        return len(intersection) / len(union)
+
     # ------------------------------------------------------------------ #
     # Cancel in-flight work
     # ------------------------------------------------------------------ #
     def _cancel_current(self):
         """Stop AI stream and TTS immediately."""
+        import logging
         self._ai.cancel()
         if self._tts:
             self._tts.interrupt()
         # Drain pending TTS items so stale chunks aren't played after interrupt
+        cleared = 0
         while not self._tts_queue.empty():
             try:
-                self._tts_queue.get_nowait()
+                item = self._tts_queue.get_nowait()
                 self._tts_queue.task_done()
+                cleared += 1
             except queue.Empty:
                 break
+        if cleared:
+            logging.getLogger("saint.conversation").info(
+                f"tts.queue.clear turn_id={self._active_turn_id} cleared={cleared}"
+            )
+        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
+            "trace": f"TTS queue cleared turn_id={self._active_turn_id} items={cleared}",
+        })
+        logging.getLogger("saint.conversation").info(
+            f"tts.turn.invalidated turn_id={self._active_turn_id}"
+        )
         self._voice.set_saint_speaking(False)
 
     # ------------------------------------------------------------------ #
@@ -225,6 +341,8 @@ class ConversationController:
         self._current_turn_start = time.perf_counter()
         self._set_state(ConvState.THINKING)
         self._voice.set_saint_speaking(False)
+        with self._echo_lock:
+            self._current_ai_response = ""
 
         request_id = uuid.uuid4().hex[:12]
         stream_id = f"stream_{turn_id}_{uuid.uuid4().hex[:8]}"
@@ -289,6 +407,9 @@ class ConversationController:
                 full_response.append(token)
                 sentence_buf.append(token)
                 combined = "".join(sentence_buf)
+                with self._echo_lock:
+                    self._current_ai_response = "".join(full_response)
+                    self._last_ai_response = "".join(full_response)
 
                 # Chat message update
                 chat_length[0] += len(token)
@@ -459,13 +580,8 @@ class ConversationController:
                 except Exception as e:
                     event_bus.emit_event(EventType.TTS_ERROR, {"error": str(e), "turn_id": turn_id})
                 finally:
-                    # Wait for actual audio playback to finish before
-                    # clearing the speaking flag.  TTSService.is_speaking()
-                    # now delegates to the underlying engine (e.g. KokoroTTS)
-                    # which tracks the background playback thread, so this
-                    # loop blocks until audio has truly stopped — keeping
-                    # _speaking=True for the voice module's barge-in logic.
-                    while self._tts.is_speaking():
+                    # Wait for actual audio playback to finish
+                    while self._tts.is_speaking() or getattr(self._tts, 'playback_active', False):
                         time.sleep(0.01)
                     self._voice.set_tts_playback_active(False)
                     self._last_tts_end_time = time.perf_counter()

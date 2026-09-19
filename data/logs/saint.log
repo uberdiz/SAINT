@@ -7683,3 +7683,101 @@
 2026-09-13 14:32:02 [INFO] module.enabled {'module': 'Voice'}
 2026-09-13 14:32:03 [INFO] ui.updated {'page': 'Dashboard'}
 2026-09-13 14:32:03 [INFO] app.started
+2026-09-18 21:42:20 [INFO] module.loaded {'module': 'AI'}
+2026-09-18 21:42:20 [INFO] module.enabled {'module': 'AI'}
+2026-09-18 21:42:20 [INFO] module.loaded {'module': 'Voice'}
+2026-09-18 21:42:20 [INFO] module.enabled {'module': 'Voice'}
+2026-09-18 21:42:20 [INFO] ui.updated {'page': 'Dashboard'}
+2026-09-18 21:42:20 [INFO] app.started
+2026-09-18 21:43:23 [INFO] module.loaded {'module': 'AI'}
+2026-09-18 21:43:23 [INFO] module.enabled {'module': 'AI'}
+2026-09-18 21:43:23 [INFO] module.loaded {'module': 'Voice'}
+2026-09-18 21:43:23 [INFO] module.enabled {'module': 'Voice'}
+2026-09-18 21:43:24 [INFO] ui.updated {'page': 'Dashboard'}
+2026-09-18 21:43:24 [INFO] app.started
+2026-09-18 21:43:34 [INFO] module.enabled {'module': 'Voice'}
+2026-09-18 21:43:34 [INFO] voice.listening.start
+2026-09-18 21:43:34 [INFO] tts.state.change {'old_state': 'UNINITIALIZED', 'new_state': 'LOADING'}
+2026-09-18 21:43:35 [INFO] voice.speech.start {'session_id': 1}
+2026-09-18 21:43:36 [INFO] voice.stt.skip {'session_id': 1, 'reason': 'insufficient_speech', 'speech_frames': 5, 'total_frames': 11, 'speech_ratio': 0.455, 'rms': 0.053238}
+2026-09-18 21:43:36 [INFO] voice.speech.start {'session_id': 2}
+2026-09-18 21:43:36 [INFO] voice.speech.end {'session_id': 2}
+2026-09-18 21:43:36 [INFO] voice.stt.final {'text': 'Hello.', 'confidence': 0.22382812500000004, 'latency_ms': 79.5, 'inference_ms': 79.5, 'session_id': 2, 'diagnostics': {'sample_rate': 16000, 'channels': 1, 'audio_duration_ms': 570.0, 'audio_rms': 0.055178, 'model': 'base.en', 'device': 'cuda', 'queue_ms': 0.0, 'inference_ms': 79.5, 'total_stt_ms': 79.5, 'num_chunks': 19, 'total_samples': 9120}}
+2026-09-18 21:43:36 [INFO] conversation.turn.start {'text': 'Hello.', 'is_interruption': False, 'turn_id': 1, 'session_id': 2, 'request_id': '14249bdf9f7a'}
+2026-09-18 21:43:36 [INFO] ai.stream.start {'turn_id': 1, 'session_id': 2, 'request_id': '14249bdf9f7a', 'stream_id': 'stream_1_99d86f86'}
+2026-09-18 21:43:36 [INFO] latency.stt {'ms': 79.5}
+2026-09-18 21:43:36 [INFO] voice.speech.start {'session_id': 3}
+2026-09-18 21:43:36 [INFO] chat.message.start {'turn_id': 1, 'request_id': '14249bdf9f7a', 'role': 'assistant'}
+2026-09-18 21:43:36 [INFO] ai.provider.test {'provider': 'ollama', 'model': 'llama3.2:1b', 'connected': True, 'details': {'connected': True, 'provider': 'ollama', 'version': '0.34.1'}}
+2026-09-18 21:43:36 [INFO] ai.request {'turn_id': 1, 'request_id': '14249bdf9f7a', 'stream_id': 'stream_1_eb743d2d', 'user_text': 'Hello.', 'prompt_length': 6, 'model': 'llama3.2:1b', 'provider': 'ollama', 'conversation_history_length': 2, 'system_prompt': 'You are SAINT, a helpful AI assistant. Be concise. Respond naturally. If the user interrupts you, ad'}
+2026-09-18 21:43:36 [INFO] latency.ai.first_token {'ms': 32.0}
+2026-09-18 21:43:36 [INFO] tts.request {'turn_id': 1, 'stream_id': 'stream_1_99d86f86', 'text_length': 20, 'text_preview': "What's on your mind?"}
+2026-09-18 21:43:36 [INFO] ai.stream.done {'turn_id': 1, 'request_id': '14249bdf9f7a', 'stream_id': 'stream_1_eb743d2d', 'elapsed_seconds': 0.059, 'response_length': 20}
+2026-09-18 21:43:36 [INFO] latency.model {'ms': 59.4, 'turn_id': 1, 'request_id': '14249bdf9f7a'}
+2026-09-18 21:43:36 [INFO] ai.stream.end {'turn_id': 1, 'session_id': 2, 'request_id': '14249bdf9f7a', 'stream_id': 'stream_1_99d86f86'}
+2026-09-18 21:43:36 [INFO] latency.ai.total {'ms': 65.1}
+2026-09-18 21:43:36 [INFO] latency.overall {'ms': 65.1}
+2026-09-18 21:43:36 [INFO] chat.message.final {'turn_id': 1, 'length': 20, 'text': "What's on your mind?"}
+2026-09-18 21:43:36 [INFO] ui.chat.render {'turn_id': 1, 'role': 'assistant', 'text': "What's on your mind?"}
+2026-09-18 21:43:36 [INFO] conversation.turn.end {'response': "What's on your mind?"}
+2026-09-18 21:43:38 [INFO] voice.stt.skip {'session_id': 3, 'reason': 'insufficient_speech', 'speech_frames': 56, 'total_frames': 68, 'speech_ratio': 0.824, 'rms': 0.029178}
+2026-09-18 21:43:38 [INFO] voice.stt.skip {'session_id': 3, 'reason': 'tts_playback_active', 'speech_frames': 56, 'total_frames': 68}
+2026-09-18 21:43:43 [INFO] tts.state.change {'old_state': 'LOADING', 'new_state': 'READY'}
+2026-09-18 21:43:43 [INFO] tts.state.change {'old_state': 'READY', 'new_state': 'SYNTHESIZING'}
+2026-09-18 21:43:43 [INFO] tts.request {'request_id': 'tts_1_1', 'turn_id': 1, 'text_length': 20, 'text_preview': "What's on your mind?", 'sequence_id': 1}
+2026-09-18 21:43:43 [INFO] tts.speak.start {'text': "What's on your mind?", 'word_count': 4}
+2026-09-18 21:43:44 [INFO] tts.warmup.complete {'warmup_ms': 654.3, 'engine': 'kokoro'}
+2026-09-18 21:43:44 [INFO] tts.speak.done {'text': "What's on your mind?"}
+2026-09-18 21:43:44 [INFO] tts.state.change {'old_state': 'SYNTHESIZING', 'new_state': 'READY'}
+2026-09-18 21:43:45 [INFO] voice.speech.start {'session_id': 4}
+2026-09-18 21:43:46 [INFO] voice.listening.stop
+2026-09-18 21:43:55 [INFO] module.loaded {'module': 'AI'}
+2026-09-18 21:43:55 [INFO] module.enabled {'module': 'AI'}
+2026-09-18 21:43:55 [INFO] module.loaded {'module': 'Voice'}
+2026-09-18 21:43:55 [INFO] module.enabled {'module': 'Voice'}
+2026-09-18 21:43:55 [INFO] ui.updated {'page': 'Dashboard'}
+2026-09-18 21:43:55 [INFO] app.started
+2026-09-18 21:43:55 [INFO] tts.state.change {'old_state': 'UNINITIALIZED', 'new_state': 'LOADING'}
+2026-09-18 21:44:03 [INFO] tts.state.change {'old_state': 'LOADING', 'new_state': 'READY'}
+2026-09-18 21:44:04 [INFO] tts.warmup.complete {'warmup_ms': 541.5, 'engine': 'kokoro'}
+2026-09-18 21:44:09 [INFO] module.enabled {'module': 'Voice'}
+2026-09-18 21:44:09 [INFO] voice.listening.start
+2026-09-18 21:44:10 [INFO] voice.speech.start {'session_id': 1}
+2026-09-18 21:44:12 [INFO] voice.speech.end {'session_id': 1}
+2026-09-18 21:44:12 [INFO] voice.stt.final {'text': 'Hello, is this working?', 'confidence': 0.5282118055555556, 'latency_ms': 83.6, 'inference_ms': 82.6, 'session_id': 1, 'diagnostics': {'sample_rate': 16000, 'channels': 1, 'audio_duration_ms': 1440.0, 'audio_rms': 0.087453, 'model': 'base.en', 'device': 'cuda', 'queue_ms': 0.0, 'inference_ms': 82.6, 'total_stt_ms': 83.6, 'num_chunks': 48, 'total_samples': 23040}}
+2026-09-18 21:44:12 [INFO] conversation.turn.start {'text': 'Hello, is this working?', 'is_interruption': False, 'turn_id': 1, 'session_id': 1, 'request_id': '1a637f791934'}
+2026-09-18 21:44:12 [INFO] ai.stream.start {'turn_id': 1, 'session_id': 1, 'request_id': '1a637f791934', 'stream_id': 'stream_1_03742f86'}
+2026-09-18 21:44:12 [INFO] latency.stt {'ms': 83.6}
+2026-09-18 21:44:12 [INFO] chat.message.start {'turn_id': 1, 'request_id': '1a637f791934', 'role': 'assistant'}
+2026-09-18 21:44:12 [INFO] ai.provider.test {'provider': 'ollama', 'model': 'llama3.2:1b', 'connected': True, 'details': {'connected': True, 'provider': 'ollama', 'version': '0.34.1'}}
+2026-09-18 21:44:12 [INFO] ai.request {'turn_id': 1, 'request_id': '1a637f791934', 'stream_id': 'stream_1_980b5824', 'user_text': 'Hello, is this working?', 'prompt_length': 23, 'model': 'llama3.2:1b', 'provider': 'ollama', 'conversation_history_length': 2, 'system_prompt': 'You are SAINT, a helpful AI assistant. Be concise. Respond naturally. If the user interrupts you, ad'}
+2026-09-18 21:44:12 [INFO] latency.ai.first_token {'ms': 21.4}
+2026-09-18 21:44:12 [INFO] tts.request {'turn_id': 1, 'stream_id': 'stream_1_03742f86', 'text_length': 17, 'text_preview': "I'm working fine."}
+2026-09-18 21:44:12 [INFO] tts.state.change {'old_state': 'READY', 'new_state': 'SYNTHESIZING'}
+2026-09-18 21:44:12 [INFO] tts.request {'request_id': 'tts_1_1', 'turn_id': 1, 'text_length': 17, 'text_preview': "I'm working fine.", 'sequence_id': 1}
+2026-09-18 21:44:12 [INFO] tts.speak.start {'text': "I'm working fine.", 'word_count': 3}
+2026-09-18 21:44:12 [INFO] tts.request {'turn_id': 1, 'stream_id': 'stream_1_03742f86', 'text_length': 20, 'text_preview': "What's on your mind?"}
+2026-09-18 21:44:12 [INFO] ai.stream.done {'turn_id': 1, 'request_id': '1a637f791934', 'stream_id': 'stream_1_980b5824', 'elapsed_seconds': 0.07, 'response_length': 38}
+2026-09-18 21:44:12 [INFO] latency.model {'ms': 69.7, 'turn_id': 1, 'request_id': '1a637f791934'}
+2026-09-18 21:44:12 [INFO] ai.stream.end {'turn_id': 1, 'session_id': 1, 'request_id': '1a637f791934', 'stream_id': 'stream_1_03742f86'}
+2026-09-18 21:44:12 [INFO] tts.speak.done {'text': "I'm working fine."}
+2026-09-18 21:44:12 [INFO] tts.state.change {'old_state': 'SYNTHESIZING', 'new_state': 'READY'}
+2026-09-18 21:44:12 [INFO] tts.state.change {'old_state': 'READY', 'new_state': 'SYNTHESIZING'}
+2026-09-18 21:44:12 [INFO] tts.request {'request_id': 'tts_1_2', 'turn_id': 1, 'text_length': 20, 'text_preview': "What's on your mind?", 'sequence_id': 2}
+2026-09-18 21:44:12 [INFO] tts.speak.start {'text': "What's on your mind?", 'word_count': 4}
+2026-09-18 21:44:13 [INFO] tts.speak.done {'text': "What's on your mind?"}
+2026-09-18 21:44:13 [INFO] tts.state.change {'old_state': 'SYNTHESIZING', 'new_state': 'READY'}
+2026-09-18 21:44:13 [INFO] latency.ai.total {'ms': 1165.0}
+2026-09-18 21:44:13 [INFO] latency.overall {'ms': 1165.0}
+2026-09-18 21:44:13 [INFO] chat.message.final {'turn_id': 1, 'length': 38, 'text': "I'm working fine. What's on your mind?"}
+2026-09-18 21:44:13 [INFO] ui.chat.render {'turn_id': 1, 'role': 'assistant', 'text': "I'm working fine. What's on your mind?"}
+2026-09-18 21:44:13 [INFO] conversation.turn.end {'response': "I'm working fine. What's on your mind?"}
+2026-09-18 21:44:13 [INFO] voice.speech.start {'session_id': 2}
+2026-09-18 21:44:14 [INFO] voice.speech.end {'session_id': 2}
+2026-09-18 21:44:14 [INFO] voice.stt.final {'text': "I'm working fine.", 'confidence': 0.5527343600988388, 'latency_ms': 64.6, 'inference_ms': 63.6, 'session_id': 2, 'diagnostics': {'sample_rate': 16000, 'channels': 1, 'audio_duration_ms': 750.0, 'audio_rms': 0.021462, 'model': 'base.en', 'device': 'cuda', 'queue_ms': 0.0, 'inference_ms': 63.6, 'total_stt_ms': 64.6, 'num_chunks': 25, 'total_samples': 12000}}
+2026-09-18 21:44:14 [INFO] latency.stt {'ms': 64.6}
+2026-09-18 21:44:15 [INFO] voice.speech.start {'session_id': 3}
+2026-09-18 21:44:16 [INFO] voice.speech.end {'session_id': 3}
+2026-09-18 21:44:16 [INFO] voice.stt.final {'text': "What's on your mind?", 'confidence': 0.6085069444444444, 'latency_ms': 67.2, 'inference_ms': 66.2, 'session_id': 3, 'diagnostics': {'sample_rate': 16000, 'channels': 1, 'audio_duration_ms': 900.0, 'audio_rms': 0.017753, 'model': 'base.en', 'device': 'cuda', 'queue_ms': 0.0, 'inference_ms': 66.2, 'total_stt_ms': 67.2, 'num_chunks': 30, 'total_samples': 14400}}
+2026-09-18 21:44:16 [INFO] latency.stt {'ms': 67.2}
+2026-09-18 21:44:21 [INFO] voice.listening.stop

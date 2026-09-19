@@ -143,18 +143,30 @@
       "end": 1789324187.2018054,
       "duration": 1.0062599182128906,
       "interactions": 0
+    },
+    {
+      "start": 1789782203.5079074,
+      "end": 1789782204.1990569,
+      "duration": 0.6911494731903076,
+      "interactions": 0
+    },
+    {
+      "start": 1789782235.0059924,
+      "end": 1789782235.6578386,
+      "duration": 0.651846170425415,
+      "interactions": 0
     }
   ],
-  "current_session_start": 1789781215.103695,
-  "total_sessions": 24,
-  "total_duration": 23.333491563796997,
+  "current_session_start": 1789782235.6578386,
+  "total_sessions": 26,
+  "total_duration": 24.67648720741272,
   "interactions": 0,
   "successful_interactions": 0,
   "failed_interactions": 0,
-  "commands": 116,
+  "commands": 120,
   "llm_errors": 6,
   "module_crashes": 0,
-  "events_total": 10489,
+  "events_total": 10863,
   "response_times": [
     0.401
   ],
@@ -163,9 +175,14 @@
   "tts_inference_latencies": [],
   "tts_playback_latencies": [],
   "model_latencies": [
-    890.0
+    890.0,
+    59.0,
+    70.0
   ],
-  "overall_latencies": [],
+  "overall_latencies": [
+    65.1,
+    1165.0
+  ],
   "wake_word_latencies": [],
   "intent_latencies": [],
   "ai_first_token_latencies": [
@@ -219,7 +236,9 @@
     32.3,
     0.8,
     1.0,
-    0.7
+    0.7,
+    32.0,
+    21.4
   ],
   "interruptions": 0,
   "cancelled_tasks": 0,
@@ -282,7 +301,11 @@
     0.4711914286017418,
     0.95,
     0.95,
-    0.95
+    0.95,
+    0.22382812500000004,
+    0.5282118055555556,
+    0.5527343600988388,
+    0.6085069444444444
   ],
   "tool_calls": {},
   "tool_errors": {},

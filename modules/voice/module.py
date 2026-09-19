@@ -20,6 +20,7 @@ The ConversationController (core/conversation.py) wires everything together.
 import queue
 import threading
 import time
+import logging
 from typing import Optional
 
 import numpy as np
@@ -105,7 +106,17 @@ class VoiceModule(BaseModule):
         self._tts_playback_active = False
         self._tts_playback_lock = threading.Lock()
 
-        # Current audio level (0-1)
+        # Current turn_id being processed (for queue cancellation)
+        self._current_turn_id: int = -1
+        self._turn_id_lock = threading.Lock()
+
+        # Barge-in: track pending interrupt from VAD during TTS
+        self._pending_barge_in = False
+
+        # STT worker thread (non-blocking Whisper)
+        self._stt_worker: Optional[threading.Thread] = None
+        self._stt_worker_queue: queue.Queue = queue.Queue()
+        self._stt_worker_stop = threading.Event()
         self._audio_level: float = 0.0
         self._last_level_event_time: float = 0.0
 
@@ -235,10 +246,12 @@ class VoiceModule(BaseModule):
         self._listening = False
         self._stop_event.set()
         self._stop_stream()
+        self._stt_cancelled.set()
+        if self._stt_worker and self._stt_worker.is_alive():
+            self._stt_worker.join(timeout=2.0)
         if self._process_thread:
             self._process_thread.join(timeout=3.0)
             self._process_thread = None
-        self._stt_cancelled.set()
         event_bus.emit_event(EventType.VOICE_LISTENING_STOP)
 
     def stop(self):
@@ -398,6 +411,7 @@ class VoiceModule(BaseModule):
                 time_since_last = now - self._last_interrupt_time
                 if time_since_last >= self._interrupt_debounce_sec:
                     self._last_interrupt_time = now
+                    self._pending_barge_in = True
                     event_bus.emit_event(EventType.VOICE_INTERRUPT, {})
                     logging.getLogger("saint.voice").info(
                         f"voice.interruption.detected session_id={self._speech_session_id} "
@@ -562,10 +576,26 @@ class VoiceModule(BaseModule):
         return frames[start_idx:end_idx + 1]
 
     def _transcribe(self, frames, session_id: int = 0):
+        """Run STT transcription in a background thread (non-blocking)."""
         if not frames or self._stt is None:
             self._emit_stt_error(session_id, "empty_audio_buffer")
             return
 
+        t0_total = time.perf_counter()
+
+        def _run():
+            try:
+                self._stt_worker_func(frames, session_id, t0_total)
+            except Exception as e:
+                self._emit_stt_error(session_id, str(e))
+
+        self._stt_worker = threading.Thread(
+            target=_run, daemon=True, name=f"stt-{session_id}"
+        )
+        self._stt_worker.start()
+
+    def _stt_worker_func(self, frames: list, session_id: int, t0_total: float):
+        """Background STT worker — runs Whisper without blocking the voice loop."""
         # Bail out if TTS playback started while we were queued
         if self.is_tts_playback_active():
             self._emit_stt_error(session_id, "tts_playback_active_during_stt")
@@ -578,9 +608,8 @@ class VoiceModule(BaseModule):
         # Trim leading/trailing silence before transcription
         silence_ms = config.get("voice.silence_duration_ms", 400)
         silence_frames = int(silence_ms / CHUNK_MS)
-        frames = self._trim_silence(frames, silence_frames)
-
-        if not frames:
+        trimmed = self._trim_silence(frames, silence_frames)
+        if not trimmed:
             self._emit_stt_error(session_id, "empty_after_trim")
             return
 
@@ -599,19 +628,16 @@ class VoiceModule(BaseModule):
             self._emit_stt_error(session_id, "voice_inactive")
             return
 
-        t0_total = time.perf_counter()
-
         t0 = time.perf_counter()
-        audio = np.concatenate(frames)
+        audio = np.concatenate(trimmed)
         t1 = time.perf_counter()
         queue_ms = (t1 - t0) * 1000
 
         audio_duration_ms = round(len(audio) / SAMPLE_RATE * 1000, 1)
         total_samples = len(audio)
-        chunks = len(frames)
+        chunks = len(trimmed)
         sample_rate = SAMPLE_RATE
         channels = CHANNELS
-        # Normalize RMS: audio is int16, so divide by 32768^2 for proper scaling
         rms = round(float(np.sqrt(np.mean(audio.astype(np.float32) ** 2) / (32768.0 ** 2))), 6)
 
         self._emit_stt_buffer(session_id, chunks, total_samples, audio_duration_ms, sample_rate, channels)
