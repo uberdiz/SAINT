@@ -101,6 +101,10 @@ class VoiceModule(BaseModule):
         # Cancel STT processing flag
         self._stt_cancelled = threading.Event()
 
+        # TTS playback state — set by TTS engine when audio actually plays
+        self._tts_playback_active = False
+        self._tts_playback_lock = threading.Lock()
+
         # Current audio level (0-1)
         self._audio_level: float = 0.0
         self._last_level_event_time: float = 0.0
@@ -254,6 +258,19 @@ class VoiceModule(BaseModule):
     def set_saint_speaking(self, speaking: bool):
         self._speaking = speaking
 
+    def set_tts_playback_active(self, active: bool):
+        with self._tts_playback_lock:
+            if self._tts_playback_active != active:
+                self._tts_playback_active = active
+                import logging
+                logging.getLogger("saint.voice").info(
+                    f"voice.tts.playback {'start' if active else 'stop'}"
+                )
+
+    def is_tts_playback_active(self) -> bool:
+        with self._tts_playback_lock:
+            return self._tts_playback_active
+
     # ------------------------------------------------------------------ #
     # Audio level — throttled
     # ------------------------------------------------------------------ #
@@ -368,14 +385,26 @@ class VoiceModule(BaseModule):
 
             is_voice = self._vad.feed(chunk_np) if self._vad else False
 
-            # Interrupt detection with debouncing
+            # Log VAD detection during TTS for debugging
+            if is_voice and self._speaking:
+                logging.getLogger("saint.voice").debug(
+                    f"voice.vad.detected session_id={self._speech_session_id} "
+                    f"speaking={self._speaking} tts_playback={self.is_tts_playback_active()}"
+                )
+
+            # Barge-in: user spoke during TTS playback — immediate interrupt
             if self._speaking and is_voice:
                 now = time.perf_counter()
                 time_since_last = now - self._last_interrupt_time
                 if time_since_last >= self._interrupt_debounce_sec:
                     self._last_interrupt_time = now
                     event_bus.emit_event(EventType.VOICE_INTERRUPT, {})
-                    # Only emit ONE interrupt event per actual interruption
+                    logging.getLogger("saint.voice").info(
+                        f"voice.interruption.detected session_id={self._speech_session_id} "
+                        f"reason=barge_in"
+                    )
+                    # Do NOT transcribe during TTS — barge-in handles it via interrupt
+                    continue
 
             if is_voice:
                 if not in_speech:
@@ -395,7 +424,22 @@ class VoiceModule(BaseModule):
                     speech_frames.append(chunk)
                     if silence_count >= silence_frames:
                         in_speech = False
-                        # Validate speech before transcribing
+                        # During TTS playback, skip Whisper — run validation only
+                        # and only transcribe if TTS is no longer active
+                        is_tts_active = self.is_tts_playback_active()
+                        if is_tts_active:
+                            self._emit_vad_reject(sid, speech_frame_count, len(speech_frames), speech_frames)
+                            event_bus.emit_event(EventType.VOICE_STT_SKIP, {
+                                "session_id": sid,
+                                "reason": "tts_playback_active",
+                                "speech_frames": speech_frame_count,
+                                "total_frames": len(speech_frames),
+                            })
+                            speech_frames = []
+                            silence_count = 0
+                            speech_frame_count = 0
+                            continue
+                        # Normal validation + transcription
                         if self._validate_speech_session(
                             speech_frames, speech_frame_count, min_speech_frames, min_speech_rms
                         ):
@@ -520,6 +564,15 @@ class VoiceModule(BaseModule):
     def _transcribe(self, frames, session_id: int = 0):
         if not frames or self._stt is None:
             self._emit_stt_error(session_id, "empty_audio_buffer")
+            return
+
+        # Bail out if TTS playback started while we were queued
+        if self.is_tts_playback_active():
+            self._emit_stt_error(session_id, "tts_playback_active_during_stt")
+            event_bus.emit_event(EventType.VOICE_STT_SKIP, {
+                "session_id": session_id,
+                "reason": "tts_playback_active",
+            })
             return
 
         # Trim leading/trailing silence before transcription

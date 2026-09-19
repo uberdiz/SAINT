@@ -454,12 +454,22 @@ class ConversationController:
                     event_bus.emit_event(EventType.LATENCY_TTS_INFERENCE, {"ms": round(tts_gen_ms, 1)})
 
                 try:
-                    self._tts.speak(text, on_chunk_start=on_chunk_start)
+                    self._voice.set_tts_playback_active(True)
+                    self._tts.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
                 except Exception as e:
                     event_bus.emit_event(EventType.TTS_ERROR, {"error": str(e), "turn_id": turn_id})
                 finally:
-                    if not self._tts.is_speaking():
-                        self._voice.set_saint_speaking(False)
+                    # Wait for actual audio playback to finish before
+                    # clearing the speaking flag.  TTSService.is_speaking()
+                    # now delegates to the underlying engine (e.g. KokoroTTS)
+                    # which tracks the background playback thread, so this
+                    # loop blocks until audio has truly stopped — keeping
+                    # _speaking=True for the voice module's barge-in logic.
+                    while self._tts.is_speaking():
+                        time.sleep(0.01)
+                    self._voice.set_tts_playback_active(False)
+                    self._last_tts_end_time = time.perf_counter()
+                    self._voice.set_saint_speaking(False)
                         
                 # TTS generation end
                 tts_gen_ms = (time.perf_counter() - tts_gen_start) * 1000

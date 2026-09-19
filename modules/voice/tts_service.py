@@ -255,7 +255,19 @@ class TTSService:
 
     def is_speaking(self) -> bool:
         with self._speaking_lock:
-            return self._is_speaking
+            if self._is_speaking:
+                return True
+        # Also check the underlying engine — the engine may still be playing
+        # audio in a background playback thread even after synthesize() has
+        # returned and cleared _is_speaking. Without this delegation the
+        # voice module's barge-in detection never sees playback as active,
+        # _speaking is cleared prematurely, and TTS cannot be interrupted.
+        if self._engine is not None:
+            try:
+                return self._engine.is_speaking()
+            except Exception:
+                pass
+        return False
 
     def get_diagnostics(self) -> Dict[str, Any]:
         """Get TTS diagnostics for UI display."""
@@ -527,7 +539,7 @@ class TTSService:
                 logger.error("TTS engine is None")
                 return False
 
-            self._engine.speak(text, on_chunk_start=on_chunk_start)
+            self._engine.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
 
             synthesis_time = time.perf_counter() - synthesis_start
 
@@ -591,7 +603,7 @@ class TTSService:
         self._interrupt_event.set()
 
         if self._engine and hasattr(self._engine, 'interrupt'):
-            self._engine.interrupt()
+            self._engine.interrupt(turn_id=turn_id)
 
         # Stop sounddevice playback
         try:
@@ -614,16 +626,16 @@ class TTSService:
             if self._state not in (TTSState.SHUTDOWN, TTSState.ERROR):
                 self._set_state(TTSState.READY)
 
-    def speak(self, text: str, on_chunk_start: Optional[Callable[[str], None]] = None):
+    def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         """
         Compatibility method for ConversationController.
 
         This wraps synthesize() to match the TTSEngine.speak() interface.
+        If turn_id is 0, the active turn_id from the service is used.
         """
-        # Extract turn_id from current request if available
-        turn_id = 0
-        with self._turn_lock:
-            turn_id = self._active_turn_id
+        if turn_id == 0:
+            with self._turn_lock:
+                turn_id = self._active_turn_id
 
         return self.synthesize(
             text=text,

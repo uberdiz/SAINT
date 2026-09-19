@@ -97,11 +97,11 @@ def _resolve_attn_implementation(flash_mode: str, device_is_cuda: bool) -> str:
 # Base
 # ---------------------------------------------------------------------------
 class TTSEngine:
-    def speak(self, text: str, on_chunk_start: Optional[Callable[[str], None]] = None):
+    def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         t_start = time.perf_counter()
         raise NotImplementedError
 
-    def interrupt(self):
+    def interrupt(self, turn_id: int = None):
         raise NotImplementedError
 
     def is_speaking(self) -> bool:
@@ -139,6 +139,7 @@ class KokoroTTS(TTSEngine):
         self._pipeline = None
         self._interrupt_event = threading.Event()
         self._speaking = False
+        self._active_turn_id: int = -1
         self._lock = threading.Lock()
         self._load_lock = threading.Lock()
         self._load_error: Optional[Exception] = None
@@ -191,7 +192,7 @@ class KokoroTTS(TTSEngine):
         except Exception:
             pass
 
-    def speak(self, text: str, on_chunk_start: Optional[Callable[[str], None]] = None):
+    def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         import sounddevice as sd
         import torch
         import time
@@ -203,6 +204,7 @@ class KokoroTTS(TTSEngine):
 
         self._load()
         self._interrupt_event.clear()
+        self._active_turn_id = turn_id
 
         words = _split_words(text)
         t_phoneme = time.perf_counter()
@@ -301,7 +303,11 @@ class KokoroTTS(TTSEngine):
                 "text": text,
             })
 
-    def interrupt(self):
+    def interrupt(self, turn_id: int = None):
+        with self._lock:
+            if turn_id is not None and self._active_turn_id != -1 and turn_id != self._active_turn_id:
+                return
+            self._active_turn_id = -1
         self._interrupt_event.set()
         try:
             import sounddevice as sd
@@ -495,7 +501,7 @@ class QwenTTS(TTSEngine):
         except Exception:
             pass
 
-    def speak(self, text: str, on_chunk_start: Optional[Callable[[str], None]] = None):
+    def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         t_start = time.perf_counter()
         import sounddevice as sd  # type: ignore
         import torch
@@ -669,7 +675,7 @@ class QwenTTS(TTSEngine):
 
         return wavs, sr
 
-    def interrupt(self):
+    def interrupt(self, turn_id: int = None):
         self._interrupt_event.set()
         try:
             import sounddevice as sd  # type: ignore
@@ -697,7 +703,7 @@ class MockTTS(TTSEngine):
         self._speaking = False
         self._spoken_chunks = []     # record of what was "spoken"
 
-    def speak(self, text: str, on_chunk_start: Optional[Callable[[str], None]] = None):
+    def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         t_start = time.perf_counter()
         from core.events import event_bus, EventType
         import logging
@@ -767,7 +773,7 @@ class MockTTS(TTSEngine):
                 "text": text,
             })
 
-    def interrupt(self):
+    def interrupt(self, turn_id: int = None):
         self._interrupt_event.set()
 
     def is_speaking(self) -> bool:
