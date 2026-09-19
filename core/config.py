@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
         "automation": False,
         "vision": False,
         "memory": False,
+        "spotify": False,
     },
 
     # ------------------------------------------------------------------
@@ -110,6 +111,16 @@ DEFAULT_CONFIG = {
         "permission_mode": "confirm",     # "safe" | "confirm" | "autonomous"
         "confirm_dangerous": True,        # Require confirmation for HIGH permission tools
         "command_timeout": 30,            # seconds
+    },
+
+    # ------------------------------------------------------------------
+    # Permissions and integrations
+    # ------------------------------------------------------------------
+    "permissions": {"overrides": {}},
+    "spotify": {
+        "client_id": "",
+        "redirect_uri": "http://127.0.0.1:8888/callback",
+        "preferred_device": "",
     },
 
     # ------------------------------------------------------------------

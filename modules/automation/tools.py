@@ -83,10 +83,35 @@ class ToolRegistry:
             return ToolResult(success=False, error=f"Tool '{name}' not found")
         if not tool.enabled:
             return ToolResult(success=False, error=f"Tool '{name}' is disabled")
+
+        # Import lazily to avoid a module-import cycle.
+        from core.permissions import permission_manager
+        from core.events import event_bus, EventType
+        policy = permission_manager.policy_for_tool(name, tool.permission.value)
+        event_bus.emit_event(EventType.TOOL_REQUESTED, {
+            "tool": name, "permission": tool.permission.value, "policy": policy
+        })
+        if policy == permission_manager.DENY:
+            event_bus.emit_event(EventType.TOOL_PERMISSION_DENIED, {"tool": name, "reason": "policy"})
+            return ToolResult(success=False, error=f"Permission denied for tool '{name}'")
+        if policy == permission_manager.CONFIRM:
+            event_bus.emit_event(EventType.TOOL_PERMISSION_REQUIRED, {"tool": name})
+            return ToolResult(success=False, error=f"Confirmation required for tool '{name}'")
+
+        event_bus.emit_event(EventType.TOOL_PERMISSION_GRANTED, {"tool": name})
+        started = time.perf_counter()
+        event_bus.emit_event(EventType.TOOL_STARTED, {"tool": name})
         try:
             result = tool.execute_fn(**kwargs)
+            event_bus.emit_event(EventType.TOOL_COMPLETED, {
+                "tool": name, "duration_ms": round((time.perf_counter() - started) * 1000, 1)
+            })
             return ToolResult(success=True, result=result)
         except Exception as e:
+            event_bus.emit_event(EventType.TOOL_FAILED, {
+                "tool": name, "error": str(e),
+                "duration_ms": round((time.perf_counter() - started) * 1000, 1)
+            })
             return ToolResult(success=False, error=str(e))
 
 
