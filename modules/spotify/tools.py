@@ -20,6 +20,7 @@ class SpotifyTools:
             Tool("spotify.previous", "Skip to the previous Spotify item", {}, PermissionLevel.LOW, self.previous),
             Tool("spotify.volume", "Set Spotify playback volume", {"percent": "int"}, PermissionLevel.LOW, self.volume),
             Tool("spotify.devices", "List Spotify playback devices", {}, PermissionLevel.LOW, self.devices),
+            Tool("spotify.playlists", "List the user's Spotify playlists", {}, PermissionLevel.LOW, self.playlists),
             Tool("spotify.queue", "Add a Spotify item to the playback queue", {"uri": "string"}, PermissionLevel.MEDIUM, self.queue),
             Tool("spotify.add_to_playlist", "Add Spotify tracks to a playlist", {"playlist_id": "string", "uris": "string[]"}, PermissionLevel.MEDIUM, self.add_to_playlist),
         ]
@@ -64,6 +65,9 @@ class SpotifyTools:
 
     def devices(self):
         return self.client.devices()
+
+    def playlists(self):
+        return self.client.playlists()
 
     def queue(self, uri):
         return self.client.queue(uri)
