@@ -50,3 +50,14 @@ SAINT tracks detailed analytics including:
 - Tool usage
 - Error rates
 - Token statistics
+
+
+## Spotify Integration (SAINT 0.2 foundation)
+
+Spotify is available under **Settings → Integrations → Spotify**. Configure a Spotify Developer Client ID and a loopback redirect URI (for example `http://127.0.0.1:8888/callback`), enable the module, then connect your account.
+
+SAINT uses Authorization Code with PKCE for desktop authentication. Access tokens are stored through the Windows credential store when the optional `keyring` package is available; tokens are never written to the SAINT config or logs.
+
+Tool access is configurable under **Settings → Permissions**. Individual Spotify capabilities can be set to Allow, Confirm, or Deny.
+
+The Settings page uses category navigation and an in-page search instead of one long scrolling form.
