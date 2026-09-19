@@ -1,18 +1,11 @@
-"""
-core/module_manager.py
-
-Holds every installed module instance and provides enable/disable and
-status querying. In v0.1 only AI is functional; the rest exist as real
-(but inert) objects so the Module Manager UI has genuine data to show
-rather than placeholders.
-"""
-
+"""Central module registry for SAINT."""
 from core.config import config
 from modules.ai.module import AIModule
 from modules.voice.module import VoiceModule
 from modules.automation.module import AutomationModule
 from modules.vision.module import VisionModule
 from modules.memory.module import MemoryModule
+from modules.spotify.module import SpotifyModule
 
 
 class ModuleManager:
@@ -23,15 +16,13 @@ class ModuleManager:
             "automation": AutomationModule(),
             "vision": VisionModule(),
             "memory": MemoryModule(),
+            "spotify": SpotifyModule(),
         }
         self._apply_initial_state()
 
     def _apply_initial_state(self):
         for key, module in self.modules.items():
-            should_enable = config.get(f"modules.{key}", False)
-            # Only AI is actually functional in v0.1; others can be
-            # "enabled" in config but will not do anything yet.
-            if should_enable:
+            if config.get(f"modules.{key}", False):
                 module.enable()
 
     def get(self, key):
@@ -55,7 +46,3 @@ class ModuleManager:
         else:
             module.disable()
         config.set(f"modules.{key}", enabled)
-
-
-# Singleton
-module_manager = ModuleManager()
