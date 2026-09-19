@@ -1,49 +1,15 @@
 # SAINT Revitalized Requirements
-# ===============================
-# Core dependencies (required for basic functionality)
-
-# GUI Framework
 PySide6>=6.6.0
-
-# HTTP client for AI providers
 requests>=2.31.0
-
-# System monitoring
 psutil>=5.9.0
-
-# Audio capture (cross-platform, numpy-native)
 sounddevice>=0.4.6
 soundfile>=0.12.1
 numpy>=1.24.0
-
-# STT: faster-whisper (CTranslate2 Whisper with CUDA support)
-# Requires CUDA 11.8+ and cuDNN 8+ installed separately for GPU acceleration.
-# Falls back to CPU automatically if CUDA is unavailable.
 faster-whisper>=1.0.3
-
-# TTS: kokoro (Hexgrad) - auto-downloads model from HuggingFace on first use
 kokoro>=0.5.0
 ollama>=0.6.2
-
-# Automation: Windows desktop control
 pyautogui>=0.3.0
 pygetwindow>=0.0.1
 pywin32>=306
-
-# Testing
+keyring>=25.0.0
 pytest>=8.0.0
-
-# ==========================================
-# Optional dependencies (for specific features)
-# ==========================================
-# These are NOT required for basic functionality.
-# Install only if you need the corresponding feature.
-
-# Wake word detection (optional)
-# pip install pvporcupine
-
-# Silero VAD (optional, higher accuracy than RMS VAD)
-# pip install silero-vad
-
-# Enhanced OCR for vision module (optional)
-# pip install pytesseract pillow
