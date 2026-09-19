@@ -113,6 +113,129 @@ class AIModule(BaseModule):
         event_bus.emit_event(EventType.LATENCY_MODEL, {"ms": round(elapsed * 1000, 1), "request_id": request_id})
         return response_text
 
+    def _try_integration_command(self, prompt: str):
+        """Execute deterministic commands for enabled integrations.
+
+        This is intentionally used for action-oriented commands where the
+        LLM should not be allowed to hallucinate that an action happened.
+        Spotify is currently the first integration with direct routing.
+        Returns a user-facing response string, or None when the prompt is
+        not a supported integration command.
+        """
+        import re
+        from core.module_manager import module_manager
+        from modules.automation.tools import get_tool_registry
+
+        text = prompt.strip()
+        lower = text.lower()
+        if "spotify" not in lower and not re.match(
+            r"^(play|pause|resume|skip|next|previous|volume|what(?:'s| is) playing)\b",
+            lower,
+        ):
+            return None
+
+        spotify = module_manager.get("spotify")
+        if not spotify or not spotify.enabled:
+            return "Spotify is not enabled. Enable the Spotify integration in Settings → Integrations."
+
+        if not spotify.is_connected():
+            return "Spotify is enabled, but your Spotify account is not connected."
+
+        registry = get_tool_registry()
+
+        def run(name, **kwargs):
+            result = registry.execute(name, **kwargs)
+            if not result.success:
+                return None, result.error or f"{name} failed."
+            return result.result, None
+
+        try:
+            # Playback controls
+            if re.search(r"\b(pause|stop)\b.*\bspotify\b|\bspotify\b.*\b(pause|stop)\b", lower):
+                _, err = run("spotify.pause")
+                return "Paused Spotify." if not err else f"I couldn't pause Spotify: {err}"
+
+            if re.search(r"\b(resume|continue)\b.*\bspotify\b|\bspotify\b.*\b(resume|continue)\b", lower):
+                _, err = run("spotify.play")
+                return "Resumed Spotify." if not err else f"I couldn't resume Spotify: {err}"
+
+            if re.search(r"\b(next|skip)\b", lower) and "spotify" in lower:
+                _, err = run("spotify.next")
+                return "Skipped to the next track." if not err else f"I couldn't skip the track: {err}"
+
+            if re.search(r"\b(previous|back)\b", lower) and "spotify" in lower:
+                _, err = run("spotify.previous")
+                return "Went back to the previous track." if not err else f"I couldn't go back: {err}"
+
+            vol = re.search(r"\bvolume\s+(?:to\s+)?(\d{1,3})\s*(?:%|percent)?", lower)
+            if vol and "spotify" in lower:
+                percent = max(0, min(100, int(vol.group(1))))
+                _, err = run("spotify.volume", percent=percent)
+                return f"Set Spotify volume to {percent}%." if not err else f"I couldn't change the volume: {err}"
+
+            if re.search(r"(what(?:'s| is) playing|current(?:ly)? playing|current track)", lower):
+                data, err = run("spotify.current")
+                if err:
+                    return f"I couldn't check Spotify playback: {err}"
+                item = (data or {}).get("item") if isinstance(data, dict) else None
+                if not item:
+                    return "Spotify isn't currently playing anything."
+                artists = ", ".join(a.get("name", "") for a in item.get("artists", []))
+                return f"Spotify is playing {item.get('name', 'an unknown track')} by {artists}."
+
+            # Playlist commands: use the user's actual playlists instead of
+            # pretending that a playlist was played.
+            if re.search(r"\bplaylist\b", lower) and re.search(r"\b(play|open|start)\b", lower):
+                data, err = run("spotify.playlists")
+                if err:
+                    return f"I couldn't read your Spotify playlists: {err}"
+                items = (data or {}).get("items", []) if isinstance(data, dict) else []
+                if not items:
+                    return "I couldn't find any Spotify playlists on your account."
+
+                target = lower
+                target = re.sub(r"\b(play|open|start)\b", "", target)
+                target = target.replace("spotify", "").replace("playlist", "")
+                target = re.sub(r"\b(my|the|on|please)\b", " ", target)
+                target = re.sub(r"\s+", " ", target).strip()
+
+                chosen = None
+                if target:
+                    exact = [p for p in items if p.get("name", "").lower() == target]
+                    partial = [p for p in items if target in p.get("name", "").lower()]
+                    chosen = (exact or partial or [None])[0]
+                if chosen is None and "top" in target:
+                    chosen = next((p for p in items if "top" in p.get("name", "").lower()), None)
+                if chosen is None and not target:
+                    chosen = items[0]
+                if chosen is None:
+                    names = ", ".join(p.get("name", "Unnamed") for p in items[:5])
+                    return f"I couldn't find that playlist. Your playlists include: {names}."
+
+                _, err = run("spotify.play", uri=chosen.get("uri"))
+                return f"Playing your playlist {chosen.get('name', 'playlist')}." if not err else f"I found {chosen.get('name', 'that playlist')}, but couldn't start it: {err}"
+
+            # Generic track/artist play request.
+            if re.match(r"^(please\s+)?play\b", lower):
+                query = re.sub(r"^(please\s+)?play\s+", "", text, flags=re.I)
+                query = re.sub(r"\bon\s+spotify\s*$", "", query, flags=re.I).strip()
+                if query and query.lower() not in {"spotify", "my spotify"}:
+                    data, err = run("spotify.search", query=query, types="track")
+                    if err:
+                        return f"I couldn't search Spotify: {err}"
+                    tracks = ((data or {}).get("tracks") or {}).get("items", [])
+                    if not tracks:
+                        return f"I couldn't find {query} on Spotify."
+                    track = tracks[0]
+                    _, err = run("spotify.play", uri=track.get("uri"))
+                    artists = ", ".join(a.get("name", "") for a in track.get("artists", []))
+                    return f"Playing {track.get('name', query)} by {artists}." if not err else f"I found the track, but couldn't start it: {err}"
+
+        except Exception as exc:
+            return f"I couldn't complete that Spotify action: {exc}"
+
+        return None
+
     # ------------------------------------------------------------------ #
     # Streaming API
     # ------------------------------------------------------------------ #
@@ -194,6 +317,37 @@ class AIModule(BaseModule):
             "system_prompt": config.get("voice.system_prompt", "")[:100],
         })
         start = time.perf_counter()
+
+        # Execute real integration actions before asking the LLM to answer.
+        # This prevents hallucinated actions such as "*Spotify plays*" when
+        # the connected service was never actually called.
+        integration_response = self._try_integration_command(prompt)
+        if integration_response is not None:
+            if self._cancel_flag.is_set():
+                if on_done:
+                    on_done("")
+                return
+
+            on_token(integration_response)
+            elapsed = time.perf_counter() - start
+            self._context.add_assistant_turn(integration_response)
+            event_bus.emit_event(EventType.AI_STREAM_DONE, {
+                "turn_id": turn_id,
+                "request_id": request_id,
+                "stream_id": stream_id,
+                "elapsed_seconds": round(elapsed, 3),
+                "response_length": len(integration_response),
+                "tool_routed": True,
+            })
+            event_bus.emit_event(EventType.LATENCY_MODEL, {
+                "ms": round(elapsed * 1000, 1),
+                "turn_id": turn_id,
+                "request_id": request_id,
+                "tool_routed": True,
+            })
+            if on_done:
+                on_done(integration_response)
+            return
 
         _current_turn_id = turn_id
         _current_stream_id = stream_id
