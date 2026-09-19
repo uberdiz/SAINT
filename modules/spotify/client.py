@@ -51,6 +51,10 @@ class SpotifyClient:
     def devices(self):
         return self.request("GET", "/me/player/devices")[0]
 
+    def playlists(self, limit=50):
+        return self.request("GET", "/me/playlists", params={"limit": max(1, min(50, int(limit)))})[0]
+
+
     def play(self, context_uri=None, uris=None, device_id=None):
         params = {"device_id": device_id} if device_id else {}
         body = {}
