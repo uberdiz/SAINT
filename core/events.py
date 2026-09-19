@@ -58,3 +58,7 @@ class EventType:
     TOOL_PERMISSION_GRANTED="tool.permission.granted"; TOOL_PERMISSION_DENIED="tool.permission.denied"
     TOOL_STARTED="tool.started"; TOOL_COMPLETED="tool.completed"; TOOL_FAILED="tool.failed"
     ERROR="error"; WARNING="warning"
+
+
+# Singleton instance
+event_bus = EventBus()
