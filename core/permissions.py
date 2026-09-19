@@ -1,9 +1,6 @@
 """Centralized tool permission policy for SAINT 0.2."""
 
 from core.config import config
-from modules.automation.tools import PermissionLevel
-
-
 class PermissionManager:
     """Stores per-tool and per-module access overrides.
     Values are allow, confirm, or deny.
@@ -15,6 +12,15 @@ class PermissionManager:
 
     def _overrides(self):
         return config.get("permissions.overrides", {}) or {}
+
+    def policy_for_tool(self, tool_name: str, permission_level: str = "medium") -> str:
+        overrides = self._overrides()
+        if tool_name in overrides:
+            return overrides[tool_name]
+        module = tool_name.split(".", 1)[0]
+        if module in overrides:
+            return overrides[module]
+        return self.ALLOW if permission_level == "low" else self.CONFIRM
 
     def get_policy(self, tool_name: str, default: str = CONFIRM) -> str:
         overrides = self._overrides()
