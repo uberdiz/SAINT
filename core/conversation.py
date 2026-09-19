@@ -197,16 +197,10 @@ class ConversationController:
             self._voice.set_saint_speaking(False)
             return
 
-        # While SAINT is actively playing audio, suppress all STT input.
-        # The microphone picks up SAINT's own voice — any STT result during
-        # playback is either SAINT's echo or noise, never a genuine command
-        # the user didn't already say. Users can interrupt via the button or "stop".
-        if state == ConvState.SPEAKING:
-            import logging
-            logging.getLogger("saint.conversation").info(f"voice.suppressed: '{text}' during speaking")
-            event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Suppressed during playback"})
-            return
-
+        # Never blanket-suppress STT while TTS is playing.
+        # The microphone can hear SAINT, but a real user utterance must still
+        # be able to interrupt playback. Echo suppression is handled below;
+        # genuine speech reaches the interruption path.
         if state in (ConvState.THINKING, ConvState.SPEAKING) or tts_recent:
             # During/after TTS: stricter validation — low-confidence results likely echo
             is_during_tts = state in (ConvState.THINKING, ConvState.SPEAKING)
