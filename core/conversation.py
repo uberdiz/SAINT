@@ -230,10 +230,12 @@ class ConversationController:
             # Word-overlap echo detection for near-echoes and fragments
             if t_clean and ai_clean:
                 overlap = self._word_overlap(t_clean, ai_clean)
-                if overlap > 0.25:
+                # Require stronger overlap for an interruption candidate. A
+                # normal user sentence often shares common words with SAINT.
+                if overlap > 0.60 and confidence < 0.55:
                     import logging
                     logging.getLogger("saint.conversation").info(f"voice.echo.suppressed: ignored '{text}' word overlap {overlap:.1%}")
-                    event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Echo suppressed (word overlap)"})
+                    event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Echo suppressed (strong word overlap)"})
                     return
 
         if state in (ConvState.THINKING, ConvState.SPEAKING):
