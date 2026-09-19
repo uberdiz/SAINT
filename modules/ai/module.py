@@ -204,8 +204,14 @@ class AIModule(BaseModule):
                     exact = [p for p in items if p.get("name", "").lower() == target]
                     partial = [p for p in items if target in p.get("name", "").lower()]
                     chosen = (exact or partial or [None])[0]
-                if chosen is None and "top" in target:
-                    chosen = next((p for p in items if "top" in p.get("name", "").lower()), None)
+                if chosen is None and target in {"top", "top playlist", "favorite", "favourite"}:
+                    # "my top playlist" means the first playlist in the user's
+                    # Spotify playlist collection unless a playlist actually
+                    # named "top" was matched above.
+                    chosen = next(
+                        (p for p in items if "top" in p.get("name", "").lower()),
+                        None,
+                    ) or items[0]
                 if chosen is None and not target:
                     chosen = items[0]
                 if chosen is None:
