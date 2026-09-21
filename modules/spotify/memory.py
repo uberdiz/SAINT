@@ -98,6 +98,12 @@ class SpotifyMemory:
         artists = item.get("artists") or []
         now = played_at or time.time()
         with self._lock, self._connect() as conn:
+            existing = conn.execute(
+                "SELECT id FROM listening WHERE track_id IS ? AND abs(played_at-?) < 2",
+                (item.get("id"), now),
+            ).fetchone()
+            if existing:
+                return
             conn.execute("""
                 INSERT INTO listening
                 (played_at,track_id,track_uri,track_name,artist,artists_json,album,context_uri,source)
