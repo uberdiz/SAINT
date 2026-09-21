@@ -1,4 +1,4 @@
-"""Small Spotify Web API client with normalized errors."""
+"""Small Spotify Web API client with normalized errors and user-context helpers."""
 
 import time
 import requests
@@ -54,6 +54,21 @@ class SpotifyClient:
     def playlists(self, limit=50):
         return self.request("GET", "/me/playlists", params={"limit": max(1, min(50, int(limit)))})[0]
 
+    def recently_played(self, limit=50):
+        return self.request("GET", "/me/player/recently-played",
+                            params={"limit": max(1, min(50, int(limit)))})[0]
+
+    def top_tracks(self, time_range="medium_term", limit=50):
+        return self.request("GET", "/me/top/tracks",
+                            params={"time_range": time_range, "limit": max(1, min(50, int(limit)))})[0]
+
+    def top_artists(self, time_range="medium_term", limit=50):
+        return self.request("GET", "/me/top/artists",
+                            params={"time_range": time_range, "limit": max(1, min(50, int(limit)))})[0]
+
+    def saved_tracks(self, limit=50):
+        return self.request("GET", "/me/tracks",
+                            params={"limit": max(1, min(50, int(limit)))})[0]
 
     def play(self, context_uri=None, uris=None, device_id=None):
         params = {"device_id": device_id} if device_id else {}
