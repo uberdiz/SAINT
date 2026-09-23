@@ -138,7 +138,7 @@ class VoiceModule(BaseModule):
         self._stt_session_state_lock = threading.Lock()
 
         self._echo_gate = EchoGate(
-            margin=config.get("voice.barge_in_echo_margin", 2.5),
+            margin=config.get("voice.barge_in_echo_margin", 2.0),
             min_ms=config.get("voice.barge_in_min_ms", 240),
             frame_ms=CHUNK_MS,
             initial_coupling=0.3,
@@ -221,6 +221,7 @@ class VoiceModule(BaseModule):
                 device=stt_device,
                 compute_type=stt_compute,
                 language=config.get("voice.stt_language", "en"),
+                hotwords=config.get("voice.stt_hotwords", "SAINT"),
             )
             self._stt_device_info = f"{stt_device}/{stt_compute}/{stt_model}"
             threading.Thread(target=self._warmup_stt, daemon=True, name="voice-warmup").start()
@@ -795,6 +796,12 @@ class VoiceModule(BaseModule):
         r"^\s*(?:(?:hey|hi|ok(?:ay)?)[\s,.!]+)?(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
         re.IGNORECASE)
 
+    # Whisper sometimes renders "Hey SAINT" as "Hey, St." — only strip that
+    # form after a greeting, so "St. Louis weather" is left alone.
+    _WAKE_PREFIX_ALT = re.compile(
+        r"^\s*(?:hey|hi|ok(?:ay)?)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
+        re.IGNORECASE)
+
     def _strip_wake_prefix(self, text: str) -> str:
         """Remove a leading 'saint' / 'hey saint' from a transcript.
 
@@ -805,6 +812,8 @@ class VoiceModule(BaseModule):
         if not text:
             return text
         stripped = self._WAKE_PREFIX.sub("", text, count=1)
+        if stripped == text:
+            stripped = self._WAKE_PREFIX_ALT.sub("", text, count=1)
         if stripped == text:
             return text
         return stripped.strip()

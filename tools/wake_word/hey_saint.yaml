@@ -1,0 +1,66 @@
+## SAINT wake-word training config (openWakeWord).
+## Trains ONE model that fires on both "hey saint" and the bare "saint",
+## with near-miss negatives to keep the short word from over-triggering.
+
+model_name: "hey_saint"                 # -> training/hey_saint.onnx
+
+target_phrase:
+  - "hey saint"
+  - "saint"
+
+# Near-misses explicitly trained as negatives so a short always-on "saint"
+# doesn't fire on similar-sounding words. OOV words fall back to deep-phonemizer.
+custom_negative_phrases:
+  - "faint"
+  - "paint"
+  - "saved"
+  - "sane"
+  - "sent"
+  - "scent"
+  - "said"
+  - "sailed"
+  - "sink"
+  - "hey sam"
+  - "hey sane"
+  - "a saint"
+  - "the saint"
+
+# 20,000 is the recommended quality tier (generation is fast + local).
+n_samples: 20000
+n_samples_val: 2000
+
+tts_batch_size: 50          # unused by generate_samples_piper.py (kept for train.py compatibility)
+augmentation_batch_size: 16
+
+# Repo's native-Windows drop-in replacement for piper-sample-generator.
+piper_sample_generator_path: "scripts"
+
+# train.py creates <output_dir>/<model_name>/{positive_train,positive_test,negative_train,negative_test}/
+output_dir: "training"
+
+rir_paths:
+  - "augmentation_data/room_impulse_responses"
+
+# Background noise mixing left empty (the ACAV100M feature cache covers negatives;
+# see the repo README on why skipping this isn't the false-alarm risk it seems).
+background_paths: []
+background_paths_duplication_rate: []
+
+false_positive_validation_data_path: "features_cache/validation_set_features.npy"
+
+augmentation_rounds: 1
+
+feature_data_files:
+  "ACAV100M_sample": "features_cache/openwakeword_features_ACAV100M_2000_hrs_16bit.npy"
+
+batch_n_per_class:
+  "ACAV100M_sample": 1024
+  "adversarial_negative": 50
+  "positive": 50
+
+model_type: "dnn"
+layer_size: 32
+
+steps: 50000
+max_negative_weight: 1500
+target_false_positives_per_hour: 0.2

@@ -81,7 +81,7 @@ DEFAULT_CONFIG = {
         # speakers is not mistaken for the user.
         "barge_in_enabled": True,
         "barge_in_min_ms": 240,         # sustained speech needed to interrupt
-        "barge_in_echo_margin": 2.5,    # how far above predicted echo the mic must be
+        "barge_in_echo_margin": 2.0,    # how far above predicted echo the mic must be
 
         # STT
         "stt_backend": "faster_whisper",  # "faster_whisper" | "mock"
@@ -89,6 +89,7 @@ DEFAULT_CONFIG = {
         "stt_device": "cuda",             # "cuda" | "cpu"
         "stt_compute_type": "float16",    # "float16" | "int8" | "float32"
         "stt_language": "en",
+        "stt_hotwords": "SAINT",          # biases Whisper toward spelling the wake word correctly
 
         # TTS
         "tts_backend": "kokoro",          # "kokoro" | "qwen" | "mock"

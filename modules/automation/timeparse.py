@@ -201,6 +201,13 @@ def parse_schedule(text: str, now: Optional[datetime] = None) -> Tuple[Optional[
             clock = _default_morning() if days is not None else "09:00"
         return {"type": "daily", "time": clock, "days": days}, _strip(s, m)
 
+    # ---- one-shot: N units from now ---------------------------------------
+    m = re.search(rf"\b(?:{_NUM}\s+{_UNIT}(?:\s+and\s+{_NUM}\s+{_UNIT})?)\s+from\s+now\b", low)
+    if m:
+        secs = sum(_num(n) * _unit_sec(u) for n, u in re.findall(rf"{_NUM}\s+{_UNIT}", m.group(0)))
+        if secs > 0:
+            return {"type": "once", "at": (now + timedelta(seconds=secs)).timestamp()}, _strip(s, m)
+
     # ---- one-shot: in N units -------------------------------------------
     m = re.search(rf"\b(?:in|after)\s+(half an hour|{_NUM}\s+{_UNIT}(?:\s+and\s+(?:a\s+)?(?:half|{_NUM}\s+{_UNIT}))?)\b", low)
     if m:

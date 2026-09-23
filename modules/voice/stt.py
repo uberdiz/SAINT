@@ -54,7 +54,9 @@ class FasterWhisperSTT(STTEngine):
         device: str = "cuda",
         compute_type: str = "float16",
         language: str = "en",
+        hotwords: str = "",
     ):
+        self._hotwords = hotwords or None   # biases decoding toward e.g. "SAINT"
         self._model_name = model_name
         self._device = device
         self._compute_type = compute_type
@@ -112,6 +114,7 @@ class FasterWhisperSTT(STTEngine):
                 language=self._language if self._language != "auto" else None,
                 beam_size=5,
                 vad_filter=False,  # we do our own VAD
+                hotwords=self._hotwords,
             )
             text_parts = []
             avg_logprob = 0.0

@@ -70,30 +70,38 @@ class EchoGate:
     for ``min_ms`` of consecutive frames.
     """
 
-    def __init__(self, margin: float = 2.5, min_ms: int = 240, frame_ms: int = 30,
+    def __init__(self, margin: float = 2.0, min_ms: int = 240, frame_ms: int = 30,
                  floor: float = 0.01, initial_coupling: float = 0.5):
         self.margin = margin
         self.min_frames = max(1, int(min_ms / frame_ms))
         self.floor = floor
         self.coupling = initial_coupling
-        self._run = 0
+        self._score = 0.0
+        self._smoothed = 0.0
 
     def reset_run(self):
-        self._run = 0
+        self._score = 0.0
+        self._smoothed = 0.0
 
     def update(self, mic_rms: float, playback_rms: float) -> bool:
-        """Feed one frame. Returns True when a barge-in should fire."""
+        """Feed one frame. Returns True when a barge-in should fire.
+
+        A leaky integrator (not a strict run of consecutive frames) so the
+        short dips between syllables don't reset the evidence of a user
+        talking over SAINT.
+        """
+        self._smoothed = 0.5 * self._smoothed + 0.5 * mic_rms
         predicted = self.coupling * playback_rms * self.margin + self.floor
-        if mic_rms > predicted:
-            self._run += 1
+        if self._smoothed > predicted:
+            self._score += 1.0
         else:
-            self._run = 0
+            self._score = max(0.0, self._score - 0.5)
             # Learn the echo path only from frames we believe are pure echo.
-            if playback_rms > 0.01:
+            if playback_rms > 0.01 and self._score == 0.0:
                 ratio = min(4.0, mic_rms / playback_rms)
                 self.coupling = 0.97 * self.coupling + 0.03 * ratio
-        if self._run >= self.min_frames:
-            self._run = 0
+        if self._score >= self.min_frames:
+            self._score = 0.0
             return True
         return False
 

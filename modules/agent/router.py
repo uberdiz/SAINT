@@ -66,9 +66,18 @@ def run_tool(tool: str, describe: str, on_ok: Callable[[object], str], **kwargs)
     return Reply(res.error or f"I couldn't {describe}.", ok=False)
 
 
+_FILLERS = re.compile(r"^(?:actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|also|wait|alright|right)[,.!\s]+",
+                      re.I)
+
+
 def _clean(text: str) -> str:
     t = text.strip()
     t = re.sub(r"^(?:hey\s+)?saint[,.!\s]+", "", t, flags=re.I)
+    for _ in range(3):   # "Actually, um, what time is it?"
+        t2 = _FILLERS.sub("", t)
+        if t2 == t:
+            break
+        t = t2
     t = re.sub(r"^(?:can you|could you|would you|will you|please|can u|i want you to|i'd like you to|"
                r"i want to|go ahead and|let's|lets)\s+", "", t, flags=re.I)
     t = re.sub(r"^(?:please)\s+", "", t, flags=re.I)

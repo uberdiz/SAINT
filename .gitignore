@@ -24,6 +24,8 @@ data/*
 !data/wake/
 data/wake/*
 !data/wake/hey_saint.onnx
+!data/wake/melspectrogram.onnx
+!data/wake/embedding_model.onnx
 !data/wake/README.md
 
 # Large local model weights (download separately, see README)
@@ -32,8 +34,9 @@ data/tts/
 *.pth
 *.safetensors
 
-# Recorded audio
+# Recorded audio / screenshots
 *.wav
+data/screens/
 
 # Editor / agent tooling
 .vscode/

@@ -249,19 +249,20 @@ class SetupWizard:
 
     def _check_automation(self):
         try:
-            import pyautogui
-            import pygetwindow
+            import pyautogui  # noqa: F401
+            import win32gui  # noqa: F401
+            import uiautomation  # noqa: F401
             self.results.append(CheckResult(
-                name="Automation",
+                name="Desktop control",
                 passed=True,
-                message="pyautogui and pygetwindow available",
+                message="pyautogui, pywin32 and uiautomation available",
                 details={}
             ))
-        except ImportError:
+        except ImportError as e:
             self.results.append(CheckResult(
-                name="Automation",
+                name="Desktop control",
                 passed=False,
-                message="pyautogui or pygetwindow not installed",
+                message=f"Desktop control dependency missing ({e.name}). Run: pip install -r requirements.txt",
                 details={}
             ))
 

@@ -1,18 +1,37 @@
-# SAINT Revitalized Requirements
+# SAINT — Python 3.12+ (developed and tested on Python 3.14, Windows 11)
+#
+# PyTorch: Kokoro TTS runs on PyTorch. For GPU speech output install the CUDA
+# build FIRST (RTX 50-series / Blackwell needs CUDA 12.8+ wheels), e.g.
+#   pip install --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
+# then install the rest with:  pip install -r requirements.txt
+
+# UI / core
 PySide6>=6.6.0
 requests>=2.31.0
 psutil>=5.9.0
+numpy>=1.24.0
+
+# Audio, wake word, speech recognition
 sounddevice>=0.4.6
 soundfile>=0.12.1
-numpy>=1.24.0
-faster-whisper>=1.0.3
-openwakeword>=0.6.0     # offline wake-word ("Hey SAINT"); ONNX inference
-onnxruntime>=1.16.0     # openWakeWord ONNX backend
-kokoro>=0.5.0
-espeakng_loader>=0.2.4   # bundled espeak-ng for Kokoro G2P fallback on OOV words
-ollama>=0.6.2
-pyautogui>=0.3.0
-pygetwindow>=0.0.1
+onnxruntime>=1.16.0          # runs the hey_saint.onnx wake-word model (CPU)
+faster-whisper>=1.0.3        # speech-to-text (CTranslate2; bundles its own CUDA runtime)
+
+# Speech output
+torch>=2.2.0
+kokoro>=0.7.0
+misaki[en]>=0.7.0
+espeakng_loader>=0.2.4       # espeak-ng for out-of-dictionary words (e.g. names)
+phonemizer>=3.2.0
+
+# Desktop control / screen awareness (Windows)
+pyautogui>=0.9.54
 pywin32>=306
+uiautomation>=2.0.18
+pillow>=10.0.0
+
+# Spotify login tokens are stored in the Windows Credential Manager
 keyring>=25.0.0
+
+# Tests
 pytest>=8.0.0

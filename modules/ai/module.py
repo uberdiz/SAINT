@@ -288,10 +288,14 @@ class AIModule(BaseModule):
                 _ai_log.warning("AI provider test failed: %s", e)
 
         messages = self._context.format_messages()
-        memory_msgs = self._memory_messages(prompt)
-        if memory_msgs:
-            insert_at = 1 if messages and messages[0]["role"] == "system" else 0
-            messages[insert_at:insert_at] = memory_msgs
+        # Ground the model: real clock + only the memories the user stored.
+        from datetime import datetime
+        grounding = [{"role": "system", "content": datetime.now().strftime(
+            "Current local date and time: %A, %B %d, %Y, %I:%M %p. Never guess the time; use this.")}]
+        grounding += self._memory_messages(prompt)
+        memory_msgs = grounding[1:]
+        insert_at = 1 if messages and messages[0]["role"] == "system" else 0
+        messages[insert_at:insert_at] = grounding
 
         use_tools = (provider_name == "ollama" and config.get("ai.tool_calling", True)
                      and config.get("agent.enabled", True))

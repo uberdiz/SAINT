@@ -269,8 +269,30 @@ class TTSService:
         return TTSState.FALLBACK if self._is_fallback else TTSState.READY
 
     def is_speaking(self) -> bool:
+        """True while synthesizing OR while synthesized audio is still playing.
+
+        Engines such as Kokoro return from speak() as soon as audio is queued
+        and play it on a background thread; the conversation controller and
+        barge-in detection must treat that playback as "SAINT is speaking".
+        """
         with self._speaking_lock:
-            return self._is_speaking
+            if self._is_speaking:
+                return True
+        engine = self._engine
+        if engine is not None:
+            try:
+                if engine.is_speaking() or getattr(engine, "_playback_active", False):
+                    return True
+            except Exception:
+                pass
+        from core.audio_echo import playback_monitor
+        return playback_monitor.active(tail_sec=0.15)
+
+    @property
+    def playback_active(self) -> bool:
+        engine = self._engine
+        return bool(engine is not None and (getattr(engine, "_playback_active", False)
+                                            or getattr(engine, "_currently_playing", False)))
 
     def get_diagnostics(self) -> Dict[str, Any]:
         """Get TTS diagnostics for UI display."""

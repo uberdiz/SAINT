@@ -32,7 +32,7 @@ log = logging.getLogger("saint.agent.llm")
 _ACTION_HINT = re.compile(
     r"\b(play|put on|queue|skip|pause|resume|volume|music|song|playlist|spotify|listen|"
     r"remind|reminder|timer|alarm|schedule|every (day|morning|week)|tomorrow|"
-    r"remember|forget|my (favou?rite|name)|do i (like|prefer)|"
+    r"remember|forget|note|jot|write down|nudge|my (favou?rite|name)|do i (like|prefer)|"
     r"open|launch|close|quit|switch|window|monitor|screen|type|press|click|minimi|maximi|snap|"
     r"app|chrome|discord|browser|desktop|what'?s on)\b", re.I)
 

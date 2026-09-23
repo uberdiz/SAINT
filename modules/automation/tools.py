@@ -243,11 +243,13 @@ class ToolRegistry:
                 return t
         return None
 
-    def execute(self, name: str, _confirmed: bool = False,
+    def execute(self, tool_name: str, /, _confirmed: bool = False,
                 _cancel_event: Optional[threading.Event] = None, **kwargs) -> ToolResult:
+        # tool_name is positional-only so tools may have a parameter called "name".
         from core.permissions import permission_manager
         from core.events import event_bus, EventType
 
+        name = tool_name
         tool = self.get(name)
         if not tool:
             return ToolResult(False, error=f"I don't have a tool called '{name}'.",
