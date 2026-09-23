@@ -277,6 +277,65 @@ class AIModule(BaseModule):
         try:
             kind = intent[0] if intent else None
 
+            # Personalized Spotify intelligence. These routes execute through
+            # the shared tool registry so actions are real and auditable.
+            if re.search(r"\b(recommend|recommendation|something (new|similar)|what should i listen to|give me something)\b", lower):
+                context = re.sub(r"^(.*?)(recommend|recommendation|something new|something similar|what should i listen to|give me something)\s*", "", text, flags=re.I).strip()
+                data, err = run("spotify.recommend", context=context or "", limit=5)
+                if err:
+                    return f"I couldn't generate a Spotify recommendation: {err}"
+                recs = (data or {}).get("recommendations", [])
+                if not recs:
+                    return "I don't have enough Spotify listening data yet to make a useful recommendation."
+                first = recs[0]
+                artists = ", ".join(first.get("artists", []))
+                return f"I'd try {first.get('name', 'this track')} by {artists}. It matches your recent listening and taste signals."
+
+            if re.search(r"\b(what have i been listening to|what have i listened to|listening to today|listening to lately|recently played)\b", lower):
+                data, err = run("spotify.recent", limit=20)
+                if err:
+                    return f"I couldn't check your Spotify listening history: {err}"
+                items = (data or {}).get("items", [])
+                if not items:
+                    return "I don't have recent Spotify listening history available."
+                lines = []
+                for entry in items[:5]:
+                    track = entry.get("track", {})
+                    artist = ", ".join(a.get("name", "") for a in track.get("artists", []))
+                    lines.append(f"{track.get('name', 'Unknown')} by {artist}")
+                return "Recently you've been listening to " + "; ".join(lines) + "."
+
+            if re.search(r"\b(i like this|i love this|more like this|i don't like this|dont recommend this|don't recommend this)\b", lower):
+                data, err = run("spotify.current")
+                if err:
+                    return f"I couldn't identify the current Spotify track: {err}"
+                item = (data or {}).get("item") if isinstance(data, dict) else None
+                if not item:
+                    return "I couldn't identify the current track."
+                signal = -1.0 if re.search(r"don't|dont|not", lower) else 1.0
+                _, err = run(
+                    "spotify.feedback",
+                    track_id=item.get("id", ""),
+                    track_name=item.get("name", ""),
+                    artist=((item.get("artists") or [{}])[0].get("name", "")),
+                    signal=signal,
+                    reason=text,
+                )
+                return "Got it — I'll adjust future recommendations." if not err else f"I couldn't save that preference: {err}"
+
+            if re.search(r"\b(my|the)\s+(gym|lifting|workout|driving|study|chill|night|usual)\s+(playlist|music)\b", lower):
+                match = re.search(r"\b(my|the)\s+(.+?)\s+(playlist|music)\b", lower)
+                alias = match.group(2).strip() if match else ""
+                data, err = run("spotify.resolve_playlist", name=alias)
+                if err:
+                    return f"I couldn't resolve that Spotify playlist: {err}"
+                if not data or not data.get("id"):
+                    return f"I couldn't find a playlist matching '{alias}'."
+                run("spotify.playlist_alias", alias=alias, playlist_id=data["id"], playlist_name=data["name"])
+                _, err = run("spotify.play", uri=data.get("uri"))
+                return f"Playing your {alias} playlist, {data.get('name')}." if not err else f"I found {data.get('name')}, but couldn't start it: {err}"
+
+
             if kind == "pause":
                 _, err = run("spotify.pause")
                 return "Okay, paused." if not err else err

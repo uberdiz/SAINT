@@ -1,4 +1,4 @@
-"""Spotify integration module."""
+"""Spotify integration module with playback, taste memory, and recommendations."""
 
 from modules.base import BaseModule
 from modules.spotify.auth import SpotifyAuth, DEFAULT_REDIRECT_URI
@@ -10,12 +10,15 @@ from core.events import event_bus, EventType
 
 class SpotifyModule(BaseModule):
     name = "Spotify"
-    description = "Spotify playback, search, queue, and playlist tools."
+    description = "Spotify playback, personalized memory, listening context, and recommendation tools."
 
     SCOPES = (
         "user-read-playback-state "
         "user-modify-playback-state "
         "user-read-currently-playing "
+        "user-read-recently-played "
+        "user-top-read "
+        "user-library-read "
         "playlist-read-private "
         "playlist-read-collaborative "
         "playlist-modify-public "
@@ -31,6 +34,10 @@ class SpotifyModule(BaseModule):
             "Playback": True,
             "Search": True,
             "Playlist Access": True,
+            "Listening History": True,
+            "Taste Memory": True,
+            "Recommendations": True,
+            "Playlist Aliases": True,
         }
         self.auth = SpotifyAuth()
         self.client = SpotifyClient(self.auth)
@@ -63,7 +70,5 @@ class SpotifyModule(BaseModule):
             "client_id_configured": bool(config.get("spotify.client_id", "")),
             "redirect_uri": config.get("spotify.redirect_uri", DEFAULT_REDIRECT_URI),
             "connected": self.is_connected(),
+            "memory_enabled": True,
         }
-
-
-spotify_module = SpotifyModule()

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
+from modules.automation.tasks import task_manager
 
 try:
     import pyautogui
@@ -299,8 +300,40 @@ def _register_default_tools(registry: ToolRegistry):
         except Exception as e:
             raise ToolError(f"Command failed: {e}")
 
+    # --- Background task tools ---
+    def start_background_task(description: str, command: str, cwd: Optional[str] = None, timeout: int = 300) -> dict:
+        task = task_manager.create_command_task(description, command, cwd=cwd, timeout=timeout)
+        return {"task_id": task.id, "status": task.status.value, "description": description}
+
+    def background_task_status(task_id: Optional[str] = None) -> dict:
+        return {"tasks": task_manager.status(task_id)}
+
+    def cancel_background_task(task_id: str) -> dict:
+        return {"task_id": task_id, "cancelled": task_manager.cancel(task_id)}
+
     # Register all tools
     tools = [
+        Tool(
+            name="start_background_task",
+            description="Start a cancellable background command without taking foreground keyboard or mouse focus",
+            arguments={"description": "string", "command": "string", "cwd": "string (optional)", "timeout": "int (optional, default: 300)"},
+            permission=PermissionLevel.HIGH,
+            execute_fn=start_background_task,
+        ),
+        Tool(
+            name="background_task_status",
+            description="Get the status of a background task or all background tasks",
+            arguments={"task_id": "string (optional)"},
+            permission=PermissionLevel.LOW,
+            execute_fn=background_task_status,
+        ),
+        Tool(
+            name="cancel_background_task",
+            description="Cancel a running background task",
+            arguments={"task_id": "string"},
+            permission=PermissionLevel.MEDIUM,
+            execute_fn=cancel_background_task,
+        ),
         Tool(
             name="mouse_move",
             description="Move mouse to coordinates",
