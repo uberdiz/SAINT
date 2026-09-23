@@ -37,6 +37,15 @@ def _split_words(text: str):
     return text.strip().split()
 
 
+# Shown when CUDA is present but has no compiled kernels for the installed GPU
+# architecture (e.g. Blackwell / sm_120 on a torch build that predates it).
+_CUDA_ARCH_HINT = (
+    "Your GPU architecture may be newer than the installed PyTorch supports; "
+    "for RTX 50-series (sm_120) use the CUDA 12.8+ wheels "
+    "(pip install --index-url https://download.pytorch.org/whl/cu128 torch)."
+)
+
+
 # ---------------------------------------------------------------------------
 # FlashAttention2 resolution
 # ---------------------------------------------------------------------------
@@ -131,11 +140,17 @@ class KokoroTTS(TTSEngine):
         self,
         voice: str = "af_heart",
         speed: float = 1.0,
-        device: str = "cuda",  # Ensure CUDA is available,
+        device: str = "cuda",           # "cuda" | "cuda:N" | "cpu" | "auto"
+        allow_cpu_fallback: bool = True,  # degrade to CPU if CUDA unusable
+        require_cuda: bool = False,      # hard-fail (with diagnosis) if no CUDA
     ):
         self._voice = voice
         self._speed = speed
-        self._device = device
+        self._device = device                    # requested device (from config)
+        self._allow_cpu_fallback = allow_cpu_fallback
+        self._require_cuda = require_cuda
+        self._resolved_device: Optional[str] = None  # actual device after _load()
+        self._device_resolution = None            # DeviceResolution from core.device
         self._pipeline = None
         self._interrupt_event = threading.Event()
         self._speaking = False
@@ -212,7 +227,23 @@ class KokoroTTS(TTSEngine):
             stream.close()
 
     def _load(self):
-        """Lazy-load the KPipeline (downloads model + voices on first call)."""
+        """Lazy-load the KPipeline (downloads model + voices on first call).
+
+        Device selection goes through core.device.resolve_torch_device — the
+        single, shared source of truth — so Kokoro no longer re-implements its
+        own ``torch.cuda.is_available()`` logic. Behaviour:
+
+          * CUDA available            -> run on CUDA.
+          * CUDA unavailable + fallback allowed
+                                       -> run on CPU (real Kokoro, not a mock),
+                                          logging the *actual* reason.
+          * CUDA required/unavailable -> raise a descriptive error that explains
+                                          the diagnosis and how to fix it.
+
+        The historical sm_120 "no kernel image" runtime failure (CUDA present
+        but no compiled kernels for the GPU arch) is still caught and degraded
+        to CPU when fallback is allowed.
+        """
         if self._pipeline is not None:
             return
         with self._load_lock:
@@ -225,31 +256,137 @@ class KokoroTTS(TTSEngine):
                 from kokoro import KPipeline
                 import os
                 import torch
+                import logging
+                from core.device import resolve_torch_device
+                from core.events import event_bus, EventType
+
+                logger = logging.getLogger("saint.tts")
+
                 # Set CPU threads based on available cores
                 num_threads = min(4, os.cpu_count() or 4)
                 torch.set_num_threads(num_threads)
-                
-                # Try CUDA first, fall back to CPU if cuDNN kernels not available
-                device = self._device
-                try:
-                    self._pipeline = KPipeline(
-                        lang_code="a",
-                        device=device,
+
+                # --- single, shared device resolution ---------------------
+                res = resolve_torch_device(
+                    self._device,
+                    allow_cpu_fallback=self._allow_cpu_fallback,
+                    require_cuda=self._require_cuda,
+                )
+                self._device_resolution = res
+
+                if not res.usable:
+                    # CUDA required (or fallback disabled) but unavailable.
+                    hint = f" {res.fix_hint}" if res.fix_hint else ""
+                    raise RuntimeError(f"{res.reason}.{hint}")
+
+                if res.fell_back:
+                    logger.warning(
+                        "Kokoro TTS: %s. Falling back to CPU (real TTS, reduced "
+                        "throughput).%s",
+                        res.reason,
+                        f" {res.fix_hint}" if res.fix_hint else "",
                     )
+                    event_bus.emit_event(EventType.TTS_FALLBACK, {
+                        "engine": "kokoro",
+                        "requested": res.requested,
+                        "device": res.device,
+                        "reason": res.reason,
+                    })
+                else:
+                    logger.info("Kokoro TTS: %s", res.reason)
+
+                device = res.device
+                try:
+                    self._pipeline = KPipeline(lang_code="a", device=device)
                 except RuntimeError as e:
-                    if "no kernel image is available" in str(e) and device == "cuda":
-                        import logging
-                        logging.warning(f"CUDA not fully supported on this GPU (sm_120), falling back to CPU for Kokoro TTS")
-                        device = "cpu"
-                        self._pipeline = KPipeline(
-                            lang_code="a",
-                            device=device,
+                    # CUDA present but no compiled kernels for this GPU arch
+                    # (e.g. sm_120 / Blackwell on an older torch build).
+                    if ("no kernel image is available" in str(e)
+                            and str(device).startswith("cuda")
+                            and self._allow_cpu_fallback):
+                        logger.warning(
+                            "Kokoro TTS: CUDA device present but no compiled "
+                            "kernels for this GPU (%s). Falling back to CPU. %s",
+                            e, _CUDA_ARCH_HINT,
                         )
+                        device = "cpu"
+                        self._pipeline = KPipeline(lang_code="a", device=device)
+                        event_bus.emit_event(EventType.TTS_FALLBACK, {
+                            "engine": "kokoro",
+                            "requested": res.requested,
+                            "device": "cpu",
+                            "reason": f"no compiled CUDA kernels for GPU: {e}",
+                        })
                     else:
                         raise
+
+                # Enable a phoneme fallback for out-of-dictionary words.
+                # Without it, misaki returns None phonemes for OOV words (e.g.
+                # "Lua", "Kokoro") and Kokoro crashes with
+                # "unsupported operand type(s) for +: 'NoneType' and 'str'",
+                # silently dropping the whole sentence.
+                self._enable_g2p_fallback(logger)
+
+                self._resolved_device = device
+                logger.info("Kokoro TTS pipeline ready on device=%s", device)
+                event_bus.emit_event(EventType.TTS_DEVICE_INFO, {
+                    "engine": "kokoro",
+                    "requested_device": res.requested,
+                    "resolved_device": device,
+                    "cuda_available": res.cuda_available,
+                    "fell_back": res.fell_back or device != res.device,
+                })
             except Exception as e:
                 self._load_error = RuntimeError(f"Could not load Kokoro TTS pipeline: {e}")
                 raise self._load_error from e
+
+    def _enable_g2p_fallback(self, logger):
+        """Give misaki an espeak-ng phoneme fallback for OOV words.
+
+        Uses the bundled ``espeakng_loader`` package (no system install needed).
+        If anything is missing we log a clear warning — SAINT still runs, but
+        out-of-dictionary words may fail — rather than crashing at load time.
+        """
+        if getattr(self, "_g2p_fallback_ready", False):
+            return
+        try:
+            g2p = getattr(self._pipeline, "g2p", None)
+            if g2p is None or not hasattr(g2p, "fallback"):
+                return
+            if getattr(g2p, "fallback", None) is not None:
+                self._g2p_fallback_ready = True
+                return
+            import espeakng_loader
+            from phonemizer.backend.espeak.wrapper import EspeakWrapper
+            EspeakWrapper.set_library(espeakng_loader.get_library_path())
+            try:
+                EspeakWrapper.set_data_path(espeakng_loader.get_data_path())
+            except Exception:
+                pass
+            from misaki import espeak as _misaki_espeak
+            g2p.fallback = _misaki_espeak.EspeakFallback(british=False)
+            self._g2p_fallback_ready = True
+            logger.info("Kokoro TTS: espeak G2P fallback enabled for OOV words")
+        except Exception as e:
+            logger.warning(
+                "Kokoro TTS: could not enable espeak G2P fallback (%s). "
+                "Out-of-dictionary words may fail to synthesize; install "
+                "'espeakng_loader' to fix.", e,
+            )
+
+    @property
+    def device_info(self) -> dict:
+        """Resolved device diagnostics for UI/logging."""
+        res = self._device_resolution
+        return {
+            "requested_device": self._device,
+            "resolved_device": self._resolved_device,
+            "cuda_available": bool(getattr(res, "cuda_available", False)),
+            "fell_back": bool(getattr(res, "fell_back", False))
+            or (self._resolved_device is not None
+                and self._resolved_device != getattr(res, "device", self._resolved_device)),
+            "reason": getattr(res, "reason", ""),
+        }
 
     def warm_up(self):
         """Pre-warm CUDA kernels with a short generation (no playback)."""
@@ -258,7 +395,7 @@ class KokoroTTS(TTSEngine):
             import torch
             for _, _, audio in self._pipeline("Warming up.", voice=self._voice, speed=self._speed):
                 pass
-            if self._device == "cuda":
+            if str(self._resolved_device or "").startswith("cuda"):
                 torch.cuda.synchronize()
         except Exception:
             pass
@@ -293,6 +430,7 @@ class KokoroTTS(TTSEngine):
             "word_count": len(text.split()),
         })
 
+        error: Optional[Exception] = None
         try:
             # Single pipeline call for the full text — the generator yields
             # sentence-level Result objects with pre-synthesised audio.
@@ -344,23 +482,40 @@ class KokoroTTS(TTSEngine):
                 # Reset inference timer for next chunk
                 t_infer_start = time.perf_counter()
                 
-            # Block until THIS sentence is fully written to the stream
-            # We don't want to return immediately, otherwise ConversationController
-            # state updates (like TTS_SPEAK_DONE) happen too early.
-            # But wait: if we block here until it's finished playing, we lose the 
-            # ability to start inference for the NEXT sentence!
-            # So we DO return immediately after inference!
+            # We return immediately after inference so the next sentence can
+            # start generating while this one plays from the queue.
+        except Exception as e:
+            # A synthesis failure (e.g. a phonemization error on an OOV word)
+            # must be reported as an error and MUST NOT be logged as
+            # tts.speak.done, or the caller will think the sentence was spoken.
+            error = e
+            logging.error(f"tts.speak.error turn_id={turn_id}: {e}")
+            event_bus.emit_event(EventType.TTS_SPEAK_ERROR, {
+                "error": str(e),
+                "turn_id": turn_id,
+                "text_preview": text[:100],
+            })
+            event_bus.emit_event(EventType.TTS_ERROR, {
+                "error": str(e),
+                "turn_id": turn_id,
+                "phase": "synthesis",
+            })
         finally:
             with self._lock:
                 self._speaking = False
 
             t_total_end = time.perf_counter()
             logging.info(f"tts.timing total {(t_total_end - t_start) * 1000:.1f}ms")
-            # We delay TTS_SPEAK_DONE to when the queue is empty? 
-            # No, ConversationController needs this to proceed to the next sentence.
-            event_bus.emit_event(EventType.TTS_SPEAK_DONE, {
-                "text": text,
-            })
+            # Only a genuinely completed (or cleanly interrupted) synthesis
+            # counts as "done". A failed one already emitted tts.speak.error.
+            if error is None:
+                event_bus.emit_event(EventType.TTS_SPEAK_DONE, {
+                    "text": text,
+                })
+
+        # True on success/clean-interrupt, False on synthesis error, so the
+        # caller (TTS worker) can retry or report a lost sentence.
+        return error is None
 
     def interrupt(self, turn_id: int = None):
         with self._lock:
@@ -408,12 +563,18 @@ class QwenTTS(TTSEngine):
         instruct: Optional[str] = None,  # for CustomVoice/VoiceDesign: style instruction
         speed: float = 1.0,
         flash_attention: str = "Auto",  # "Auto" | "Enabled" | "Disabled"
+        allow_cpu_fallback: bool = True,  # degrade to CPU if CUDA unusable
+        require_cuda: bool = False,      # hard-fail (with diagnosis) if no CUDA
     ):
         self._model_name = model_name
         self._model_type = model_type
         self._speaker = speaker
         self._language = language
         self._device = device
+        self._allow_cpu_fallback = allow_cpu_fallback
+        self._require_cuda = require_cuda
+        self._resolved_device: Optional[str] = None
+        self._device_resolution = None
         self._dtype = dtype
         self._voice_clone_audio = voice_clone_audio
         self._voice_clone_text = voice_clone_text
@@ -467,19 +628,36 @@ class QwenTTS(TTSEngine):
                 }
                 torch_dtype = dtype_map.get(self._dtype, torch.bfloat16)
 
-                # Device validation: if CUDA was requested but is unavailable
-                # (e.g. CPU-only torch build), fall back to CPU instead of
-                # hard-crashing. FlashAttention2 is never *required*.
-                device = self._device
-                device_is_cuda = str(device).lower().startswith("cuda")
-                if device_is_cuda and not torch.cuda.is_available():
-                    import logging
+                # Device validation via the shared resolver (single source of
+                # truth). If CUDA was requested but is unavailable (e.g. CPU-only
+                # torch build), fall back to CPU with the actual reason logged
+                # instead of hard-crashing. FlashAttention2 is never *required*.
+                from core.device import resolve_torch_device
+                from core.events import event_bus, EventType
+
+                res = resolve_torch_device(
+                    self._device,
+                    allow_cpu_fallback=self._allow_cpu_fallback,
+                    require_cuda=self._require_cuda,
+                )
+                self._device_resolution = res
+                if not res.usable:
+                    hint = f" {res.fix_hint}" if res.fix_hint else ""
+                    raise RuntimeError(f"{res.reason}.{hint}")
+                if res.fell_back:
                     logging.warning(
-                        f"QwenTTS: CUDA requested (device={device}) but torch.cuda is not "
-                        "available. Falling back to CPU for Qwen inference."
+                        "QwenTTS: %s. Falling back to CPU for Qwen inference.%s",
+                        res.reason, f" {res.fix_hint}" if res.fix_hint else "",
                     )
-                    device = "cpu"
-                    device_is_cuda = False
+                    event_bus.emit_event(EventType.TTS_FALLBACK, {
+                        "engine": "qwen",
+                        "requested": res.requested,
+                        "device": res.device,
+                        "reason": res.reason,
+                    })
+                device = res.device
+                self._resolved_device = device
+                device_is_cuda = str(device).lower().startswith("cuda")
 
                 # Resolve the attention backend. Defaults to SDPA (standard
                 # PyTorch/TorchSDPA) unless flash_attn is installed and enabled.
@@ -552,6 +730,18 @@ class QwenTTS(TTSEngine):
                     f"Could not load Qwen TTS model: {e}"
                 )
                 raise self._load_error from e
+
+    @property
+    def device_info(self) -> dict:
+        """Resolved device diagnostics for UI/logging."""
+        res = self._device_resolution
+        return {
+            "requested_device": self._device,
+            "resolved_device": self._resolved_device,
+            "cuda_available": bool(getattr(res, "cuda_available", False)),
+            "fell_back": bool(getattr(res, "fell_back", False)),
+            "reason": getattr(res, "reason", ""),
+        }
 
     def warm_up(self):
         self._load()

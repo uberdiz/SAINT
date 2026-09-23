@@ -100,7 +100,13 @@ class SpotifyAuth:
         if response.status_code >= 400:
             self.clear()
             raise RuntimeError(f"Spotify token refresh failed ({response.status_code})")
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as e:
+            # Never let an empty/non-JSON refresh body surface as a raw
+            # "Expecting value" JSONDecodeError to the tool/AI layer.
+            self.clear()
+            raise RuntimeError("Spotify token refresh returned an invalid response.") from e
         self._token = SpotifyToken(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token", self._token.refresh_token),

@@ -18,6 +18,7 @@ The ConversationController (core/conversation.py) wires everything together.
 """
 
 import queue
+import re
 import threading
 import time
 import logging
@@ -28,6 +29,7 @@ import numpy as np
 from modules.base import BaseModule
 from modules.voice.vad import make_vad, RmsVAD
 from modules.voice.stt import make_stt, STTEngine, MockSTT
+from modules.voice.wake_word import make_wake_word_detector, OpenWakeWordDetector
 from modules.voice.voice_state import get_voice_state, VoiceState
 from core.events import event_bus, EventType
 from core.config import config
@@ -89,6 +91,15 @@ class VoiceModule(BaseModule):
         self._stream = None
         self._vad: Optional[RmsVAD] = None
         self._stt: Optional[STTEngine] = None
+        self._wake: Optional[OpenWakeWordDetector] = None
+
+        # Wake-word "wake window": a detection opens a timed window during which
+        # the STT activation gate is bypassed (explicit "Hey SAINT, ..."). The
+        # always-on path is unaffected — commands still work without the wake
+        # word, they just go through the normal confidence gate.
+        self._wake_until: float = 0.0
+        self._wake_window_sec: float = 8.0
+        self._wake_lock = threading.Lock()
 
         # Worker threads
         self._capture_thread: Optional[threading.Thread] = None
@@ -156,6 +167,8 @@ class VoiceModule(BaseModule):
             "tts_device": self._tts_device_info,
             "active_workers": list(self._active_workers.values()),
             "speech_session_id": self._speech_session_id,
+            "wake_ready": bool(self._wake and self._wake.ready),
+            "wake_active": self._in_wake_window(),
         }
 
     # ------------------------------------------------------------------ #
@@ -213,6 +226,15 @@ class VoiceModule(BaseModule):
         else:
             self._stt = make_stt("mock")
             self._stt_device_info = "mock"
+
+        # Wake word (openWakeWord) — optional, gated by voice.wake_word_enabled.
+        self._wake_window_sec = config.get("voice.wake_word_window_sec", 8.0)
+        try:
+            self._wake = make_wake_word_detector()
+        except Exception as e:
+            logging.getLogger("saint.voice").warning(f"wake.init_failed: {e}")
+            self._wake = None
+        self.subtasks["Wake Word Detection"] = bool(self._wake and self._wake.ready)
 
     def _warmup_stt(self):
         try:
@@ -387,6 +409,15 @@ class VoiceModule(BaseModule):
                 x_new = np.linspace(0, 1, target_len)
                 chunk_np = np.interp(x_new, x_old, chunk_np).astype(np.float32)
                 chunk = (chunk_np * 32768.0).astype(np.int16)
+
+            # Wake-word detection runs on every frame, in parallel with VAD/STT.
+            # A hit opens the wake window (gate bypass) but does NOT stop normal
+            # capture — so "Hey SAINT, skip this song" and a bare "skip this
+            # song" both flow through to STT.
+            if self._wake is not None and self._wake.ready:
+                score = self._wake.feed(chunk)
+                if score is not None:
+                    self._on_wake_word(score)
 
             if mode == "push_to_talk":
                 is_active = self._ptt_held
@@ -673,6 +704,12 @@ class VoiceModule(BaseModule):
         result_text = getattr(result, "text", "") or ""
         result_confidence = getattr(result, "confidence", 0.0) or 0.0
 
+        # Strip a captured "Hey SAINT" prefix so only the command reaches the AI.
+        # A bare wake word strips to empty and is dropped by the empty check
+        # below (its job — opening the wake window — is already done).
+        if self._wake is not None and self._wake.ready:
+            result_text = self._strip_wake_prefix(result_text)
+
         self._emit_stt_result(session_id, result_text, result_confidence, inference_ms, total_ms)
 
         event_bus.emit_event(EventType.VOICE_SPEECH_END, {
@@ -694,6 +731,25 @@ class VoiceModule(BaseModule):
                 "session_id": session_id,
                 "reason": "punctuation_only",
                 "text": stripped,
+            })
+            with self._stt_session_state_lock:
+                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
+            return
+
+        # Activation gate: reject likely false triggers (noise, TV, other
+        # assistants' wake words, low-confidence hallucinations) before this
+        # becomes a user turn.
+        gate_ok, gate_reason = self._passes_activation_gate(result_text, result_confidence)
+        if not gate_ok:
+            logging.getLogger("saint.voice").info(
+                f"voice.activation.rejected session_id={session_id} "
+                f"reason={gate_reason} conf={result_confidence:.2f} text={result_text!r}"
+            )
+            event_bus.emit_event(EventType.VOICE_STT_SKIP, {
+                "session_id": session_id,
+                "reason": f"activation_gate:{gate_reason}",
+                "text": result_text,
+                "confidence": round(result_confidence, 3),
             })
             with self._stt_session_state_lock:
                 self._stt_session_state[session_id] = STT_STATE_SUBMITTED
@@ -723,6 +779,92 @@ class VoiceModule(BaseModule):
 
         with self._stt_session_state_lock:
             self._stt_session_state[session_id] = STT_STATE_COMPLETED
+
+    # ------------------------------------------------------------------ #
+    # Wake word
+    # ------------------------------------------------------------------ #
+    def _on_wake_word(self, score: float):
+        """Handle a wake-word detection: open the wake window and announce it."""
+        now = time.perf_counter()
+        with self._wake_lock:
+            self._wake_until = now + self._wake_window_sec
+        logging.getLogger("saint.voice").info(
+            f"voice.wake_word.detected score={score:.3f} "
+            f"window_sec={self._wake_window_sec}"
+        )
+        event_bus.emit_event(EventType.VOICE_WAKE_WORD, {
+            "keyword": config.get("voice.wake_word", "saint"),
+            "score": round(float(score), 3),
+            "window_sec": self._wake_window_sec,
+        })
+        event_bus.emit_event(EventType.LATENCY_WAKE_WORD, {"ms": 0.0})
+
+    def _in_wake_window(self) -> bool:
+        """True if a wake-word detection recently opened the bypass window."""
+        with self._wake_lock:
+            return time.perf_counter() < self._wake_until
+
+    def _strip_wake_prefix(self, text: str) -> str:
+        """Remove a leading 'saint' / 'hey saint' from a transcript.
+
+        The wake word is captured by the always-on mic as part of the same
+        utterance ("Hey SAINT, skip this song"), so strip it before the command
+        reaches the AI. A bare wake word strips to empty and is dropped upstream.
+        """
+        if not text:
+            return text
+        stripped = re.sub(
+            r"^\s*(hey\s+|ok(ay)?\s+|hi\s+)?saints?\b[\s,.:;!?-]*",
+            "",
+            text,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if stripped == text:
+            return text          # no wake prefix present — leave untouched
+        return stripped.strip()  # matched: remainder (or "" for a bare wake word)
+
+    def _passes_activation_gate(self, text: str, confidence: float):
+        """Multi-signal gate that rejects likely false activations before a
+        transcript becomes a user turn. Returns (ok, reason).
+
+        Signals combined: Whisper confidence, transcript length, foreign
+        assistant wake words, and common near-silence hallucinations. This is
+        deliberately NOT a single high threshold (which would reject quiet but
+        legitimate commands) — it's configurable via voice.min_stt_confidence.
+        """
+        # Explicit wake word bypasses the confidence gate for a short window —
+        # the user asked for SAINT by name, so honour even a quiet command.
+        if self._in_wake_window():
+            return True, "wake_window"
+
+        min_conf = config.get("voice.min_stt_confidence", 0.5)
+        short_conf = config.get("voice.short_utterance_confidence", 0.7)
+        stripped = (text or "").strip()
+        lower = stripped.lower()
+        words = stripped.split()
+
+        # Other assistants' wake words are almost always a misfire/background TV.
+        if re.search(r"\b(alexa|hey google|ok(ay)? google|siri|hey siri|cortana)\b", lower):
+            return False, "foreign_wake_word"
+
+        # Common Whisper hallucinations on near-silence.
+        hallucinations = {
+            "you", "thank you", "thanks for watching", "bye", "okay", "ok",
+            "yeah", "so", "uh", "um", "hmm", "the",
+        }
+        if lower.strip(".!?, ") in hallucinations and confidence < short_conf:
+            return False, "likely_hallucination"
+
+        # Single-word utterances need higher confidence to be trusted.
+        if len(words) <= 1 and confidence < short_conf:
+            return False, "short_low_confidence"
+
+        # Baseline confidence gate.
+        if confidence > 0 and confidence < min_conf:
+            return False, f"low_confidence_{confidence:.2f}"
+
+        return True, ""
 
     def _is_punctuation_only(self, text: str) -> bool:
         """Check if text consists only of punctuation and whitespace."""

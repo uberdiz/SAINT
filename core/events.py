@@ -45,6 +45,7 @@ class EventType:
     TTS_SPEAK_CHUNK="tts.speak.chunk"; TTS_SPEAK_DONE="tts.speak.done"; TTS_INTERRUPTED="tts.interrupted"; TTS_ERROR="tts.error"
     TTS_REQUEST="tts.request"; TTS_GENERATION_START="tts.generation.start"; TTS_GENERATION_END="tts.generation.end"
     TTS_STATE_CHANGE="tts.state.change"; TTS_WARMUP_COMPLETE="tts.warmup.complete"; TTS_SKIPPED="tts.skipped"; TTS_DUPLICATE="tts.duplicate"
+    TTS_DEVICE_INFO="tts.device.info"; TTS_FALLBACK="tts.fallback"; TTS_SPEAK_ERROR="tts.speak.error"
     VOICE_INTERRUPT="voice.interrupt"; CONVERSATION_TURN_START="conversation.turn.start"; CONVERSATION_TURN_END="conversation.turn.end"
     CONVERSATION_INTERRUPTED="conversation.interrupted"
     CHAT_MESSAGE_START="chat.message.start"; CHAT_MESSAGE_UPDATE="chat.message.update"; CHAT_MESSAGE_FINAL="chat.message.final"; UI_CHAT_RENDER="ui.chat.render"

@@ -49,6 +49,7 @@ class ToolResult:
     success: bool
     result: Any = None
     error: Optional[str] = None
+    error_code: Optional[str] = None  # machine-readable code, e.g. NO_ACTIVE_DEVICE
 
 
 class ToolRegistry:

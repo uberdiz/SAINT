@@ -197,16 +197,10 @@ class ConversationController:
             self._voice.set_saint_speaking(False)
             return
 
-        # While SAINT is actively playing audio, suppress all STT input.
-        # The microphone picks up SAINT's own voice — any STT result during
-        # playback is either SAINT's echo or noise, never a genuine command
-        # the user didn't already say. Users can interrupt via the button or "stop".
-        if state == ConvState.SPEAKING:
-            import logging
-            logging.getLogger("saint.conversation").info(f"voice.suppressed: '{text}' during speaking")
-            event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Suppressed during playback"})
-            return
-
+        # Never blanket-suppress STT while TTS is playing.
+        # The microphone can hear SAINT, but a real user utterance must still
+        # be able to interrupt playback. Echo suppression is handled below;
+        # genuine speech reaches the interruption path.
         if state in (ConvState.THINKING, ConvState.SPEAKING) or tts_recent:
             # During/after TTS: stricter validation — low-confidence results likely echo
             is_during_tts = state in (ConvState.THINKING, ConvState.SPEAKING)
@@ -236,10 +230,12 @@ class ConversationController:
             # Word-overlap echo detection for near-echoes and fragments
             if t_clean and ai_clean:
                 overlap = self._word_overlap(t_clean, ai_clean)
-                if overlap > 0.25:
+                # Require stronger overlap for an interruption candidate. A
+                # normal user sentence often shares common words with SAINT.
+                if overlap > 0.60 and confidence < 0.55:
                     import logging
                     logging.getLogger("saint.conversation").info(f"voice.echo.suppressed: ignored '{text}' word overlap {overlap:.1%}")
-                    event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Echo suppressed (word overlap)"})
+                    event_bus.emit_event(EventType.VOICE_STT_DEBUG, {"trace": "Echo suppressed (strong word overlap)"})
                     return
 
         if state in (ConvState.THINKING, ConvState.SPEAKING):
@@ -419,9 +415,12 @@ class ConversationController:
                     "delta_length": len(token),
                 })
 
-                # Start TTS as soon as we have the first complete sentence
+                # Start TTS as soon as we have the first complete sentence.
+                # Break on sentence-enders (.!?) or a length cap — NOT on commas,
+                # so we don't emit tiny unnatural fragments like "Sure," as their
+                # own TTS chunk.
                 if not tts_started.is_set():
-                    if any(c in combined for c in ".!?,;") or len(combined) > 60:
+                    if any(c in combined for c in ".!?") or len(combined) > 60:
                         tts_start_time[0] = time.perf_counter()
                         tts_started.set()
                         self._speak_chunk(combined, stream_id, turn_id)
@@ -444,6 +443,11 @@ class ConversationController:
                 event_bus.emit_event(EventType.AI_ERROR, {"error": str(e)})
                 self._set_state(ConvState.IDLE)
                 self._voice.set_saint_speaking(False)
+                return
+
+            # A cancelled generation must never publish or speak its
+            # partial response after a newer user turn has taken over.
+            if self._get_state() == ConvState.INTERRUPTED or self._active_turn_id != turn_id:
                 return
 
             event_bus.emit_event(EventType.AI_STREAM_END, {
@@ -575,8 +579,23 @@ class ConversationController:
                     event_bus.emit_event(EventType.LATENCY_TTS_INFERENCE, {"ms": round(tts_gen_ms, 1)})
 
                 try:
+                    import logging
                     self._voice.set_tts_playback_active(True)
-                    self._tts.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
+                    ok = self._tts.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
+                    # One controlled retry for a failed (not interrupted)
+                    # synthesis so a sentence is never silently dropped.
+                    if ok is False and self._get_state() != ConvState.INTERRUPTED \
+                            and not self._tts_stop_event.is_set():
+                        logging.getLogger("saint.conversation").warning(
+                            f"tts.retry turn_id={turn_id} stream_id={stream_id} "
+                            f"— resynthesizing failed chunk"
+                        )
+                        ok = self._tts.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
+                    if ok is False:
+                        logging.getLogger("saint.conversation").error(
+                            f"tts.chunk.failed turn_id={turn_id} stream_id={stream_id} "
+                            f"text_preview={text[:60]!r}"
+                        )
                 except Exception as e:
                     event_bus.emit_event(EventType.TTS_ERROR, {"error": str(e), "turn_id": turn_id})
                 finally:

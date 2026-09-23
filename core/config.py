@@ -56,6 +56,13 @@ DEFAULT_CONFIG = {
         "min_speech_duration_ms": 300,  # minimum speech duration before STT
         "min_speech_rms": 0.005,        # minimum RMS energy for valid speech
 
+        # Activation gating on the STT transcript (rejects noise/false triggers
+        # like a low-confidence "Alexa skip."). Tuned from observed false
+        # activations (~0.29–0.48). Lower this if legitimate commands are
+        # being rejected.
+        "min_stt_confidence": 0.5,      # minimum Whisper confidence to act on
+        "short_utterance_confidence": 0.7,  # stricter bar for 1-word utterances
+
         # STT
         "stt_backend": "faster_whisper",  # "faster_whisper" | "mock"
         "stt_model": "base.en",           # tiny.en / base.en / small.en / medium.en
@@ -67,7 +74,15 @@ DEFAULT_CONFIG = {
         "tts_backend": "kokoro",          # "kokoro" | "qwen" | "mock"
         "tts_model_dir": "data/tts",      # where Kokoro .onnx + voices .bin live
         "tts_voice": "af_heart",          # kokoro voice name
-        "tts_device": "cuda",             # "cuda" | "cpu"
+        "tts_device": "cuda",             # "cuda" | "cpu" | "auto"
+        # If CUDA is requested but unavailable/unusable, degrade to a real CPU
+        # pipeline (reduced throughput) instead of failing. Set False to keep
+        # SAINT strict about the requested device.
+        "tts_allow_cpu_fallback": True,
+        # If True, CUDA is mandatory: an unsatisfiable CUDA request fails with a
+        # diagnostic instead of falling back. Takes precedence over the flag
+        # above. Leave False for portable setups.
+        "tts_require_cuda": False,
         "tts_speed": 1.0,
 
         # Qwen TTS specific
@@ -82,10 +97,22 @@ DEFAULT_CONFIG = {
         "tts_qwen_instruct": "",             # CustomVoice/VoiceDesign: style instruction
         "tts_qwen_flash_attention": "Auto",  # "Auto" | "Enabled" | "Disabled" — FlashAttention2 is optional
 
-        # Wake word (optional, disabled by default)
+        # Wake word (optional, disabled by default). Backend: openWakeWord.
+        # The wake word does NOT gate the mic — always-on STT keeps running so
+        # commands like "skip this song" still work. A detection opens a short
+        # window (wake_word_window_sec) during which the STT activation gate is
+        # bypassed, so "Hey SAINT, ..." is always acted on.
         "wake_word_enabled": False,
-        "wake_word": "saint",
-        "wake_word_sensitivity": 0.5,
+        "wake_word": "saint",               # "saint" / "hey saint" (needs custom model)
+        "wake_word_sensitivity": 0.5,       # openWakeWord score threshold 0.0-1.0
+        # Path to a custom-trained openWakeWord .onnx model for "Hey SAINT".
+        # openWakeWord has no pretrained "saint" model — train one (see
+        # https://github.com/dscripka/openWakeWord) and point here. Empty =
+        # detector loads disabled until a model is supplied.
+        "wake_word_model_path": "data/wake/hey_saint.onnx",
+        "wake_word_inference_framework": "onnx",  # "onnx" | "tflite"
+        "wake_word_window_sec": 8.0,        # how long a detection bypasses the gate
+        "wake_word_refractory_sec": 2.0,    # min gap between detections (debounce)
 
         # Conversation
         "max_context_turns": 6,           # how many Q&A pairs to keep in context

@@ -17,20 +17,24 @@ Boot order matters:
 import sys
 import os
 
-# Set Qt DPI awareness before creating QApplication to avoid warnings
-# This must be done before QApplication instantiation
+# High-DPI configuration.
+#
+# Qt 6 already makes the process per-monitor DPI aware (V2) by default when the
+# QGuiApplication is constructed. We must NOT also call
+# ctypes.windll.shcore.SetProcessDpiAwareness() here: Windows only allows a
+# process's DPI awareness to be set once, so setting it manually before Qt
+# starts causes Qt's own (newer, better) SetProcessDpiAwarenessContext() call to
+# fail with "Access is denied" — the warning we were seeing. Letting Qt own DPI
+# awareness both removes the warning and keeps the superior V2 behaviour.
+#
+# The only thing worth setting explicitly is the rounding policy, which must be
+# configured before the QApplication is instantiated.
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QGuiApplication
-    # Enable high DPI scaling
-    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    # Set DPI awareness on Windows
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-        except Exception:
-            pass
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
 except Exception:
     pass
 

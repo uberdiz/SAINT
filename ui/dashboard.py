@@ -184,12 +184,16 @@ class Dashboard(QWidget):
                 "instruct": config.get("voice.tts_qwen_instruct", "") or None,
                 "speed": config.get("voice.tts_speed", 1.0),
                 "flash_attention": config.get("voice.tts_qwen_flash_attention", "Auto"),
+                "allow_cpu_fallback": config.get("voice.tts_allow_cpu_fallback", True),
+                "require_cuda": config.get("voice.tts_require_cuda", False),
             }
         elif tts_backend == "kokoro":
             tts_config = {
                 "voice": config.get("voice.tts_voice", "af_heart"),
                 "device": config.get("voice.tts_device", "cuda"),
                 "speed": config.get("voice.tts_speed", 1.0),
+                "allow_cpu_fallback": config.get("voice.tts_allow_cpu_fallback", True),
+                "require_cuda": config.get("voice.tts_require_cuda", False),
             }
 
         # Initialize TTS service in background

@@ -38,11 +38,18 @@ class TTSState(Enum):
     UNINITIALIZED = auto()
     LOADING = auto()
     READY = auto()
+    # Operational, but running on a degraded/fallback device (e.g. CPU because
+    # CUDA was unavailable). Real TTS still works; UI can surface the reason.
+    FALLBACK = auto()
     SYNTHESIZING = auto()
     PLAYING = auto()
     STOPPING = auto()
     ERROR = auto()
     SHUTDOWN = auto()
+
+
+# States in which the service can accept and fulfil synthesis requests.
+_OPERATIONAL_STATES = (TTSState.READY, TTSState.FALLBACK)
 
 
 @dataclass
@@ -229,6 +236,10 @@ class TTSService:
         self._load_error: Optional[Exception] = None
         self._warmup_done = False
 
+        # Device / fallback tracking
+        self._is_fallback = False
+        self._device_info: Dict[str, Any] = {}
+
         # Background initialization
         self._init_thread: Optional[threading.Thread] = None
 
@@ -251,7 +262,11 @@ class TTSService:
 
     @property
     def is_ready(self) -> bool:
-        return self.state == TTSState.READY
+        return self.state in _OPERATIONAL_STATES
+
+    def _base_ready_state(self) -> TTSState:
+        """The idle state to return to: FALLBACK if degraded, else READY."""
+        return TTSState.FALLBACK if self._is_fallback else TTSState.READY
 
     def is_speaking(self) -> bool:
         with self._speaking_lock:
@@ -272,6 +287,8 @@ class TTSService:
             "avg_rtf": round(self._total_synthesis_time / max(self._total_audio_generated, 0.001), 3) if self._total_audio_generated > 0 else 0,
             "load_error": str(self._load_error) if self._load_error else None,
             "warmup_done": self._warmup_done,
+            "is_fallback": self._is_fallback,
+            "device": self._device_info,
         }
 
     # ------------------------------------------------------------------ #
@@ -325,6 +342,15 @@ class TTSService:
 
             logger.info(f"Initializing TTS backend: {backend}")
 
+            # For torch-backed backends, log the CUDA/torch diagnostics up front
+            # so device problems are visible before the (possibly slow) load.
+            if backend in ("kokoro", "qwen"):
+                try:
+                    from core.device import log_diagnostics
+                    log_diagnostics(logger)
+                except Exception as diag_exc:  # never block init on diagnostics
+                    logger.debug(f"device diagnostics unavailable: {diag_exc}")
+
             if backend == "qwen":
                 from modules.voice.tts import QwenTTS
                 self._engine = QwenTTS(**kwargs)
@@ -343,12 +369,38 @@ class TTSService:
                 self._engine._load()
 
             self._load_error = None
-            self._set_state(TTSState.READY)
+
+            # Capture resolved device info and decide READY vs FALLBACK.
+            self._device_info = {}
+            self._is_fallback = False
+            if hasattr(self._engine, "device_info"):
+                try:
+                    self._device_info = self._engine.device_info
+                    self._is_fallback = bool(self._device_info.get("fell_back"))
+                except Exception:
+                    self._device_info = {}
+
+            ready_state = TTSState.FALLBACK if self._is_fallback else TTSState.READY
+            self._set_state(ready_state)
+
+            if self._is_fallback:
+                logger.warning(
+                    "TTS service ready on FALLBACK device: %s",
+                    self._device_info,
+                )
+                event_bus.emit_event(EventType.TTS_DEVICE_INFO, {
+                    "engine": self._engine_type,
+                    "state": ready_state.name,
+                    **self._device_info,
+                })
 
             # Perform warmup
             self._do_warmup()
 
-            logger.info(f"TTS service ready: {self._engine_type}")
+            logger.info(
+                f"TTS service ready: {self._engine_type} "
+                f"(state={ready_state.name}, device={self._device_info.get('resolved_device')})"
+            )
             return True
 
         except Exception as e:
@@ -458,7 +510,7 @@ class TTSService:
                     return False
             # Re-check state after waiting
             state = self.state
-            if state != TTSState.READY:
+            if state not in _OPERATIONAL_STATES:
                 logger.warning(f"TTS not ready after loading (state={state.name})")
                 return False
             logger.info(f"TTS ready after {time.perf_counter() - wait_start:.1f}s wait")
@@ -549,10 +601,10 @@ class TTSService:
                 estimated_audio = len(text.split()) * 0.3  # ~300ms per word avg
                 self._total_audio_generated += estimated_audio
 
-            # Return to ready state
+            # Return to base ready state (READY, or FALLBACK if degraded)
             with self._state_lock:
                 if self._state not in (TTSState.SHUTDOWN, TTSState.ERROR):
-                    self._set_state(TTSState.READY)
+                    self._set_state(self._base_ready_state())
 
             return not was_interrupted
 
@@ -566,7 +618,7 @@ class TTSService:
             # Don't set to ERROR state for synthesis failures, just log
             with self._state_lock:
                 if self._state not in (TTSState.SHUTDOWN, TTSState.ERROR):
-                    self._set_state(TTSState.READY)
+                    self._set_state(self._base_ready_state())
             return False
 
         finally:
@@ -612,7 +664,7 @@ class TTSService:
 
         with self._state_lock:
             if self._state not in (TTSState.SHUTDOWN, TTSState.ERROR):
-                self._set_state(TTSState.READY)
+                self._set_state(self._base_ready_state())
 
     def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         """
@@ -630,6 +682,58 @@ class TTSService:
             turn_id=turn_id,
             on_chunk_start=on_chunk_start,
         )
+
+    def reinitialize(self, blocking: bool = False, **overrides) -> bool:
+        """Controlled retry/recovery of TTS initialization.
+
+        Unlike a tight retry loop, this performs a clean, one-shot re-init:
+
+          1. stop and release the previous (failed/degraded) engine
+          2. reset error/warmup/fallback tracking
+          3. re-detect the device and recreate the engine (via _do_initialize)
+          4. update the TTS state (READY / FALLBACK / ERROR)
+
+        Args:
+            blocking: wait for re-init to finish before returning.
+            **overrides: config overrides merged into the stored backend config
+                (e.g. device="cpu" to force a device on retry).
+
+        Returns True if re-initialization was started (or, when blocking,
+        completed successfully).
+        """
+        if not hasattr(self, "_backend_config"):
+            logger.warning("reinitialize() called before initialize(); ignoring")
+            return False
+
+        logger.info("Reinitializing TTS service (controlled retry)")
+
+        # 1. stop + release the previous engine
+        try:
+            self.interrupt()
+        except Exception:
+            pass
+        self._engine = None
+
+        # 2. reset tracking
+        self._load_error = None
+        self._warmup_done = False
+        self._is_fallback = False
+        self._device_info = {}
+
+        if overrides:
+            self._backend_config = {**self._backend_config, **overrides}
+
+        # 3. reset state so _do_initialize can run again
+        self._set_state(TTSState.UNINITIALIZED)
+
+        if blocking:
+            return self._do_initialize()
+
+        self._init_thread = threading.Thread(
+            target=self._do_initialize, daemon=True, name="tts-reinit"
+        )
+        self._init_thread.start()
+        return True
 
     def shutdown(self):
         """Full shutdown - release all resources."""
