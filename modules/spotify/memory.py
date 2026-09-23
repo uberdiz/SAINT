@@ -259,6 +259,13 @@ class SpotifyMemory:
             WHERE l.artist_id IS NOT NULL AND g.artist_id IS NULL ORDER BY l.played_at DESC LIMIT ?""", (limit,))
         return [r["artist_id"] for r in rows]
 
+    def clear(self):
+        """Delete all Spotify memory (history, requests, skips, feedback, aliases, prefs)."""
+        self._exec("""
+            DELETE FROM listening; DELETE FROM requests; DELETE FROM skips; DELETE FROM feedback;
+            DELETE FROM playlist_aliases; DELETE FROM preferences; DELETE FROM artist_genres;
+        """, script=True)
+
     # ------------------------------------------------------------------ #
     def snapshot(self) -> Dict[str, Any]:
         now = time.time()

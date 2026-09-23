@@ -1,104 +1,97 @@
 #!/usr/bin/env python3
 """
-app.py
+app.py — SAINT entry point.
 
-SAINT Revitalized -- entry point.
-
-Boot order matters:
-    1. Config      (so everyone else can read settings)
-    2. Logger      (so nothing that happens next goes unrecorded)
-    3. Event Bus   (already a singleton, imported by everything)
-    4. State / Analytics (subscribe to the event bus)
-    5. Module Manager (loads/enables modules per config)
-    6. First-run Setup (if needed)
-    7. Qt Application + Main Window
+Boot order:
+    1. Config + logging
+    2. Module manager (enables modules per config, registers tools)
+    3. Qt application (single instance, keeps running in the tray)
+    4. Core runtime: TTS, conversation controller, wake-word listening,
+       scheduler — independent of the window
+    5. Main window (optional: `python app.py --background` starts hidden)
 """
 
+import argparse
 import sys
-import os
 
-# High-DPI configuration.
-#
-# Qt 6 already makes the process per-monitor DPI aware (V2) by default when the
-# QGuiApplication is constructed. We must NOT also call
-# ctypes.windll.shcore.SetProcessDpiAwareness() here: Windows only allows a
-# process's DPI awareness to be set once, so setting it manually before Qt
-# starts causes Qt's own (newer, better) SetProcessDpiAwarenessContext() call to
-# fail with "Access is denied" — the warning we were seeing. Letting Qt own DPI
-# awareness both removes the warning and keeps the superior V2 behaviour.
-#
-# The only thing worth setting explicitly is the rounding policy, which must be
-# configured before the QApplication is instantiated.
+# Qt 6 owns per-monitor DPI awareness; only the rounding policy is set here
+# (it must be configured before the QApplication exists).
 try:
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QGuiApplication
-    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
-        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-    )
+    QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 except Exception:
     pass
 
 from core.config import config
 from core.logger import init_logger
-from core.setup import run_first_run_setup
 
-init_logger(config.get("logging.level", "Verbose"))
+init_logger(config.get("logging.level", "Normal"), config.get("logging.debug", False))
 
-# Importing these triggers their singleton construction, which wires
-# them up to the event bus.
+import logging  # noqa: E402
+
 from core import state as _state          # noqa: F401,E402
 from core import analytics as _analytics  # noqa: F401,E402
-from core.module_manager import module_manager  # noqa: E402
+from core.paths import data_path          # noqa: E402
+from core.setup import run_first_run_setup, SetupWizard  # noqa: E402
 
-from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
-from ui.main_window import MainWindow  # noqa: E402
-from ui.theme import stylesheet_for  # noqa: E402
+log = logging.getLogger("saint.app")
 
 
-def show_setup_dialog(setup_result: dict):
-    """Show first-run setup results to user."""
-    app = QApplication.instance()
-    if not app:
-        app = QApplication(sys.argv)
-    
+def show_setup_dialog():
+    from PySide6.QtWidgets import QMessageBox
     wizard = SetupWizard()
-    # Re-run checks to get fresh results for display
     wizard.run_checks()
-    report = wizard.format_report()
-    
     msg = QMessageBox()
-    msg.setWindowTitle("SAINT First Run Setup")
-    msg.setText("First-time setup complete!")
-    msg.setDetailedText(report)
+    msg.setWindowTitle("SAINT first-run check")
+    msg.setText("Welcome to SAINT. Here's what I found on this PC.")
+    msg.setDetailedText(wizard.format_report())
     msg.setStandardButtons(QMessageBox.Ok)
     msg.exec()
 
 
 def main():
-    # Run first-run setup before creating the UI
-    setup_result = run_first_run_setup()
-    
+    parser = argparse.ArgumentParser(description="SAINT local AI assistant")
+    parser.add_argument("--background", action="store_true", help="start hidden in the system tray")
+    args = parser.parse_args()
+
+    from PySide6.QtCore import QLockFile, QTimer
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
     app = QApplication(sys.argv)
     app.setApplicationName("SAINT")
+    app.setQuitOnLastWindowClosed(False)   # the tray keeps SAINT alive
 
-    theme = config.get("theme", "Dark")
-    app.setStyleSheet(stylesheet_for(theme))
+    lock = QLockFile(str(data_path("saint.lock")))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(100):
+        QMessageBox.information(None, "SAINT", "SAINT is already running (check the system tray).")
+        return 0
 
-    window = MainWindow(app)
-    window.show()
+    setup_result = run_first_run_setup()
 
-    # Show setup dialog after window is shown (if first run)
+    try:
+        from core.device import log_diagnostics
+        log_diagnostics(logging.getLogger("saint.device"))
+    except Exception:
+        pass
+
+    from core.module_manager import module_manager  # noqa: F401  (enables modules, registers tools)
+    from core.runtime import runtime
+    runtime.start()
+
+    from ui.main_window import MainWindow
+    window = MainWindow(app, runtime)
+    if not (args.background or config.get("notifications.start_minimized", False)):
+        window.show()
     if setup_result.get("first_run") and not setup_result.get("skipped"):
-        # Use a timer to show dialog after event loop starts
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(500, lambda: show_setup_dialog(setup_result))
+        QTimer.singleShot(800, show_setup_dialog)
 
-    sys.exit(app.exec())
-
-
-# Need to import SetupWizard for the dialog
-from core.setup import SetupWizard
+    code = app.exec()
+    runtime.shutdown()
+    lock.unlock()
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

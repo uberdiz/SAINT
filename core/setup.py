@@ -29,7 +29,9 @@ class SetupWizard:
 
     def __init__(self):
         self.results: List[CheckResult] = []
-        self._first_run = not os.path.exists("data/config.json")
+        from core.paths import data_path
+        self._marker = data_path(".setup_done")
+        self._first_run = not self._marker.exists()
 
     def is_first_run(self) -> bool:
         return self._first_run
@@ -284,7 +286,9 @@ class SetupWizard:
             ))
 
     def _check_directories(self):
-        dirs = ["data", "data/logs", "data/memory"]
+        from core.paths import data_dir
+        base = data_dir()
+        dirs = [str(base), str(base / "logs"), str(base / "memory")]
         missing = [d for d in dirs if not os.path.exists(d)]
         if not missing:
             self.results.append(CheckResult(
@@ -350,4 +354,8 @@ def run_first_run_setup() -> Dict[str, Any]:
         return {"first_run": False, "skipped": True}
 
     wizard.run_checks()
+    try:
+        wizard._marker.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
     return wizard.get_summary()

@@ -251,6 +251,8 @@ class AIModule(BaseModule):
                 return
             self.expects_reply = result.expects_reply
             on_token(result.text)
+            event_bus.emit_event(EventType.AI_STREAM_TOKEN, {
+                "token": result.text, "turn_id": turn_id, "stream_id": stream_id, "request_id": request_id})
             elapsed = time.perf_counter() - start
             self._context.add_assistant_turn(result.text)
             event_bus.emit_event(EventType.AI_STREAM_DONE, {

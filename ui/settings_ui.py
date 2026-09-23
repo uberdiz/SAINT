@@ -1,290 +1,852 @@
-"""Scalable, category-based Settings UI for SAINT 0.2."""
+"""
+ui/settings_ui.py
+
+Category-based Settings. Every field is bound to a config key; Save writes
+them all to data/config.json and emits SETTINGS_CHANGED, which the runtime
+applies live (wake word reload, microphone restart, TTS re-init, log level,
+appearance) — no restart required for most settings.
+"""
+
+import os
 import threading
+from typing import Callable, List, Tuple
+
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QComboBox, QLineEdit,
-    QCheckBox, QPushButton, QLabel, QDoubleSpinBox, QMessageBox, QFrame,
-    QSlider, QStackedWidget, QListWidget, QListWidgetItem, QScrollArea, QGroupBox
+    QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFontComboBox,
+    QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSlider, QSpinBox,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
-from PySide6.QtCore import Qt, QTimer
 
 from core.config import config
 from core.events import event_bus, EventType
 from core.module_manager import module_manager
+from core.paths import PROJECT_ROOT, data_dir, display_path, resolve_project_path
 from core.permissions import permission_manager
+from ui.theme import current_palette
+from ui.widgets import LevelMeter, run_async
+
+ACCENTS = ["#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#64748b"]
 
 
 class SettingsUI(QWidget):
-    """Settings use persistent category navigation instead of one long page."""
+    CATEGORIES = ["General", "Voice", "AI", "Wake Word", "Spotify", "Memory", "Automation",
+                  "Desktop Control", "Appearance", "Advanced"]
 
-    CATEGORIES = ["General", "AI", "Voice", "Integrations", "Permissions", "Analytics", "Memory", "Advanced"]
-
-    def __init__(self, on_theme_changed=None):
+    def __init__(self, on_appearance_changed: Callable = None, on_theme_changed: Callable = None):
         super().__init__()
-        self.on_theme_changed = on_theme_changed
-        self._spotify_thread = None
+        self.on_appearance_changed = on_appearance_changed or on_theme_changed
+        self._bindings: List[Tuple[str, Callable, Callable]] = []
+        self._labels_by_page = {}
+        self._page = None
         self._build()
+        self.load()
+        event_bus.event_occurred.connect(self._on_event)
 
-    def _scroll_page(self, widget):
+    # ------------------------------------------------------------------ #
+    # Binding helpers
+    # ------------------------------------------------------------------ #
+    def _bind(self, key, getter, setter):
+        self._bindings.append((key, getter, setter))
+
+    def _check(self, key, text):
+        w = QCheckBox(text)
+        self._bind(key, w.isChecked, lambda v: w.setChecked(bool(v)))
+        return w
+
+    def _combo(self, key, items, editable=False, data=None):
+        w = QComboBox()
+        w.setEditable(editable)
+        if data is None:
+            w.addItems(items)
+            self._bind(key, w.currentText, lambda v: w.setCurrentText(str(v if v is not None else "")))
+        else:
+            for label, value in zip(items, data):
+                w.addItem(label, value)
+            self._bind(key, w.currentData,
+                       lambda v: w.setCurrentIndex(max(0, w.findData(v))))
+        return w
+
+    def _spin(self, key, lo, hi, step=1.0, decimals=0, suffix=""):
+        w = QDoubleSpinBox() if decimals else QSpinBox()
+        w.setRange(lo, hi)
+        w.setSingleStep(step)
+        if decimals:
+            w.setDecimals(decimals)
+        if suffix:
+            w.setSuffix(suffix)
+        conv = float if decimals else int
+        self._bind(key, lambda: conv(w.value()), lambda v: w.setValue(conv(v if v is not None else lo)))
+        return w
+
+    def _line(self, key, placeholder="", password=False):
+        w = QLineEdit()
+        w.setPlaceholderText(placeholder)
+        if password:
+            w.setEchoMode(QLineEdit.Password)
+        self._bind(key, lambda: w.text().strip(), lambda v: w.setText("" if v is None else str(v)))
+        return w
+
+    def _section(self, title, desc=""):
+        box = QGroupBox(title)
+        form = QFormLayout(box)
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        if desc:
+            d = QLabel(desc)
+            d.setObjectName("Muted")
+            d.setWordWrap(True)
+            form.addRow(d)
+        return box, form
+
+    def _row(self, form, label, widget, help_text=""):
+        if type(widget) is QWidget:
+            widget.setObjectName("FormRow")   # transparent container for composite rows
+        form.addRow(label, widget)
+        self._labels_by_page.setdefault(self._page, []).append(label.lower())
+        if help_text:
+            h = QLabel(help_text)
+            h.setObjectName("Faint")
+            h.setWordWrap(True)
+            form.addRow("", h)
+
+    def _new_page(self, name):
+        self._page = name
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setSpacing(12)
+        lay.setContentsMargins(4, 0, 12, 12)
+        return w, lay
+
+    def _add_page(self, w, lay):
+        lay.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setWidget(widget)
-        return scroll
+        scroll.setWidget(w)
+        self.stack.addWidget(scroll)
 
-    def _section(self, title, description="", form=True):
-        box = QGroupBox(title)
-        layout = QFormLayout(box) if form else QVBoxLayout(box)
-        if description:
-            label = QLabel(description)
-            label.setObjectName("Subtitle")
-            label.setWordWrap(True)
-            layout.addWidget(label)
-        return box, layout
-
+    # ------------------------------------------------------------------ #
+    # Build
+    # ------------------------------------------------------------------ #
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 20, 24, 20)
+        root.setContentsMargins(24, 18, 24, 14)
         root.setSpacing(12)
-
-        header = QHBoxLayout()
-        title = QLabel("Settings")
-        title.setObjectName("PageTitle")
-        header.addWidget(title)
-        header.addStretch()
+        head = QHBoxLayout()
+        t = QLabel("Settings")
+        t.setObjectName("PageTitle")
+        head.addWidget(t)
+        head.addStretch()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search settings...")
-        self.search.setMaximumWidth(280)
-        self.search.textChanged.connect(self._filter_categories)
-        header.addWidget(self.search)
-        root.addLayout(header)
+        self.search.setPlaceholderText("Search settings…")
+        self.search.setMaximumWidth(260)
+        self.search.textChanged.connect(self._filter)
+        head.addWidget(self.search)
+        root.addLayout(head)
 
         body = QHBoxLayout()
         self.nav = QListWidget()
         self.nav.setObjectName("SettingsNav")
-        self.nav.setFixedWidth(170)
-        for category in self.CATEGORIES:
-            QListWidgetItem(category, self.nav)
-        self.nav.currentRowChanged.connect(self.stack_set)
+        self.nav.setFixedWidth(180)
+        for c in self.CATEGORIES:
+            QListWidgetItem(c, self.nav)
+        self.nav.currentRowChanged.connect(lambda i: i >= 0 and self.stack.setCurrentIndex(i))
         body.addWidget(self.nav)
-
         self.stack = QStackedWidget()
         body.addWidget(self.stack, 1)
         root.addLayout(body, 1)
 
-        self._build_general()
-        self._build_ai()
-        self._build_voice()
-        self._build_integrations()
-        self._build_permissions()
-        self._build_analytics()
-        self._build_memory()
-        self._build_advanced()
+        for builder in (self._build_general, self._build_voice, self._build_ai, self._build_wake,
+                        self._build_spotify, self._build_memory, self._build_automation,
+                        self._build_desktop, self._build_appearance, self._build_advanced):
+            builder()
         self.nav.setCurrentRow(0)
 
-        footer = QHBoxLayout()
-        self.status = QLabel("Changes are saved together.")
-        self.status.setObjectName("Subtitle")
-        footer.addWidget(self.status)
-        footer.addStretch()
-        save = QPushButton("Save Settings")
+        foot = QHBoxLayout()
+        self.status = QLabel("")
+        self.status.setObjectName("Muted")
+        foot.addWidget(self.status, 1)
+        revert = QPushButton("Revert")
+        revert.clicked.connect(self.load)
+        save = QPushButton("Save settings")
+        save.setObjectName("Primary")
         save.clicked.connect(self.save)
-        footer.addWidget(save)
-        root.addLayout(footer)
+        foot.addWidget(revert)
+        foot.addWidget(save)
+        root.addLayout(foot)
 
-    def stack_set(self, index):
-        if index >= 0:
-            self.stack.setCurrentIndex(index)
-
-    def _add_page(self, widget):
-        self.stack.addWidget(self._scroll_page(widget))
-
-    def _filter_categories(self, text):
-        query = text.strip().lower()
-        for i in range(self.nav.count()):
-            item = self.nav.item(i)
-            item.setHidden(bool(query and query not in item.text().lower()))
-        if query:
-            for i, category in enumerate(self.CATEGORIES):
-                if query in category.lower():
-                    self.nav.setCurrentRow(i)
-                    break
-
-    def _form(self):
-        f = QFormLayout()
-        f.setSpacing(10)
-        f.setLabelAlignment(Qt.AlignLeft)
-        return f
-
+    # ---- GENERAL -------------------------------------------------------
     def _build_general(self):
-        w = QWidget(); root = QVBoxLayout(w)
-        box, f = self._section("Appearance", "Core application appearance and persistence.")
-        self.theme_combo = QComboBox(); self.theme_combo.addItems(["Dark", "Light"]); self.theme_combo.setCurrentText(config.get("theme", "Dark"))
-        self.autosave = QCheckBox("On"); self.autosave.setChecked(config.get("auto_save", True))
-        f.addRow("Theme", self.theme_combo); f.addRow("Auto Save", self.autosave)
-        root.addWidget(box)
-        box, f = self._section("Dashboard", "Control how much information the dashboard displays.")
-        self.dash_complexity = QComboBox(); self.dash_complexity.addItems(["Simple","Standard","Advanced","Developer"]); self.dash_complexity.setCurrentText(config.get("dashboard.complexity","Standard"))
-        f.addRow("Complexity", self.dash_complexity); root.addWidget(box); root.addStretch()
-        self._add_page(w)
+        w, lay = self._new_page("General")
+        box, f = self._section("Startup & background",
+                               "SAINT's voice loop, reminders and Spotify keep running when the window is "
+                               "closed to the tray or not focused.")
+        self._row(f, "Start listening on launch", self._check("voice.auto_start", "Enabled"))
+        self._row(f, "Close button", self._check("notifications.close_to_tray", "Keep running in the tray"))
+        self._row(f, "Start minimized", self._check("notifications.start_minimized", "Start hidden in the tray"))
+        self._row(f, "Notifications", self._check("notifications.tray", "Show tray notifications (reminders, errors)"))
+        lay.addWidget(box)
+        box, f = self._section("Modules", "Turn whole capabilities on or off.")
+        for key, label in (("modules.voice", "Voice"), ("modules.memory", "Memory"),
+                           ("modules.automation", "Automations"), ("modules.desktop", "Desktop control"),
+                           ("modules.vision", "Screen awareness"), ("modules.spotify", "Spotify")):
+            self._row(f, label, self._check(key, "Enabled"))
+        lay.addWidget(box)
+        self._add_page(w, lay)
 
-    def _build_ai(self):
-        w = QWidget(); root = QVBoxLayout(w)
-        box, f = self._section("AI Provider", "Configure the local or remote model used by SAINT.")
-        self.provider = QComboBox(); self.provider.addItems(["mock","openai","ollama"]); self.provider.setCurrentText(config.get("ai.provider","ollama"))
-        self.model = QLineEdit(config.get("ai.model","llama3"))
-        self.base_url = QLineEdit(config.get("ai.base_url","http://localhost:11434"))
-        self.api_key = QLineEdit(config.get("ai.api_key","")); self.api_key.setEchoMode(QLineEdit.Password)
-        self.temperature = QDoubleSpinBox(); self.temperature.setRange(0,2); self.temperature.setSingleStep(.1); self.temperature.setValue(config.get("ai.temperature",.7))
-        f.addRow("Provider",self.provider); f.addRow("Model",self.model); f.addRow("Base URL",self.base_url); f.addRow("API Key",self.api_key); f.addRow("Temperature",self.temperature)
-        root.addWidget(box)
-        box, f = self._section("Conversation", "Context controls used by the voice/conversation controller.")
-        self.max_turns = QDoubleSpinBox(); self.max_turns.setRange(1,20); self.max_turns.setDecimals(0); self.max_turns.setValue(config.get("voice.max_context_turns",6))
-        self.system_prompt = QLineEdit(config.get("voice.system_prompt","You are SAINT, a helpful AI assistant. Be concise."))
-        f.addRow("Context Turns",self.max_turns); f.addRow("System Prompt",self.system_prompt); root.addWidget(box); root.addStretch()
-        self._add_page(w)
-
+    # ---- VOICE ------------------------------------------------------------
     def _build_voice(self):
-        w = QWidget(); root = QVBoxLayout(w)
-        box, f = self._section("Input")
-        self.voice_mode=QComboBox(); self.voice_mode.addItems(["always_on","push_to_talk"]); self.voice_mode.setCurrentText(config.get("voice.mode","always_on"))
-        self.mic_sensitivity=QDoubleSpinBox(); self.mic_sensitivity.setRange(.001,.1); self.mic_sensitivity.setDecimals(3); self.mic_sensitivity.setSingleStep(.001); self.mic_sensitivity.setValue(config.get("voice.mic_sensitivity",.015))
-        self.silence=QDoubleSpinBox(); self.silence.setRange(50,3000); self.silence.setDecimals(0); self.silence.setSuffix(" ms"); self.silence.setValue(config.get("voice.silence_duration_ms",700))
-        self.noise=QCheckBox("Enabled"); self.noise.setChecked(config.get("voice.noise_suppression",True))
-        f.addRow("Mode",self.voice_mode); f.addRow("Mic Sensitivity",self.mic_sensitivity); f.addRow("Silence Duration",self.silence); f.addRow("Noise Suppression",self.noise); root.addWidget(box)
-        box, f = self._section("Speech Recognition (STT)")
-        self.stt_backend=QComboBox(); self.stt_backend.addItems(["faster_whisper","mock"]); self.stt_backend.setCurrentText(config.get("voice.stt_backend","faster_whisper"))
-        self.stt_model=QComboBox(); self.stt_model.addItems(["tiny.en","base.en","small.en","medium.en","large-v3"]); self.stt_model.setCurrentText(config.get("voice.stt_model","base.en"))
-        self.stt_device=QComboBox(); self.stt_device.addItems(["cuda","cpu"]); self.stt_device.setCurrentText(config.get("voice.stt_device","cuda"))
-        self.stt_compute=QComboBox(); self.stt_compute.addItems(["float16","int8","float32"]); self.stt_compute.setCurrentText(config.get("voice.stt_compute_type","float16"))
-        self.stt_lang=QLineEdit(config.get("voice.stt_language","en"))
-        f.addRow("Backend",self.stt_backend); f.addRow("Model",self.stt_model); f.addRow("Device",self.stt_device); f.addRow("Compute",self.stt_compute); f.addRow("Language",self.stt_lang); root.addWidget(box)
-        box, f = self._section("Speech Output (TTS)")
-        self.tts_backend=QComboBox(); self.tts_backend.addItems(["kokoro","qwen","mock"]); self.tts_backend.setCurrentText(config.get("voice.tts_backend","kokoro"))
-        self.tts_voice=QLineEdit(config.get("voice.tts_voice","af_heart")); self.tts_device=QComboBox(); self.tts_device.addItems(["cuda","cpu"]); self.tts_device.setCurrentText(config.get("voice.tts_device","cuda"))
-        self.tts_speed=QDoubleSpinBox(); self.tts_speed.setRange(.5,2); self.tts_speed.setSingleStep(.1); self.tts_speed.setValue(config.get("voice.tts_speed",1.0))
-        f.addRow("Backend",self.tts_backend); f.addRow("Voice",self.tts_voice); f.addRow("Device",self.tts_device); f.addRow("Speed",self.tts_speed); root.addWidget(box); root.addStretch()
-        self._add_page(w)
+        w, lay = self._new_page("Voice")
+        box, f = self._section("Microphone")
+        self.mic_combo = QComboBox()
+        self._bind("voice.mic_device", self.mic_combo.currentData,
+                   lambda v: self.mic_combo.setCurrentIndex(max(0, self.mic_combo.findData(v))))
+        self._populate_mics()
+        mic_row = QHBoxLayout()
+        mic_row.addWidget(self.mic_combo, 1)
+        self.mic_test = QPushButton("Test (3 s)")
+        self.mic_test.clicked.connect(self._test_mic)
+        mic_row.addWidget(self.mic_test)
+        mw = QWidget()
+        mw.setLayout(mic_row)
+        self._row(f, "Input device", mw)
+        self._row(f, "Mode", self._combo("voice.mode", ["Always on", "Push to talk"], data=["always_on", "push_to_talk"]))
+        self._row(f, "Speech threshold", self._spin("voice.vad_start_threshold", 0.001, 0.2, 0.001, 3),
+                  "Raise it if background noise starts utterances; lower it if quiet speech is missed.")
+        self._row(f, "End-of-speech silence", self._spin("voice.silence_duration_ms", 200, 3000, 50, 0, " ms"))
+        self._row(f, "Noise suppression", self._check("voice.noise_suppression", "Subtract the rolling noise floor"))
+        lay.addWidget(box)
 
-    def _build_integrations(self):
-        w = QWidget(); root = QVBoxLayout(w)
-        box, layout = self._section("Spotify", "Connect Spotify and configure its access without leaving Settings.", form=False)
-        status_row=QHBoxLayout(); self.spotify_status=QLabel(); status_row.addWidget(self.spotify_status); status_row.addStretch()
-        self.spotify_connect=QPushButton("Connect Spotify"); self.spotify_connect.clicked.connect(self._spotify_connect); status_row.addWidget(self.spotify_connect)
-        self.spotify_disconnect=QPushButton("Disconnect"); self.spotify_disconnect.clicked.connect(self._spotify_disconnect); status_row.addWidget(self.spotify_disconnect)
-        layout.addLayout(status_row)
-        f=self._form()
-        self.spotify_client_id=QLineEdit(config.get("spotify.client_id","")); self.spotify_client_id.setPlaceholderText("Spotify Developer Client ID")
-        self.spotify_redirect=QLineEdit(config.get("spotify.redirect_uri","http://127.0.0.1:8888/callback"))
-        self.spotify_device=QLineEdit(config.get("spotify.preferred_device","")); self.spotify_device.setPlaceholderText("Optional device ID")
-        self.spotify_enabled=QCheckBox("Enable Spotify module"); self.spotify_enabled.setChecked(config.get("modules.spotify",False))
-        f.addRow("Client ID",self.spotify_client_id); f.addRow("Redirect URI",self.spotify_redirect); f.addRow("Preferred Device",self.spotify_device); f.addRow("",self.spotify_enabled)
-        layout.addLayout(f); root.addWidget(box)
-        box, layout = self._section("Available modules", "Integrations are independently enabled so adding future modules stays clean.")
-        self.integration_summary=QLabel()
-        self.integration_summary.setWordWrap(True)
-        layout.addWidget(self.integration_summary); root.addWidget(box); root.addStretch()
-        self._refresh_spotify_status()
-        self._add_page(w)
+        box, f = self._section("Interruptions (barge-in)",
+                               "The microphone stays on while SAINT speaks. SAINT compares what the mic hears "
+                               "with what it is playing, so its own voice doesn't interrupt it but yours does.")
+        self._row(f, "Allow interrupting", self._check("voice.barge_in_enabled", "Enabled"))
+        self._row(f, "Speech needed to interrupt", self._spin("voice.barge_in_min_ms", 90, 1500, 30, 0, " ms"))
+        self._row(f, "Echo margin", self._spin("voice.barge_in_echo_margin", 1.0, 8.0, 0.1, 1),
+                  "Higher = harder to interrupt (use with loud speakers); lower = easier (headphones).")
+        lay.addWidget(box)
+
+        box, f = self._section("Speech recognition (STT)")
+        self._row(f, "Engine", self._combo("voice.stt_backend", ["faster_whisper", "mock"]))
+        self._row(f, "Model", self._combo("voice.stt_model", ["tiny.en", "base.en", "small.en", "medium.en",
+                                                              "large-v3", "distil-large-v3"], editable=True))
+        self._row(f, "Device", self._combo("voice.stt_device", ["cuda", "cpu"]))
+        self._row(f, "Precision", self._combo("voice.stt_compute_type", ["float16", "int8_float16", "int8", "float32"]))
+        self._row(f, "Language", self._line("voice.stt_language", "en or auto"))
+        self._row(f, "Min confidence (no wake word)", self._spin("voice.min_stt_confidence", 0.0, 1.0, 0.05, 2))
+        lay.addWidget(box)
+
+        box, f = self._section("Speech output (TTS)")
+        self._row(f, "Engine", self._combo("voice.tts_backend", ["kokoro", "qwen", "mock"]))
+        self._row(f, "Voice", self._combo("voice.tts_voice", ["af_heart", "af_bella", "af_nicole", "af_sky",
+                                                              "am_adam", "am_michael", "bf_emma", "bm_george"],
+                                          editable=True))
+        self._row(f, "Device", self._combo("voice.tts_device", ["cuda", "cpu", "auto"]))
+        self._row(f, "Speed", self._spin("voice.tts_speed", 0.5, 2.0, 0.05, 2))
+        self._row(f, "CPU fallback", self._check("voice.tts_allow_cpu_fallback", "Use CPU if CUDA is unavailable"))
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    def _populate_mics(self):
+        self.mic_combo.clear()
+        self.mic_combo.addItem("System default", None)
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                if dev["max_input_channels"] > 0 and dev.get("hostapi", 0) == 0:
+                    self.mic_combo.addItem(f"{dev['name']}", i)
+            current = config.get("voice.mic_device", None)
+            if current is not None and self.mic_combo.findData(current) < 0 and 0 <= int(current) < len(devices):
+                self.mic_combo.addItem(f"{devices[int(current)]['name']} (#{current})", int(current))
+        except Exception as e:
+            self.mic_combo.addItem(f"(couldn't list devices: {e})", None)
+
+    def _test_mic(self):
+        dev = self.mic_combo.currentData()
+        self.mic_test.setEnabled(False)
+        self.mic_test.setText("Recording…")
+
+        def run():
+            import sounddevice as sd
+            info = sd.query_devices(dev, "input")
+            fs = int(info["default_samplerate"])
+            rec = sd.rec(int(3 * fs), samplerate=fs, channels=1, dtype="int16", device=dev)
+            sd.wait()
+            sd.play(rec, fs)
+            sd.wait()
+            import numpy as np
+            return float(np.sqrt(np.mean((rec.astype("float32") / 32768) ** 2)))
+
+        def done(rms):
+            self.mic_test.setEnabled(True)
+            self.mic_test.setText("Test (3 s)")
+            self.status.setText(f"Mic test finished — average level {rms:.3f}"
+                                + (" (very quiet — check the input device)" if rms < 0.003 else ""))
+
+        def fail(e):
+            self.mic_test.setEnabled(True)
+            self.mic_test.setText("Test (3 s)")
+            self.status.setText(f"Mic test failed: {e}")
+        run_async(run, done, fail)
+
+    # ---- AI --------------------------------------------------------------
+    def _build_ai(self):
+        w, lay = self._new_page("AI")
+        box, f = self._section("Language model")
+        self._row(f, "Provider", self._combo("ai.provider", ["ollama", "openai", "mock"]))
+        self.model_combo = self._combo("ai.model", [config.get("ai.model", "llama3.1")], editable=True)
+        mr = QHBoxLayout()
+        mr.addWidget(self.model_combo, 1)
+        refresh = QPushButton("Refresh list")
+        refresh.clicked.connect(self._refresh_models)
+        mr.addWidget(refresh)
+        mw = QWidget()
+        mw.setLayout(mr)
+        self._row(f, "Model", mw, "Models with the “tools” capability (e.g. llama3.1, llama3.2) can call "
+                                  "SAINT's tools for requests the fast command router doesn't cover.")
+        self._row(f, "Base URL", self._line("ai.base_url", "http://localhost:11434"))
+        self._row(f, "API key", self._line("ai.api_key", "only for OpenAI-compatible servers", password=True))
+        self._row(f, "Temperature", self._spin("ai.temperature", 0.0, 2.0, 0.1, 2))
+        self._row(f, "Timeout", self._spin("ai.timeout_seconds", 5, 300, 5, 0, " s"))
+        test = QPushButton("Test connection")
+        self.ai_status = QLabel("")
+        test.clicked.connect(self._test_ai)
+        tr = QHBoxLayout()
+        tr.addWidget(test)
+        tr.addWidget(self.ai_status, 1)
+        tw = QWidget()
+        tw.setObjectName("FormRow")
+        tw.setLayout(tr)
+        f.addRow("", tw)
+        lay.addWidget(box)
+        box, f = self._section("Agent")
+        self._row(f, "Command router", self._check("agent.enabled", "Handle common commands directly with tools"))
+        self._row(f, "LLM tool calling", self._check("ai.tool_calling", "Let the model call SAINT's tools"))
+        self._row(f, "Max tool steps", self._spin("ai.max_tool_steps", 1, 8))
+        self._row(f, "Confirmation timeout", self._spin("agent.confirm_timeout_sec", 5, 120, 5, 0, " s"))
+        self._row(f, "Context turns", self._spin("voice.max_context_turns", 1, 20))
+        self.system_prompt = QPlainTextEdit()
+        self.system_prompt.setMaximumHeight(90)
+        self._bind("voice.system_prompt", lambda: self.system_prompt.toPlainText().strip(),
+                   lambda v: self.system_prompt.setPlainText(v or ""))
+        self._row(f, "Personality / system prompt", self.system_prompt)
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    def _refresh_models(self):
+        ai = module_manager.get("ai")
+
+        def done(models):
+            cur = self.model_combo.currentText()
+            self.model_combo.clear()
+            names = [m.get("name") for m in models if m.get("name")]
+            self.model_combo.addItems(names or [cur])
+            self.model_combo.setCurrentText(cur)
+            self.ai_status.setText(f"{len(names)} models installed" if names else "No models found")
+        run_async(lambda: ai.list_models(force_refresh=True), done, lambda e: self.ai_status.setText(str(e)))
+
+    def _test_ai(self):
+        ai = module_manager.get("ai")
+        self.ai_status.setText("Testing…")
+        pal = current_palette()
+
+        def done(r):
+            ok = r.get("connected")
+            self.ai_status.setText(f"Connected ({r.get('version', r.get('provider', ''))})" if ok
+                                   else f"Not reachable: {r.get('error', '')}")
+            self.ai_status.setStyleSheet(f"color:{pal.success if ok else pal.danger};")
+        run_async(ai.test_connection, done, lambda e: self.ai_status.setText(str(e)))
+
+    # ---- WAKE WORD ---------------------------------------------------------
+    def _build_wake(self):
+        w, lay = self._new_page("Wake Word")
+        box, f = self._section("Wake word",
+                               "SAINT listens locally for “Hey SAINT” with its own ONNX model (CPU, no "
+                               "cloud). Only after hearing it does SAINT transcribe what you say.")
+        self._row(f, "Wake word", self._check("voice.wake_word_enabled", "Require “Hey SAINT” before commands"))
+        self.wake_status = QLabel("")
+        self.wake_status.setWordWrap(True)
+        self._row(f, "Status", self.wake_status)
+        self.wake_meter = LevelMeter(show_threshold=True)
+        self._row(f, "Live score", self.wake_meter)
+        path = self._line("voice.wake_word_model_path", "data/wake/hey_saint.onnx")
+        pr = QHBoxLayout()
+        pr.addWidget(path, 1)
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(lambda: self._browse_model(path))
+        pr.addWidget(browse)
+        pw = QWidget()
+        pw.setLayout(pr)
+        self._row(f, "Model file", pw, "Relative paths are resolved from the SAINT folder.")
+        lay.addWidget(box)
+
+        box, f = self._section("Detection")
+        self.sens = QSlider(Qt.Horizontal)
+        self.sens.setRange(5, 95)
+        self.sens_label = QLabel("")
+        self.sens.valueChanged.connect(lambda v: self.sens_label.setText(
+            f"{v}%  (score threshold {(100 - v) / 100:.2f})"))
+        sr = QHBoxLayout()
+        sr.addWidget(self.sens, 1)
+        sr.addWidget(self.sens_label)
+        sw = QWidget()
+        sw.setLayout(sr)
+        self._bind("voice.wake_word_threshold", lambda: round((100 - self.sens.value()) / 100, 2),
+                   lambda v: self.sens.setValue(int(round(100 - float(v or 0.5) * 100))))
+        self._row(f, "Sensitivity", sw, "Higher sensitivity triggers more easily (and more falsely).")
+        self._row(f, "Confirmation frames", self._spin("voice.wake_word_trigger_frames", 1, 6),
+                  "Consecutive 80 ms frames above threshold. 2 rejects one-frame spikes such as “saved”.")
+        self._row(f, "Cooldown", self._spin("voice.wake_word_refractory_sec", 0.5, 10.0, 0.5, 1, " s"))
+        self._row(f, "Command timeout", self._spin("voice.wake_word_command_timeout_sec", 2.0, 20.0, 0.5, 1, " s"),
+                  "How long SAINT waits for a command after hearing its name.")
+        self._row(f, "Follow-up window", self._spin("voice.wake_word_followup_sec", 0.0, 15.0, 0.5, 1, " s"),
+                  "Listen for a follow-up without the wake word after SAINT answers (0 = off).")
+        self._row(f, "Chime", self._check("voice.wake_word_chime", "Play a short tone when SAINT hears its name"))
+        self._row(f, "Debug", self._check("voice.wake_word_debug_scores", "Log every score above 0.1"))
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    def _browse_model(self, line):
+        path, _ = QFileDialog.getOpenFileName(self, "Wake-word model", str(PROJECT_ROOT / "data" / "wake"),
+                                              "ONNX models (*.onnx)")
+        if path:
+            line.setText(display_path(path).replace("\\", "/"))
+
+    def _render_wake_status(self):
+        pal = current_palette()
+        st = module_manager.get("voice").wake_status()
+        if not st.get("enabled"):
+            self.wake_status.setText("Off")
+            self.wake_status.setStyleSheet(f"color:{pal.muted};")
+        elif st.get("ready"):
+            self.wake_status.setText(f"Ready · {st.get('model_path')} · {st.get('avg_infer_ms', 0)} ms per frame")
+            self.wake_status.setStyleSheet(f"color:{pal.success};")
+        else:
+            self.wake_status.setText(st.get("error") or "Not loaded")
+            self.wake_status.setStyleSheet(f"color:{pal.danger};")
+        self.wake_meter.set_threshold(config.get("voice.wake_word_threshold", 0.5))
+
+    # ---- SPOTIFY ---------------------------------------------------------------
+    def _build_spotify(self):
+        w, lay = self._new_page("Spotify")
+        box, f = self._section("Account", "SAINT uses Spotify's Web API with your own developer app "
+                                          "(Client ID) and a secure PKCE login; tokens are stored in the "
+                                          "Windows Credential Manager, never in files.")
+        self._row(f, "Spotify", self._check("modules.spotify", "Enable Spotify control"))
+        self._row(f, "Client ID", self._line("spotify.client_id", "from developer.spotify.com/dashboard"))
+        self._row(f, "Redirect URI", self._line("spotify.redirect_uri", "http://127.0.0.1:8888/callback"),
+                  "Add exactly this URI to your Spotify app's Redirect URIs.")
+        self.sp_status = QLabel("")
+        self.sp_connect = QPushButton("Connect Spotify")
+        self.sp_connect.setObjectName("Primary")
+        self.sp_connect.clicked.connect(self._spotify_connect)
+        self.sp_disconnect = QPushButton("Disconnect")
+        self.sp_disconnect.clicked.connect(self._spotify_disconnect)
+        r = QHBoxLayout()
+        r.addWidget(self.sp_status, 1)
+        r.addWidget(self.sp_disconnect)
+        r.addWidget(self.sp_connect)
+        rw = QWidget()
+        rw.setObjectName("FormRow")
+        rw.setLayout(r)
+        f.addRow("", rw)
+        lay.addWidget(box)
+
+        box, f = self._section("Playback")
+        self.sp_device = QComboBox()
+        self.sp_device.setEditable(True)
+        self._bind("spotify.preferred_device", lambda: self.sp_device.currentText().strip(),
+                   lambda v: self.sp_device.setCurrentText(v or ""))
+        dr = QHBoxLayout()
+        dr.addWidget(self.sp_device, 1)
+        ref = QPushButton("Find devices")
+        ref.clicked.connect(self._spotify_devices)
+        dr.addWidget(ref)
+        dw = QWidget()
+        dw.setLayout(dr)
+        self._row(f, "Preferred device", dw, "Used when no device is active. Leave empty to prefer this PC.")
+        self._row(f, "Wake a device", self._check("spotify.auto_device",
+                                                   "If nothing is playing anywhere, activate a device (or open Spotify)"))
+        self._row(f, "Volume step", self._spin("spotify.volume_step", 5, 50, 5, 0, " %"))
+        lay.addWidget(box)
+
+        box, f = self._section("Music memory", "Used for “play something I'd like” and “what did I listen to today”.")
+        self._row(f, "Listening history", self._check("spotify.track_history",
+                                                      "Remember what I play, skip and request"))
+        self._row(f, "Sync interval", self._spin("spotify.poll_interval_sec", 5, 120, 5, 0, " s"))
+        clear = QPushButton("Clear music memory…")
+        clear.setObjectName("Danger")
+        clear.clicked.connect(self._clear_music_memory)
+        f.addRow("", clear)
+        lay.addWidget(box)
+        self._add_page(w, lay)
 
     def _refresh_spotify_status(self):
-        m=module_manager.get("spotify")
-        connected=bool(m and m.is_connected())
-        self.spotify_status.setText("Connected" if connected else "Not connected")
-        self.spotify_disconnect.setEnabled(connected)
-        self.integration_summary.setText("\n".join(f"• {m.name}: {'Enabled' if m.enabled else 'Disabled'}" for m in module_manager.all_modules()))
+        sp = module_manager.get("spotify")
+        pal = current_palette()
+        ok, reason = sp.availability()
+        self.sp_status.setText("Connected" if ok else reason)
+        self.sp_status.setStyleSheet(f"color:{pal.success if ok else pal.muted};")
+        self.sp_disconnect.setEnabled(sp.is_connected())
 
     def _spotify_connect(self):
-        if self._spotify_thread and self._spotify_thread.is_alive():
-            return
-        config.set("spotify.client_id",self.spotify_client_id.text().strip(),persist=True)
-        config.set("spotify.redirect_uri",self.spotify_redirect.text().strip(),persist=True)
-        m=module_manager.get("spotify"); m.enable()
-        self.spotify_connect.setEnabled(False); self.spotify_status.setText("Waiting for Spotify login...")
-        def run():
-            try:
-                m.connect()
-            except Exception as exc:
-                self._spotify_error=str(exc)
-            else:
-                self._spotify_error=""
-            self._spotify_thread=None
-        self._spotify_error=""
-        self._spotify_thread=threading.Thread(target=run,daemon=True); self._spotify_thread.start()
-        QTimer.singleShot(250,self._poll_spotify)
+        config.set("spotify.client_id", self._value("spotify.client_id"), persist=True)
+        config.set("spotify.redirect_uri", self._value("spotify.redirect_uri"), persist=True)
+        module_manager.set_enabled("spotify", True)
+        sp = module_manager.get("spotify")
+        self.sp_connect.setEnabled(False)
+        self.sp_status.setText("Waiting for you to log in to Spotify in the browser…")
 
-    def _poll_spotify(self):
-        if self._spotify_thread and self._spotify_thread.is_alive():
-            QTimer.singleShot(250,self._poll_spotify); return
-        self.spotify_connect.setEnabled(True); self._refresh_spotify_status()
-        if getattr(self,"_spotify_error",""):
-            QMessageBox.warning(self,"Spotify",self._spotify_error)
+        def done(_):
+            self.sp_connect.setEnabled(True)
+            self._refresh_spotify_status()
+
+        def fail(e):
+            self.sp_connect.setEnabled(True)
+            self._refresh_spotify_status()
+            QMessageBox.warning(self, "Spotify", e)
+        run_async(sp.connect, done, fail)
 
     def _spotify_disconnect(self):
-        m=module_manager.get("spotify"); m.disconnect(); self._refresh_spotify_status()
+        module_manager.get("spotify").disconnect()
+        self._refresh_spotify_status()
 
-    def _build_permissions(self):
-        w=QWidget(); root=QVBoxLayout(w)
-        box,layout=self._section("Tool Access","Set access for individual capabilities. Allow runs automatically, Confirm asks before execution, Deny blocks it.", form=False)
-        self.permission_rows={}
-        tools=[
-            ("spotify.play","Spotify Playback"),("spotify.pause","Spotify Pause"),("spotify.next","Spotify Skip"),
-            ("spotify.search","Spotify Search"),("spotify.queue","Spotify Queue"),("spotify.add_to_playlist","Spotify Playlist Changes"),
-        ]
-        for key,label in tools:
-            row=QHBoxLayout(); name=QLabel(label); row.addWidget(name); row.addStretch()
-            combo=QComboBox(); combo.addItems(["allow","confirm","deny"]); combo.setCurrentText(permission_manager.get_policy(key,"allow"))
-            combo.currentTextChanged.connect(lambda value,k=key: permission_manager.set_policy(k,value))
-            row.addWidget(combo); layout.addLayout(row); self.permission_rows[key]=combo
-        root.addWidget(box)
-        box,layout=self._section("Automation","The existing automation safety mode remains available as a global control.", form=False)
-        f=self._form(); self.auto_enabled=QCheckBox("Enabled"); self.auto_enabled.setChecked(config.get("automation.enabled",False))
-        self.auto_mode=QComboBox(); self.auto_mode.addItems(["safe","confirm","autonomous"]); self.auto_mode.setCurrentText(config.get("automation.permission_mode","confirm"))
-        self.auto_danger=QCheckBox("Confirm dangerous actions"); self.auto_danger.setChecked(config.get("automation.confirm_dangerous",True))
-        self.auto_timeout=QDoubleSpinBox(); self.auto_timeout.setRange(5,300); self.auto_timeout.setDecimals(0); self.auto_timeout.setSuffix(" sec"); self.auto_timeout.setValue(config.get("automation.command_timeout",30))
-        f.addRow("Automation",self.auto_enabled); f.addRow("Permission Mode",self.auto_mode); f.addRow("Dangerous Actions",self.auto_danger); f.addRow("Command Timeout",self.auto_timeout); layout.addLayout(f); root.addWidget(box); root.addStretch()
-        self._add_page(w)
+    def _spotify_devices(self):
+        sp = module_manager.get("spotify")
 
-    def _build_analytics(self):
-        w=QWidget(); root=QVBoxLayout(w)
-        box,f=self._section("Analytics & Logging")
-        self.analytics=QCheckBox("Enabled"); self.analytics.setChecked(config.get("analytics.enabled",True))
-        self.logging=QComboBox(); self.logging.addItems(["Verbose","Normal","Errors Only"]); self.logging.setCurrentText(config.get("logging.level","Verbose"))
-        f.addRow("Analytics",self.analytics); f.addRow("Logging Level",self.logging); root.addWidget(box); root.addStretch(); self._add_page(w)
+        def done(d):
+            cur = self.sp_device.currentText()
+            self.sp_device.clear()
+            self.sp_device.addItem("")
+            for dev in (d or {}).get("devices", []):
+                self.sp_device.addItem(dev.get("name", ""))
+            self.sp_device.setCurrentText(cur)
+        run_async(sp.client.devices, done, lambda e: self.sp_status.setText(f"Couldn't list devices: {e}"))
 
+    def _clear_music_memory(self):
+        if QMessageBox.question(self, "Clear music memory",
+                                "Delete SAINT's Spotify listening history, skips, requests and feedback?") \
+                == QMessageBox.Yes:
+            module_manager.get("spotify").tools.memory.clear()
+            self.status.setText("Music memory cleared.")
+
+    # ---- MEMORY ----------------------------------------------------------------
     def _build_memory(self):
-        w=QWidget(); root=QVBoxLayout(w)
-        box,f=self._section("Memory")
-        self.memory=QCheckBox("Enabled"); self.memory.setChecked(config.get("memory.enabled",False))
-        self.retention=QDoubleSpinBox(); self.retention.setRange(1,365); self.retention.setDecimals(0); self.retention.setSuffix(" days"); self.retention.setValue(config.get("memory.retention_days",30))
-        self.memory_turns=QDoubleSpinBox(); self.memory_turns.setRange(10,1000); self.memory_turns.setDecimals(0); self.memory_turns.setValue(config.get("memory.max_conversation_turns",100))
-        f.addRow("Memory",self.memory); f.addRow("Retention",self.retention); f.addRow("Max Conversation Turns",self.memory_turns); root.addWidget(box); root.addStretch(); self._add_page(w)
+        w, lay = self._new_page("Memory")
+        box, f = self._section("Long-term memory",
+                               "SAINT remembers facts you tell it (“my favorite language is Python”) in a local "
+                               "database and answers only from what is stored. Manage entries on the Memory page.")
+        self._row(f, "Memory", self._check("memory.enabled", "Enabled"))
+        self._row(f, "Learn from statements", self._check("memory.auto_extract",
+                                                          "Store clear personal statements automatically"))
+        self._row(f, "Use in answers", self._check("memory.inject_context",
+                                                   "Give the language model relevant memories"))
+        self._row(f, "Memories per answer", self._spin("memory.max_context_items", 1, 20))
+        wipe = QPushButton("Delete all long-term memories…")
+        wipe.setObjectName("Danger")
+        wipe.clicked.connect(self._wipe_memory)
+        f.addRow("", wipe)
+        lay.addWidget(box)
+        self._add_page(w, lay)
 
+    def _wipe_memory(self):
+        if QMessageBox.question(self, "Delete memories", "Permanently delete everything SAINT remembers about you?") \
+                == QMessageBox.Yes:
+            from modules.memory.service import memory_service
+            n = memory_service.forget_all()
+            self.status.setText(f"Deleted {n} memories.")
+
+    # ---- AUTOMATION -------------------------------------------------------------
+    def _build_automation(self):
+        w, lay = self._new_page("Automation")
+        box, f = self._section("Reminders & automations")
+        self._row(f, "Automations", self._check("automation.enabled", "Run scheduled reminders and commands"))
+        self._row(f, "Speak reminders", self._check("automation.speak_reminders", "Say reminders out loud"))
+        self._row(f, "Missed reminders", self._spin("automation.missed_grace_hours", 0, 72, 1, 0, " h"),
+                  "One-time reminders missed while SAINT was closed are delivered on startup if they're "
+                  "no older than this.")
+        self._row(f, "“Every morning” means", self._line("automation.default_morning_time", "08:00"))
+        lay.addWidget(box)
+        box, f = self._section("Safety", "Controls how freely SAINT may act.")
+        self._row(f, "Permission mode", self._combo(
+            "automation.permission_mode", ["Safe — read-only actions only", "Confirm — ask before risky actions",
+                                           "Autonomous — act without asking"], data=["safe", "confirm", "autonomous"]))
+        self._row(f, "Dangerous actions", self._check("automation.confirm_dangerous",
+                                                      "Always ask before high-risk actions"))
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    # ---- DESKTOP CONTROL -----------------------------------------------------------
+    def _build_desktop(self):
+        w, lay = self._new_page("Desktop Control")
+        box, f = self._section("Permissions",
+                               "SAINT controls the desktop only through explicit, validated tools — never "
+                               "arbitrary commands. Emergency stop: slam the mouse into a screen corner.")
+        self._row(f, "Desktop control", self._check("desktop.enabled", "Enabled"))
+        self._row(f, "Open apps", self._check("desktop.allow_app_launch", "Allowed"))
+        self._row(f, "Switch / move / close windows", self._check("desktop.allow_window_control", "Allowed"))
+        self._row(f, "Keyboard", self._check("desktop.allow_keyboard", "Allowed"))
+        self._row(f, "Mouse & clicking", self._check("desktop.allow_mouse", "Allowed"))
+        self._row(f, "Closing apps", self._check("desktop.confirm_close_apps", "Ask before closing an app"))
+        self._row(f, "Max typed text", self._spin("desktop.max_type_length", 20, 5000, 20, 0, " chars"))
+        lay.addWidget(box)
+
+        box = QGroupBox("App shortcuts")
+        v = QVBoxLayout(box)
+        d = QLabel("Extra names SAINT can open, e.g. “notes” → C:/Tools/Obsidian.exe or a URI like steam://.")
+        d.setObjectName("Muted")
+        d.setWordWrap(True)
+        v.addWidget(d)
+        self.apps_table = QTableWidget(0, 2)
+        self.apps_table.setHorizontalHeaderLabels(["Name", "Path or URI"])
+        self.apps_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.apps_table.verticalHeader().setVisible(False)
+        self.apps_table.setMaximumHeight(150)
+        v.addWidget(self.apps_table)
+        br = QHBoxLayout()
+        add = QPushButton("Add")
+        add.clicked.connect(lambda: self.apps_table.insertRow(self.apps_table.rowCount()))
+        rem = QPushButton("Remove")
+        rem.clicked.connect(lambda: self.apps_table.removeRow(self.apps_table.currentRow()))
+        br.addWidget(add)
+        br.addWidget(rem)
+        br.addStretch()
+        v.addLayout(br)
+        self._bind("desktop.apps", self._apps_value, self._apps_load)
+        lay.addWidget(box)
+
+        box = QGroupBox("Per-tool access")
+        v = QVBoxLayout(box)
+        d = QLabel("Override the permission mode for individual tools.")
+        d.setObjectName("Muted")
+        v.addWidget(d)
+        self.perm_table = QTableWidget(0, 3)
+        self.perm_table.setHorizontalHeaderLabels(["Tool", "Risk", "Access"])
+        self.perm_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.perm_table.verticalHeader().setVisible(False)
+        self.perm_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.perm_table.setMinimumHeight(260)
+        v.addWidget(self.perm_table)
+        self._bind("permissions.overrides", self._perm_value, self._perm_load)
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    def _apps_value(self):
+        out = {}
+        for r in range(self.apps_table.rowCount()):
+            k = self.apps_table.item(r, 0)
+            v = self.apps_table.item(r, 1)
+            if k and v and k.text().strip() and v.text().strip():
+                out[k.text().strip()] = v.text().strip()
+        return out
+
+    def _apps_load(self, apps):
+        self.apps_table.setRowCount(0)
+        for k, v in (apps or {}).items():
+            r = self.apps_table.rowCount()
+            self.apps_table.insertRow(r)
+            self.apps_table.setItem(r, 0, QTableWidgetItem(k))
+            self.apps_table.setItem(r, 1, QTableWidgetItem(v))
+
+    def _perm_load(self, overrides):
+        from modules.automation.tools import get_tool_registry
+        overrides = overrides or {}
+        tools = sorted(get_tool_registry().list_tools(), key=lambda t: t.name)
+        self.perm_table.setRowCount(0)
+        for t in tools:
+            r = self.perm_table.rowCount()
+            self.perm_table.insertRow(r)
+            self.perm_table.setItem(r, 0, QTableWidgetItem(t.name))
+            self.perm_table.setItem(r, 1, QTableWidgetItem(t.permission.value))
+            combo = QComboBox()
+            combo.addItems(["default", "allow", "confirm", "deny"])
+            combo.setCurrentText(overrides.get(t.name, "default"))
+            self.perm_table.setCellWidget(r, 2, combo)
+
+    def _perm_value(self):
+        out = {k: v for k, v in (config.get("permissions.overrides", {}) or {}).items() if "." not in k}
+        for r in range(self.perm_table.rowCount()):
+            combo = self.perm_table.cellWidget(r, 2)
+            if combo and combo.currentText() != "default":
+                out[self.perm_table.item(r, 0).text()] = combo.currentText()
+        return out
+
+    # ---- APPEARANCE ------------------------------------------------------------------
+    def _build_appearance(self):
+        w, lay = self._new_page("Appearance")
+        box, f = self._section("Theme")
+        self._row(f, "Mode", self._combo("appearance.theme", ["Dark", "Light", "System"]))
+        self.accent = "#2563eb"
+        sw = QHBoxLayout()
+        self._swatches = []
+        for c in ACCENTS:
+            b = QPushButton("")
+            b.setObjectName("Swatch")
+            b.setStyleSheet(f"background:{c}; border:2px solid transparent;")
+            b.clicked.connect(lambda _=False, col=c: self._set_accent(col))
+            sw.addWidget(b)
+            self._swatches.append((c, b))
+        custom = QPushButton("Custom…")
+        custom.clicked.connect(self._pick_accent)
+        sw.addWidget(custom)
+        sw.addStretch()
+        swd = QWidget()
+        swd.setLayout(sw)
+        self._bind("appearance.accent", lambda: self.accent, self._set_accent)
+        self._row(f, "Accent colour", swd)
+        self.font_combo = QFontComboBox()
+        self._bind("appearance.font_family", lambda: self.font_combo.currentFont().family(),
+                   lambda v: self.font_combo.setCurrentFont(__import__("PySide6.QtGui", fromlist=["QFont"]).QFont(v or "Segoe UI")))
+        self._row(f, "Font", self.font_combo)
+        self._row(f, "Font size", self._spin("appearance.font_size", 10, 20, 1, 0, " px"))
+        self._row(f, "Density", self._check("appearance.compact", "Compact"))
+        self._row(f, "Animations", self._check("appearance.animations", "Animate the state orb and meters"))
+        lay.addWidget(box)
+
+        box, f = self._section("Window")
+        self.opacity = QSlider(Qt.Horizontal)
+        self.opacity.setRange(60, 100)
+        self._bind("appearance.opacity", lambda: self.opacity.value() / 100,
+                   lambda v: self.opacity.setValue(int(round(float(v or 1.0) * 100))))
+        self._row(f, "Opacity", self.opacity)
+        self._row(f, "Always on top", self._check("appearance.always_on_top", "Keep SAINT above other windows"))
+        self._row(f, "Sidebar", self._check("appearance.sidebar_labels", "Show labels"))
+        lay.addWidget(box)
+
+        box, f = self._section("Dashboard panels")
+        for key, label in (("conversation", "Conversation"), ("spotify", "Now playing"),
+                           ("automations", "Upcoming automations"), ("activity", "Activity feed"),
+                           ("system", "System stats")):
+            self._row(f, label, self._check(f"dashboard.panels.{key}", "Show"))
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    def _set_accent(self, color):
+        c = QColor(color or "#2563eb")
+        self.accent = c.name() if c.isValid() else "#2563eb"
+        for col, b in self._swatches:
+            border = "#ffffff" if col.lower() == self.accent.lower() else "transparent"
+            b.setStyleSheet(f"background:{col}; border:2px solid {border};")
+
+    def _pick_accent(self):
+        c = QColorDialog.getColor(QColor(self.accent), self, "Accent colour")
+        if c.isValid():
+            self._set_accent(c.name())
+
+    # ---- ADVANCED ------------------------------------------------------------------
     def _build_advanced(self):
-        w=QWidget(); root=QVBoxLayout(w)
-        box,f=self._section("System / Developer")
-        self.startup=QCheckBox("Run startup system check"); self.startup.setChecked(config.get("system.startup_check",True))
-        self.syslog=QComboBox(); self.syslog.addItems(["Verbose","Normal","Errors Only"]); self.syslog.setCurrentText(config.get("system.log_level","Verbose"))
-        f.addRow("Startup Check",self.startup); f.addRow("System Log Level",self.syslog); root.addWidget(box); root.addStretch(); self._add_page(w)
+        w, lay = self._new_page("Advanced")
+        box, f = self._section("Logging & diagnostics")
+        self._row(f, "Log level", self._combo("logging.level", ["Verbose", "Normal", "Errors Only"]))
+        self._row(f, "Debug mode", self._check("logging.debug", "Log detailed subsystem debug output"))
+        self._row(f, "Analytics", self._check("analytics.enabled", "Record local latency statistics"))
+        logs = QPushButton("Open log folder")
+        logs.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir() / "logs"))))
+        data = QPushButton("Open data folder")
+        data.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_dir()))))
+        r = QHBoxLayout()
+        r.addWidget(logs)
+        r.addWidget(data)
+        r.addStretch()
+        rw = QWidget()
+        rw.setObjectName("FormRow")
+        rw.setLayout(r)
+        f.addRow("", rw)
+        lay.addWidget(box)
+
+        box, f = self._section("Screen awareness",
+                               "SAINT reads the active window through Windows UI Automation. For image-level "
+                               "understanding, pull a vision model in Ollama (e.g. llama3.2-vision) and set it here.")
+        self._row(f, "Visual analyzer", self._combo("vision.analyzer", ["none", "ollama"]))
+        self._row(f, "Vision model", self._line("vision.model", "e.g. llama3.2-vision"))
+        self._row(f, "Keep screenshots", self._spin("vision.keep_screenshots", 0, 200))
+        lay.addWidget(box)
+
+        box, f = self._section("Files")
+        lbl = QLabel(f"Config: {display_path(config.path)}\nData: {display_path(data_dir())}")
+        lbl.setObjectName("Muted")
+        lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        f.addRow(lbl)
+        self._row(f, "Startup check", self._check("system.startup_check", "Run the environment check on launch"))
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+    # ------------------------------------------------------------------ #
+    # Load / save
+    # ------------------------------------------------------------------ #
+    def _value(self, key):
+        for k, getter, _ in self._bindings:
+            if k == key:
+                return getter()
+        return config.get(key)
+
+    def load(self):
+        for key, _getter, setter in self._bindings:
+            try:
+                setter(config.get(key))
+            except Exception:
+                pass
+        self._render_wake_status()
+        self._refresh_spotify_status()
+        self.status.setText("")
 
     def save(self):
-        config.set("theme",self.theme_combo.currentText(),persist=False); config.set("auto_save",self.autosave.isChecked(),persist=False)
-        config.set("dashboard.complexity",self.dash_complexity.currentText(),persist=False)
-        config.set("ai.provider",self.provider.currentText(),persist=False); config.set("ai.model",self.model.text(),persist=False)
-        config.set("ai.base_url",self.base_url.text(),persist=False); config.set("ai.api_key",self.api_key.text(),persist=False); config.set("ai.temperature",self.temperature.value(),persist=False)
-        config.set("voice.mode",self.voice_mode.currentText(),persist=False); config.set("voice.mic_sensitivity",self.mic_sensitivity.value(),persist=False)
-        config.set("voice.silence_duration_ms",int(self.silence.value()),persist=False); config.set("voice.noise_suppression",self.noise.isChecked(),persist=False)
-        config.set("voice.stt_backend",self.stt_backend.currentText(),persist=False); config.set("voice.stt_model",self.stt_model.currentText(),persist=False)
-        config.set("voice.stt_device",self.stt_device.currentText(),persist=False); config.set("voice.stt_compute_type",self.stt_compute.currentText(),persist=False); config.set("voice.stt_language",self.stt_lang.text(),persist=False)
-        config.set("voice.tts_backend",self.tts_backend.currentText(),persist=False); config.set("voice.tts_voice",self.tts_voice.text(),persist=False); config.set("voice.tts_device",self.tts_device.currentText(),persist=False); config.set("voice.tts_speed",self.tts_speed.value(),persist=False)
-        config.set("voice.max_context_turns",int(self.max_turns.value()),persist=False); config.set("voice.system_prompt",self.system_prompt.text(),persist=False)
-        config.set("spotify.client_id",self.spotify_client_id.text().strip(),persist=False); config.set("spotify.redirect_uri",self.spotify_redirect.text().strip(),persist=False); config.set("spotify.preferred_device",self.spotify_device.text().strip(),persist=False)
-        config.set("modules.spotify",self.spotify_enabled.isChecked(),persist=False)
-        config.set("analytics.enabled",self.analytics.isChecked(),persist=False); config.set("logging.level",self.logging.currentText(),persist=False)
-        config.set("automation.enabled",self.auto_enabled.isChecked(),persist=False); config.set("automation.permission_mode",self.auto_mode.currentText(),persist=False)
-        config.set("automation.confirm_dangerous",self.auto_danger.isChecked(),persist=False); config.set("automation.command_timeout",int(self.auto_timeout.value()),persist=False)
-        config.set("memory.enabled",self.memory.isChecked(),persist=False); config.set("memory.retention_days",int(self.retention.value()),persist=False); config.set("memory.max_conversation_turns",int(self.memory_turns.value()),persist=False)
-        config.set("system.startup_check",self.startup.isChecked(),persist=False); config.set("system.log_level",self.syslog.currentText(),persist=False)
-        config.save(); module_manager.set_enabled("spotify",self.spotify_enabled.isChecked())
-        event_bus.emit_event(EventType.SETTINGS_CHANGED,{})
-        if self.on_theme_changed: self.on_theme_changed(self.theme_combo.currentText())
-        self.status.setText("Settings saved.")
+        before_modules = {k: config.get(f"modules.{k}", False) for k in
+                          ("voice", "memory", "automation", "desktop", "vision", "spotify")}
+        errors = []
+        for key, getter, _ in self._bindings:
+            try:
+                config.set(key, getter(), persist=False)
+            except Exception as e:
+                errors.append(f"{key}: {e}")
+        config.set("theme", config.get("appearance.theme", "Dark"), persist=False)
+        try:
+            config.save()
+        except OSError as e:
+            self.status.setText(f"Couldn't write settings: {e}")
+            return
+        for k, was in before_modules.items():
+            now = config.get(f"modules.{k}", False)
+            if now != was:
+                module_manager.set_enabled(k, now)
+        event_bus.emit_event(EventType.SETTINGS_CHANGED, {})
+        if self.on_appearance_changed:
+            self.on_appearance_changed()
+        pal = current_palette()
+        if errors:
+            self.status.setText("Saved with problems: " + "; ".join(errors))
+            self.status.setStyleSheet(f"color:{pal.warning};")
+        else:
+            self.status.setText("Settings saved and applied.")
+            self.status.setStyleSheet(f"color:{pal.success};")
+        QTimer.singleShot(1500, self._render_wake_status)
+
+    # ------------------------------------------------------------------ #
+    def _filter(self, text):
+        q = text.strip().lower()
+        first = None
+        for i, cat in enumerate(self.CATEGORIES):
+            match = not q or q in cat.lower() or any(q in l for l in self._labels_by_page.get(cat, []))
+            self.nav.item(i).setHidden(not match)
+            if match and first is None:
+                first = i
+        if q and first is not None:
+            self.nav.setCurrentRow(first)
+
+    def _on_event(self, ev):
+        if ev.type in (EventType.WAKE_STATUS, EventType.WAKE_ERROR):
+            self._render_wake_status()
+        elif ev.type == EventType.VOICE_WAKE_SCORE and self.isVisible():
+            self.wake_meter.set_value(ev.payload.get("score", 0.0))
+        elif ev.type in (EventType.SPOTIFY_CONNECTED, EventType.SPOTIFY_DISCONNECTED):
+            self._refresh_spotify_status()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self._render_wake_status()
+        self._refresh_spotify_status()
