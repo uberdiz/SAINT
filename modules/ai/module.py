@@ -1,12 +1,12 @@
 """
 modules/ai/module.py
 
-AI module — extended for Milestone 1.
+AI module: every user turn goes through here.
 
-New capabilities:
-  - stream_prompt(): streams tokens via callback, fires AI_STREAM_TOKEN events
+  - stream_prompt(): agent first (deterministic intents -> real tools), then the
+    LLM with relevant memories and optional tool calling; streams tokens
   - cancel(): sets the cancel flag so an in-flight stream exits cleanly
-  - Conversation context tracked via ConversationContext
+  - Short-term conversation context tracked via ConversationContext
 """
 
 import threading
@@ -42,6 +42,7 @@ class AIModule(BaseModule):
         self._active_turn_id: int = -1
         self._active_stream_id: str = ""
         self._stream_id_lock = threading.Lock()
+        self.expects_reply = False   # last answer asked the user a question
         self._rebuild_context()
 
     # ------------------------------------------------------------------ #
@@ -103,7 +104,7 @@ class AIModule(BaseModule):
         best = max(names, key=score)
         return best, {"configured": configured, "resolved": best, "available": names}
 
-# ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ #
     # Legacy synchronous API (kept for dashboard quick-test panel)
     # ------------------------------------------------------------------ #
     def send_prompt(self, prompt: str) -> str:
@@ -158,304 +159,31 @@ class AIModule(BaseModule):
         return response_text
 
     def _spotify_intent(self, text: str):
-        """Deterministically map a music-control utterance to a Spotify tool.
+        """Compatibility shim: (kind, tool, kwargs) for a music utterance, or None.
 
-        Returns (intent_kind, tool_name, kwargs) or None. Common commands
-        (skip, next, previous, pause, resume, play, what's playing, volume,
-        shuffle, repeat) are recognised WITHOUT requiring the literal word
-        "spotify", so "skip the song" reliably routes to spotify.next instead
-        of being handed to the LLM (which could hallucinate or, on failure,
-        fall through to a mock response).
-        """
-        import re
-        lower = text.lower().strip()
-        wc = len(lower.split())
+        The real parser lives in modules/agent/router.py (spotify_intent)."""
+        from modules.agent.router import spotify_intent
+        si = spotify_intent(text)
+        return (si.kind, si.tool, si.kwargs) if si else None
 
-        def has(pattern):
-            return re.search(pattern, lower) is not None
-
-        # --- what's playing / current track (check before "play") ---------
-        if has(r"what(?:'?s| is| am i)\b.*\b(playing|listening|song|track)") \
-                or has(r"what song is (this|playing|that)") \
-                or has(r"what(?:'?s| is) this (song|track)") \
-                or has(r"\b(current|now playing|currently playing)\b.*\b(song|track)?") \
-                or has(r"who(?:'?s| is) (this|singing|the artist)"):
-            return ("current", "spotify.current", {})
-
-        # --- previous / back (before generic play) ------------------------
-        if has(r"\b(previous|last)\s+(song|track|one)\b") or has(r"\bgo back\b") \
-                or has(r"\bplay (the )?(previous|last)\b") \
-                or (has(r"\bprevious\b") and wc <= 5) or has(r"\bback a (song|track)\b"):
-            return ("previous", "spotify.previous", {})
-
-        # --- next / skip ---------------------------------------------------
-        if has(r"\b(skip|next)\b") and (
-            has(r"\b(song|track|this|it|ahead|one)\b") or has(r"\bspotify\b") or wc <= 5
-        ):
-            return ("next", "spotify.next", {})
-
-        # --- pause / stop music -------------------------------------------
-        if has(r"\bpause\b") or has(r"\bstop\b.*\b(music|song|spotify|playback|playing)\b") \
-                or has(r"\b(music|song|spotify|playback)\b.*\bstop\b"):
-            return ("pause", "spotify.pause", {})
-
-        # --- volume set / up / down ---------------------------------------
-        vol = re.search(r"\bvolume\b.*?(\d{1,3})", lower) or re.search(r"\bset (?:the )?volume (?:to )?(\d{1,3})", lower)
-        if vol:
-            pct = max(0, min(100, int(vol.group(1))))
-            return ("volume_set", "spotify.volume", {"percent": pct})
-        if has(r"\b(volume up|louder|turn (it )?up)\b"):
-            return ("volume_up", "spotify.volume", {"_relative": +15})
-        if has(r"\b(volume down|quieter|softer|turn (it )?down)\b"):
-            return ("volume_down", "spotify.volume", {"_relative": -15})
-
-        # --- shuffle -------------------------------------------------------
-        if has(r"\bshuffle\b"):
-            state = not has(r"\b(off|stop|disable|no)\b")
-            return ("shuffle", "spotify.shuffle", {"state": state})
-
-        # --- repeat --------------------------------------------------------
-        if has(r"\brepeat\b"):
-            if has(r"\b(off|stop|disable|no)\b"):
-                mode = "off"
-            elif has(r"\b(one|this|track|single)\b"):
-                mode = "track"
-            else:
-                mode = "context"
-            return ("repeat", "spotify.repeat", {"state": mode})
-
-        # --- resume --------------------------------------------------------
-        if has(r"\b(resume|unpause|continue)\b"):
-            return ("resume", "spotify.play", {})
-
-        # --- play (query or resume) ---------------------------------------
-        m = re.match(r"^(?:please\s+)?play\b(.*)$", lower)
-        if m:
-            return ("play", "__play__", {"raw": text})
-
-        return None
-
-    def _try_integration_command(self, prompt: str):
-        """Execute deterministic commands for enabled integrations.
-
-        This is intentionally used for action-oriented commands where the
-        LLM should not be allowed to hallucinate that an action happened.
-        Returns a user-facing response string, or None when the prompt is
-        not a supported integration command.
-        """
-        import re
-        from core.module_manager import module_manager
-        from modules.automation.tools import get_tool_registry
-
-        text = prompt.strip()
-        lower = text.lower()
-
-        intent = self._spotify_intent(text)
-        # If it's clearly not a music command, let the LLM handle it.
-        if intent is None and "spotify" not in lower:
-            return None
-
-        spotify = module_manager.get("spotify")
-        if not spotify or not spotify.enabled:
-            if intent is None:
-                return None
-            return "Spotify isn't enabled. You can enable it in Settings, under Integrations."
-
-        if not spotify.is_connected():
-            if intent is None:
-                return None
-            return "Spotify is enabled, but your account isn't connected yet."
-
-        registry = get_tool_registry()
-
-        def run(name, **kwargs):
-            result = registry.execute(name, **kwargs)
-            if not result.success:
-                return None, (result.error or f"{name} failed.")
-            return result.result, None
-
+    # ------------------------------------------------------------------ #
+    # Memory context
+    # ------------------------------------------------------------------ #
+    def _memory_messages(self, prompt: str) -> List[Dict[str, str]]:
+        if not (config.get("memory.enabled", True) and config.get("memory.inject_context", True)
+                and config.get("modules.memory", True)):
+            return []
         try:
-            kind = intent[0] if intent else None
-
-            # Personalized Spotify intelligence. These routes execute through
-            # the shared tool registry so actions are real and auditable.
-            if re.search(r"\b(recommend|recommendation|something (new|similar)|what should i listen to|give me something)\b", lower):
-                context = re.sub(r"^(.*?)(recommend|recommendation|something new|something similar|what should i listen to|give me something)\s*", "", text, flags=re.I).strip()
-                data, err = run("spotify.recommend", context=context or "", limit=5)
-                if err:
-                    return f"I couldn't generate a Spotify recommendation: {err}"
-                recs = (data or {}).get("recommendations", [])
-                if not recs:
-                    return "I don't have enough Spotify listening data yet to make a useful recommendation."
-                first = recs[0]
-                artists = ", ".join(first.get("artists", []))
-                return f"I'd try {first.get('name', 'this track')} by {artists}. It matches your recent listening and taste signals."
-
-            if re.search(r"\b(what have i been listening to|what have i listened to|listening to today|listening to lately|recently played)\b", lower):
-                data, err = run("spotify.recent", limit=20)
-                if err:
-                    return f"I couldn't check your Spotify listening history: {err}"
-                items = (data or {}).get("items", [])
-                if not items:
-                    return "I don't have recent Spotify listening history available."
-                lines = []
-                for entry in items[:5]:
-                    track = entry.get("track", {})
-                    artist = ", ".join(a.get("name", "") for a in track.get("artists", []))
-                    lines.append(f"{track.get('name', 'Unknown')} by {artist}")
-                return "Recently you've been listening to " + "; ".join(lines) + "."
-
-            if re.search(r"\b(i like this|i love this|more like this|i don't like this|dont recommend this|don't recommend this)\b", lower):
-                data, err = run("spotify.current")
-                if err:
-                    return f"I couldn't identify the current Spotify track: {err}"
-                item = (data or {}).get("item") if isinstance(data, dict) else None
-                if not item:
-                    return "I couldn't identify the current track."
-                signal = -1.0 if re.search(r"don't|dont|not", lower) else 1.0
-                _, err = run(
-                    "spotify.feedback",
-                    track_id=item.get("id", ""),
-                    track_name=item.get("name", ""),
-                    artist=((item.get("artists") or [{}])[0].get("name", "")),
-                    signal=signal,
-                    reason=text,
-                )
-                return "Got it — I'll adjust future recommendations." if not err else f"I couldn't save that preference: {err}"
-
-            if re.search(r"\b(my|the)\s+(gym|lifting|workout|driving|study|chill|night|usual)\s+(playlist|music)\b", lower):
-                match = re.search(r"\b(my|the)\s+(.+?)\s+(playlist|music)\b", lower)
-                alias = match.group(2).strip() if match else ""
-                data, err = run("spotify.resolve_playlist", name=alias)
-                if err:
-                    return f"I couldn't resolve that Spotify playlist: {err}"
-                if not data or not data.get("id"):
-                    return f"I couldn't find a playlist matching '{alias}'."
-                run("spotify.playlist_alias", alias=alias, playlist_id=data["id"], playlist_name=data["name"])
-                _, err = run("spotify.play", uri=data.get("uri"))
-                return f"Playing your {alias} playlist, {data.get('name')}." if not err else f"I found {data.get('name')}, but couldn't start it: {err}"
-
-
-            if kind == "pause":
-                _, err = run("spotify.pause")
-                return "Okay, paused." if not err else err
-
-            if kind == "resume":
-                _, err = run("spotify.play")
-                return "Okay, playing." if not err else err
-
-            if kind == "next":
-                _, err = run("spotify.next")
-                return "Skipped to the next track." if not err else err
-
-            if kind == "previous":
-                _, err = run("spotify.previous")
-                return "Going back a track." if not err else err
-
-            if kind == "shuffle":
-                _, err = run("spotify.shuffle", state=intent[2]["state"])
-                if err:
-                    return err
-                return "Shuffle on." if intent[2]["state"] else "Shuffle off."
-
-            if kind == "repeat":
-                _, err = run("spotify.repeat", state=intent[2]["state"])
-                if err:
-                    return err
-                labels = {"off": "Repeat off.", "track": "Repeating this track.", "context": "Repeat on."}
-                return labels.get(intent[2]["state"], "Repeat updated.")
-
-            if kind == "volume_set":
-                _, err = run("spotify.volume", percent=intent[2]["percent"])
-                return f"Volume set to {intent[2]['percent']}%." if not err else err
-
-            if kind in ("volume_up", "volume_down"):
-                data, err = run("spotify.current")
-                if err:
-                    return err
-                cur = 50
-                if isinstance(data, dict):
-                    cur = (data.get("device") or {}).get("volume_percent", 50)
-                new = max(0, min(100, int(cur) + intent[2]["_relative"]))
-                _, err = run("spotify.volume", percent=new)
-                return f"Volume {'up' if intent[2]['_relative'] > 0 else 'down'} to {new}%." if not err else err
-
-            if kind == "current":
-                data, err = run("spotify.current")
-                if err:
-                    return err
-                item = (data or {}).get("item") if isinstance(data, dict) else None
-                if not item:
-                    return "Spotify isn't playing anything right now."
-                artists = ", ".join(a.get("name", "") for a in item.get("artists", []))
-                return f"This is {item.get('name', 'an unknown track')}" + (f" by {artists}." if artists else ".")
-
-            # Playlist commands: use the user's actual playlists instead of
-            # pretending that a playlist was played.
-            if re.search(r"\bplaylist\b", lower) and re.search(r"\b(play|open|start)\b", lower):
-                data, err = run("spotify.playlists")
-                if err:
-                    return f"I couldn't read your Spotify playlists: {err}"
-                items = (data or {}).get("items", []) if isinstance(data, dict) else []
-                if not items:
-                    return "I couldn't find any Spotify playlists on your account."
-
-                target = lower
-                target = re.sub(r"\b(play|open|start)\b", "", target)
-                target = target.replace("spotify", "").replace("playlist", "")
-                target = re.sub(r"\b(my|the|on|please)\b", " ", target)
-                target = re.sub(r"\s+", " ", target).strip()
-
-                chosen = None
-                if target:
-                    exact = [p for p in items if p.get("name", "").lower() == target]
-                    partial = [p for p in items if target in p.get("name", "").lower()]
-                    chosen = (exact or partial or [None])[0]
-                if chosen is None and target in {"top", "top playlist", "favorite", "favourite"}:
-                    # "my top playlist" means the first playlist in the user's
-                    # Spotify playlist collection unless a playlist actually
-                    # named "top" was matched above.
-                    chosen = next(
-                        (p for p in items if "top" in p.get("name", "").lower()),
-                        None,
-                    ) or items[0]
-                if chosen is None and not target:
-                    chosen = items[0]
-                if chosen is None:
-                    names = ", ".join(p.get("name", "Unnamed") for p in items[:5])
-                    return f"I couldn't find that playlist. Your playlists include: {names}."
-
-                _, err = run("spotify.play", uri=chosen.get("uri"))
-                return f"Playing your playlist {chosen.get('name', 'playlist')}." if not err else f"I found {chosen.get('name', 'that playlist')}, but couldn't start it: {err}"
-
-            # Generic track/artist play request (or a vague "play something").
-            if re.match(r"^(please\s+)?play\b", lower):
-                query = re.sub(r"^(please\s+)?play\s+", "", text, flags=re.I)
-                query = re.sub(r"\bon\s+spotify\s*$", "", query, flags=re.I).strip()
-                vague = {"", "spotify", "my spotify", "music", "some music",
-                         "something", "a song", "the music", "some songs"}
-                if query.lower() in vague:
-                    # No specific track — just resume/continue playback.
-                    _, err = run("spotify.play")
-                    return "Okay, playing." if not err else err
-                data, err = run("spotify.search", query=query, types="track")
-                if err:
-                    return err
-                tracks = ((data or {}).get("tracks") or {}).get("items", [])
-                if not tracks:
-                    return f"I couldn't find {query} on Spotify."
-                track = tracks[0]
-                _, err = run("spotify.play", uri=track.get("uri"))
-                artists = ", ".join(a.get("name", "") for a in track.get("artists", []))
-                return f"Playing {track.get('name', query)} by {artists}." if not err else err
-
-        except Exception as exc:
-            # Never speak a raw exception; log the detail and say something clean.
-            import logging
-            logging.getLogger("saint.ai").exception("spotify.route.error")
-            return "Sorry, I couldn't complete that Spotify action."
-
-        return None
+            from modules.memory.service import memory_service
+            items = memory_service.context_for(prompt, limit=int(config.get("memory.max_context_items", 6)))
+        except Exception:
+            return []
+        if not items:
+            return []
+        lines = "\n".join(f"- {i}" for i in items)
+        return [{"role": "system", "content": (
+            "Facts the user previously asked you to remember (use them only if relevant; do not "
+            "invent other personal facts):\n" + lines)}]
 
     # ------------------------------------------------------------------ #
     # Streaming API
@@ -470,19 +198,21 @@ class AIModule(BaseModule):
         turn_id: int = 0,
         request_id: str = "",
     ) -> None:
-        """
-        Stream response tokens via on_token(). Meant to be called from a
-        worker thread. When done, calls on_done(full_text).
+        """Handle one user turn. Called from a worker thread.
 
-        is_interruption=True means the user cut off SAINT mid-sentence;
-        handle_interruption() is used instead of add_user_turn().
-        turn_id is used to filter stale tokens from cancelled generations.
+        1. The agent (deterministic intents + real tools) answers if it can.
+        2. Otherwise the configured LLM answers, with relevant memories and —
+           for action-like requests on a tool-capable model — function calling.
+        Tokens stream through on_token(); on_done(full_text) fires at the end.
         """
+        import logging
+        import uuid
+        _ai_log = logging.getLogger("saint.ai")
+
         self._cancel_flag.clear()
         self._turn_id = turn_id
         self._active_turn_id = turn_id
-
-        import uuid
+        self.expects_reply = False
         if not request_id:
             request_id = uuid.uuid4().hex[:12]
         stream_id = f"stream_{turn_id}_{uuid.uuid4().hex[:8]}"
@@ -496,182 +226,142 @@ class AIModule(BaseModule):
         temperature = config.get("ai.temperature", 0.7)
         timeout = config.get("ai.timeout_seconds", 60)
 
-        provider = get_provider(provider_name)
-
-        # Resolve the model against what's actually available (Ollama).
-        model, model_info = self._resolve_model(provider_name, base_url, configured_model)
-        import logging
-        _ai_log = logging.getLogger("saint.ai")
-        if model_info:
-            _ai_log.warning(
-                "Configured model '%s' is not installed; using available model "
-                "'%s'. Installed: %s. Set your model in Settings.",
-                model_info["configured"], model_info["resolved"], model_info["available"],
-            )
-            event_bus.emit_event(EventType.WARNING, {
-                "message": (
-                    f"Configured AI model '{model_info['configured']}' not found. "
-                    f"Using '{model_info['resolved']}'. Pull the model or change it "
-                    f"in Settings."
-                ),
-            })
-        _ai_log.info("AI request: provider=%s model=%s (configured=%s)",
-                     provider_name, model, configured_model)
-
-        # Test provider connection on first use
-        if not hasattr(self, '_provider_tested') or not self._provider_tested:
-            self._provider_tested = True
-            try:
-                test_result = provider.test_connection(base_url)
-                event_bus.emit_event(EventType.AI_PROVIDER_TEST, {
-                    "provider": provider_name,
-                    "model": model,
-                    "connected": test_result.get("connected", False),
-                    "details": test_result,
-                })
-                if not test_result.get("connected", False):
-                    event_bus.emit_event(EventType.WARNING, {
-                        "message": f"AI provider '{provider_name}' not connected: {test_result.get('error', 'unknown')}. Falling back to mock may occur."
-                    })
-            except Exception as e:
-                event_bus.emit_event(EventType.WARNING, {
-                    "message": f"AI provider test failed: {e}"
-                })
-
         if is_interruption:
             self._context.handle_interruption(prompt)
         else:
             self._context.add_user_turn(prompt)
 
-        messages = self._context.format_messages()
-
-        # Detailed request logging for debugging
         event_bus.emit_event(EventType.AI_REQUEST, {
-            "turn_id": turn_id,
-            "request_id": request_id,
-            "stream_id": stream_id,
-            "user_text": prompt,
-            "prompt_length": len(prompt),
-            "model": model,
-            "provider": provider_name,
-            "conversation_history_length": len(messages),
-            "system_prompt": config.get("voice.system_prompt", "")[:100],
+            "turn_id": turn_id, "request_id": request_id, "stream_id": stream_id,
+            "user_text": prompt, "prompt_length": len(prompt), "provider": provider_name,
         })
         start = time.perf_counter()
 
-        # Execute real integration actions before asking the LLM to answer.
-        # This prevents hallucinated actions such as "*Spotify plays*" when
-        # the connected service was never actually called.
-        integration_response = self._try_integration_command(prompt)
-        if integration_response is not None:
+        # ---- 1. Agent: deterministic intents executed through real tools ----
+        from modules.agent.agent import agent
+        try:
+            result = agent.handle(prompt)
+        except Exception:
+            _ai_log.exception("agent.handle_failed")
+            result = None
+        if result is not None:
             if self._cancel_flag.is_set():
                 if on_done:
                     on_done("")
                 return
-
-            on_token(integration_response)
+            self.expects_reply = result.expects_reply
+            on_token(result.text)
             elapsed = time.perf_counter() - start
-            self._context.add_assistant_turn(integration_response)
+            self._context.add_assistant_turn(result.text)
             event_bus.emit_event(EventType.AI_STREAM_DONE, {
-                "turn_id": turn_id,
-                "request_id": request_id,
-                "stream_id": stream_id,
-                "elapsed_seconds": round(elapsed, 3),
-                "response_length": len(integration_response),
-                "tool_routed": True,
+                "turn_id": turn_id, "request_id": request_id, "stream_id": stream_id,
+                "elapsed_seconds": round(elapsed, 3), "response_length": len(result.text),
+                "tool_routed": True, "intent": result.intent, "ok": result.ok,
             })
             event_bus.emit_event(EventType.LATENCY_MODEL, {
-                "ms": round(elapsed * 1000, 1),
-                "turn_id": turn_id,
-                "request_id": request_id,
-                "tool_routed": True,
-            })
+                "ms": round(elapsed * 1000, 1), "turn_id": turn_id, "request_id": request_id,
+                "tool_routed": True})
             if on_done:
-                on_done(integration_response)
+                on_done(result.text)
             return
 
+        # ---- 2. LLM ------------------------------------------------------------
+        provider = get_provider(provider_name)
+        model, model_info = self._resolve_model(provider_name, base_url, configured_model)
+        if model_info:
+            _ai_log.warning("Configured model '%s' is not installed; using '%s'. Installed: %s.",
+                            model_info["configured"], model_info["resolved"], model_info["available"])
+            event_bus.emit_event(EventType.WARNING, {"message": (
+                f"Configured AI model '{model_info['configured']}' not found. Using "
+                f"'{model_info['resolved']}'. Pull the model or change it in Settings.")})
+
+        if not getattr(self, "_provider_tested", False):
+            self._provider_tested = True
+            try:
+                test_result = provider.test_connection(base_url)
+                event_bus.emit_event(EventType.AI_PROVIDER_TEST, {
+                    "provider": provider_name, "model": model,
+                    "connected": test_result.get("connected", False), "details": test_result})
+            except Exception as e:
+                _ai_log.warning("AI provider test failed: %s", e)
+
+        messages = self._context.format_messages()
+        memory_msgs = self._memory_messages(prompt)
+        if memory_msgs:
+            insert_at = 1 if messages and messages[0]["role"] == "system" else 0
+            messages[insert_at:insert_at] = memory_msgs
+
+        use_tools = (provider_name == "ollama" and config.get("ai.tool_calling", True)
+                     and config.get("agent.enabled", True))
+        if use_tools:
+            from modules.agent.llm import might_need_tool, model_supports_tools
+            use_tools = might_need_tool(prompt) and model_supports_tools(model, base_url)
+        _ai_log.info("AI request: provider=%s model=%s tools=%s memories=%d",
+                     provider_name, model, use_tools, len(memory_msgs))
+
         _current_turn_id = turn_id
-        _current_stream_id = stream_id
-        _current_request_id = request_id
-        first_token_emitted = [False]
+        first_token = [True]
 
         def _safe_on_token(tok: str):
             if _current_turn_id != self._turn_id:
                 return
-            if not first_token_emitted[0]:
-                first_token_emitted[0] = True
+            if first_token[0]:
+                first_token[0] = False
             on_token(tok)
             event_bus.emit_event(EventType.AI_STREAM_TOKEN, {
-                "token": tok,
-                "turn_id": _current_turn_id,
-                "stream_id": _current_stream_id,
-                "request_id": _current_request_id,
-            })
+                "token": tok, "turn_id": _current_turn_id, "stream_id": stream_id,
+                "request_id": request_id})
 
         try:
-            full_text = provider.stream_send(
-                messages=messages,
-                model=model,
-                api_key=api_key,
-                base_url=base_url,
-                temperature=temperature,
-                timeout=timeout,
-                on_token=_safe_on_token,
-                cancel_flag=self._cancel_flag,
-            )
+            if use_tools:
+                from modules.agent.llm import run_with_tools
+                full_text, info = run_with_tools(messages, model, base_url, temperature, timeout,
+                                                 _safe_on_token, self._cancel_flag)
+                self.expects_reply = bool(info.get("expects_reply"))
+            else:
+                full_text = provider.stream_send(
+                    messages=messages, model=model, api_key=api_key, base_url=base_url,
+                    temperature=temperature, timeout=timeout, on_token=_safe_on_token,
+                    cancel_flag=self._cancel_flag)
         except ProviderError as e:
-            # A real provider failure must NEVER silently become a fabricated
-            # mock response (that produced "I understand." for unrelated input).
-            # Report a clear, honest error. The mock provider is only used when
-            # explicitly configured (provider == "mock") for dev/testing.
+            # A real provider failure must never become a fabricated reply.
             _ai_log.error("AI provider '%s' (model=%s) failed: %s", provider_name, model, e)
             event_bus.emit_event(EventType.AI_ERROR, {
                 "error": str(e), "turn_id": turn_id, "request_id": request_id,
-                "provider": provider_name, "model": model,
-            })
-
+                "provider": provider_name, "model": model})
             from modules.ai.providers import ModelNotFoundError, ConnectionError as _ConnErr
             if isinstance(e, ModelNotFoundError):
-                spoken = (f"I can't answer right now — the language model "
-                          f"\"{model}\" isn't installed. Please pull it or pick "
-                          f"another model in settings.")
+                spoken = (f"I can't answer right now — the language model \"{model}\" isn't installed. "
+                          f"Please pull it or pick another model in settings.")
             elif isinstance(e, _ConnErr):
-                spoken = ("I can't reach my language model right now. Please "
-                          "make sure Ollama is running.")
+                spoken = "I can't reach my language model right now. Please make sure Ollama is running."
             else:
-                spoken = ("I ran into a problem reaching my language model, so "
-                          "I couldn't answer that.")
-
-            # Speak the truthful error, but do NOT add it to conversation
-            # history (avoid polluting future context with error text).
+                spoken = "I ran into a problem reaching my language model, so I couldn't answer that."
             if not self._cancel_flag.is_set():
                 on_token(spoken)
             event_bus.emit_event(EventType.AI_STREAM_DONE, {
                 "turn_id": turn_id, "request_id": request_id, "stream_id": stream_id,
-                "response_length": len(spoken), "error": True,
-            })
+                "response_length": len(spoken), "error": True})
             if on_done:
                 on_done(spoken)
             return
         except Exception as e:
-            event_bus.emit_event(EventType.AI_ERROR, {"error": f"Unexpected error: {e}", "turn_id": turn_id, "request_id": request_id})
+            _ai_log.exception("ai.unexpected_error")
+            event_bus.emit_event(EventType.AI_ERROR, {"error": f"Unexpected error: {e}",
+                                                      "turn_id": turn_id, "request_id": request_id})
             raise
 
         elapsed = time.perf_counter() - start
-
         if self._cancel_flag.is_set():
-            event_bus.emit_event(EventType.AI_CANCELLED, {"reason": "interrupted", "turn_id": turn_id, "request_id": request_id})
+            event_bus.emit_event(EventType.AI_CANCELLED, {"reason": "interrupted", "turn_id": turn_id,
+                                                          "request_id": request_id})
         else:
             self._context.add_assistant_turn(full_text)
             event_bus.emit_event(EventType.AI_STREAM_DONE, {
-                "turn_id": turn_id,
-                "request_id": request_id,
-                "stream_id": stream_id,
-                "elapsed_seconds": round(elapsed, 3),
-                "response_length": len(full_text),
-            })
-            event_bus.emit_event(EventType.LATENCY_MODEL, {"ms": round(elapsed * 1000, 1), "turn_id": turn_id, "request_id": request_id})
-
+                "turn_id": turn_id, "request_id": request_id, "stream_id": stream_id,
+                "elapsed_seconds": round(elapsed, 3), "response_length": len(full_text)})
+            event_bus.emit_event(EventType.LATENCY_MODEL, {"ms": round(elapsed * 1000, 1),
+                                                           "turn_id": turn_id, "request_id": request_id})
         if on_done:
             on_done(full_text)
 

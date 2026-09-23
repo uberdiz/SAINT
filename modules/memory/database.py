@@ -66,7 +66,9 @@ class MemoryEntry:
 class MemoryDatabase:
     """Thread-safe SQLite database for persistent memory."""
 
-    def __init__(self, path: str = "data/memory/saint_memory.db"):
+    def __init__(self, path: Optional[str] = None):
+        from core.paths import data_path
+        path = str(path or data_path("memory", "saint_memory.db"))
         self._path = path
         self._lock = threading.Lock()
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
@@ -171,6 +173,19 @@ class MemoryDatabase:
                 sql += " ORDER BY created_at DESC LIMIT ?"
                 params.append(limit)
                 rows = conn.execute(sql, params).fetchall()
+                return [MemoryEntry.from_row(row) for row in rows]
+
+    def all_of_types(self, types: List[MemoryType], limit: int = 2000) -> List[MemoryEntry]:
+        """All entries of the given types, newest first."""
+        if not types:
+            return []
+        with self._lock:
+            with self._conn() as conn:
+                marks = ",".join("?" for _ in types)
+                rows = conn.execute(
+                    f"SELECT * FROM memory WHERE type IN ({marks}) ORDER BY updated_at DESC LIMIT ?",
+                    [t.value for t in types] + [limit],
+                ).fetchall()
                 return [MemoryEntry.from_row(row) for row in rows]
 
     def list_by_type(

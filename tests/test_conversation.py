@@ -396,3 +396,31 @@ def test_05_context_survives_interruption(mock_setup):
         "No [interrupted] marker in context"
 
     print(f"\n[Test 5 PASS] Context turns: {len(history)}, last: {history[-1]['content'][:80]!r}")
+
+
+# ===========================================================================
+# Test 6 — New speech while SAINT is speaking is processed (not dropped)
+# ===========================================================================
+def test_06_speech_during_speaking_is_processed(mock_setup):
+    from core.conversation import ConvState
+    from core.events import event_bus, EventType
+
+    ctrl = mock_setup["ctrl"]
+    voice = mock_setup["voice"]
+    starts = []
+
+    def on_ev(ev):
+        if ev.type == EventType.CONVERSATION_TURN_START:
+            starts.append(ev.payload["text"])
+
+    event_bus.subscribe(on_ev)
+    try:
+        voice.inject_utterance("What's Python?")
+        assert wait_for(lambda: ctrl.state in (ConvState.THINKING, ConvState.SPEAKING), 3.0)
+        # The user talks over SAINT with a new request (no explicit interrupt event).
+        event_bus.emit_event(EventType.VOICE_STT_FINAL, {"text": "Actually Lua.", "confidence": 0.9,
+                                                         "session_id": 424242, "wake": True})
+        assert wait_for(lambda: "Actually Lua." in starts, 3.0), starts
+        assert wait_for(lambda: ctrl.state == ConvState.IDLE, 8.0)
+    finally:
+        event_bus.unsubscribe(on_ev)

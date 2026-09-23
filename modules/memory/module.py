@@ -39,11 +39,91 @@ class MemoryModule(BaseModule):
     def enable(self):
         super().enable()
         self._db = get_memory_db()
-        event_bus.emit_event(EventType.MODULE_ENABLED, {"module": self.name})
+        self._register_tools()
+
+    # ------------------------------------------------------------------ #
+    # Tools (the agent and LLM use these; nothing else writes memory)
+    # ------------------------------------------------------------------ #
+    def _register_tools(self):
+        from modules.automation.tools import Tool, PermissionLevel, P, ToolError, get_tool_registry
+        from modules.memory.service import memory_service, second_person
+
+        def available():
+            if not config.get("modules.memory", True) or not config.get("memory.enabled", True):
+                return False, "Memory is turned off in Settings."
+            return True, ""
+
+        def remember(content="", key="", value="", category="fact"):
+            try:
+                return memory_service.remember(content=content, key=key, value=value, category=category)
+            except ValueError as e:
+                raise ToolError(str(e), "INVALID")
+
+        def recall(query, limit=5):
+            hits = memory_service.recall(query, limit=limit)
+            return {"memories": [{"id": h.entry.id, "content": h.entry.content, "key": h.key,
+                                  "value": h.value, "spoken": second_person(h.entry.content),
+                                  "score": round(h.score, 2)} for h in hits]}
+
+        def list_memories(category=None):
+            return {"memories": [e.to_dict() for e in memory_service.all(category)]}
+
+        def update(id, content=None, value=None):
+            if not memory_service.update(id, content=content, value=value):
+                raise ToolError(f"There's no memory #{id}.", "NOT_FOUND")
+            return {"id": id, "updated": True}
+
+        def forget(id=None, query=None):
+            if id is not None:
+                if not memory_service.forget(id):
+                    raise ToolError(f"There's no memory #{id}.", "NOT_FOUND")
+                return {"deleted": [id]}
+            if not query:
+                raise ToolError("Tell me what to forget.", "INVALID")
+            try:
+                deleted = memory_service.forget_matching(query)
+            except ValueError as e:
+                raise ToolError(f"That matches more than one memory ({str(e)[11:]}). Which one?", "AMBIGUOUS")
+            if not deleted:
+                raise ToolError(f"I don't have anything stored about {second_person(query)}.", "NOT_FOUND")
+            return {"deleted": [d["id"] for d in deleted], "content": [d["content"] for d in deleted]}
+
+        def forget_all():
+            return {"deleted": memory_service.forget_all()}
+
+        reg = get_tool_registry()
+        cat = ["fact", "preference", "personal", "project"]
+        tools = [
+            Tool("memory.remember", "Store a fact or preference about the user in long-term memory",
+                 {"content": "string"}, PermissionLevel.LOW, remember,
+                 parameters={"content": P("string", "the fact, in the user's words", required=False, default=""),
+                             "key": P("string", "short topic, e.g. 'favorite programming language'", required=False, default=""),
+                             "value": P("string", "the value, e.g. 'Python'", required=False, default=""),
+                             "category": P("string", required=False, default="fact", enum=cat)},
+                 llm_exposed=True, category="memory"),
+            Tool("memory.recall", "Search long-term memory for stored facts about the user",
+                 {"query": "string"}, PermissionLevel.LOW, recall,
+                 parameters={"query": P("string", "what to look up"),
+                             "limit": P("integer", required=False, default=5, minimum=1, maximum=20)},
+                 llm_exposed=True, category="memory"),
+            Tool("memory.list", "List everything in long-term memory", {}, PermissionLevel.LOW, list_memories,
+                 parameters={"category": P("string", required=False, enum=cat)}, category="memory"),
+            Tool("memory.update", "Change a stored memory by id", {"id": "int"}, PermissionLevel.LOW, update,
+                 parameters={"id": P("integer"), "content": P("string", required=False),
+                             "value": P("string", required=False)}, category="memory"),
+            Tool("memory.forget", "Delete a memory by id or by description",
+                 {"id": "int (optional)", "query": "string (optional)"}, PermissionLevel.MEDIUM, forget,
+                 parameters={"id": P("integer", required=False), "query": P("string", required=False)},
+                 llm_exposed=True, category="memory"),
+            Tool("memory.forget_all", "Delete ALL long-term memories", {}, PermissionLevel.HIGH, forget_all,
+                 parameters={}, category="memory"),
+        ]
+        for t in tools:
+            t.availability = available
+            reg.register(t)
 
     def disable(self):
         super().disable()
-        event_bus.emit_event(EventType.MODULE_DISABLED, {"module": self.name})
 
     # ------------------------------------------------------------------ #
     # High-level API

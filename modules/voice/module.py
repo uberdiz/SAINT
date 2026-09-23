@@ -1,62 +1,85 @@
 """
 modules/voice/module.py
 
-VoiceModule — Milestone 1 implementation.
+VoiceModule — microphone capture, wake word, VAD, STT and barge-in.
 
-Responsibilities:
-  - Capture audio from the selected microphone (sounddevice)
-  - Run VAD to detect speech onset / offset
-  - Collect speech frames into an utterance buffer
-  - Route the utterance to the STT engine
-  - Emit VOICE_STT_PARTIAL and VOICE_STT_FINAL events
-  - Detect user interruption while SAINT is speaking
-  - Support Always-On and Push-to-Talk modes
-  - Expose audio level for the waveform meter UI
+Listening phases (independent of the UI):
 
-The module does NOT call the AI or TTS directly — it only fires events.
-The ConversationController (core/conversation.py) wires everything together.
+    WAKE      only the local wake-word model runs. Speech is buffered
+              tentatively (cheap RMS VAD) but never transcribed.
+    COMMAND   "Hey SAINT" was heard (or SAINT was interrupted / a follow-up
+              window is open): the next utterance is captured and sent to STT.
+              The utterance that contained the wake phrase is included, so
+              "Hey SAINT, play Daft Punk" and "Hey SAINT ... play Daft Punk"
+              both work. Times out back to WAKE if nothing is said.
+    OPEN      wake word disabled / unavailable: every utterance goes to STT
+              and must pass the transcript activation gate.
+
+Barge-in: while SAINT is speaking the mic keeps running. Microphone energy is
+compared with the level of the audio SAINT is playing (core.audio_echo), so
+SAINT's own voice through the speakers does not trigger an interruption but
+the user talking over it does. On barge-in the controller stops TTS and the
+user's utterance (including the frames that triggered the barge-in) becomes
+the next command.
+
+The module never calls the AI or TTS directly — it only emits events. The
+ConversationController (core/conversation.py) wires everything together.
 """
 
+import collections
+import logging
 import queue
 import re
+import string
 import threading
 import time
-import logging
+from enum import Enum
 from typing import Optional
 
 import numpy as np
 
 from modules.base import BaseModule
 from modules.voice.vad import make_vad, RmsVAD
-from modules.voice.stt import make_stt, STTEngine, MockSTT
-from modules.voice.wake_word import make_wake_word_detector, OpenWakeWordDetector
-from modules.voice.voice_state import get_voice_state, VoiceState
+from modules.voice.stt import make_stt, STTEngine
+from modules.voice.wake_word import make_wake_word_detector, OnnxWakeWordDetector
+from core.assistant_state import assistant_state, AssistantState
+from core.audio_echo import playback_monitor, EchoGate
 from core.events import event_bus, EventType
 from core.config import config
 
+log = logging.getLogger("saint.voice")
+
 # Audio settings
-SAMPLE_RATE = 16000     # Hz — Whisper requires 16 kHz
+SAMPLE_RATE = 16000     # Hz — Whisper and the wake model require 16 kHz
 CHANNELS = 1
 CHUNK_MS = 30           # milliseconds per VAD frame
 CHUNK_FRAMES = int(SAMPLE_RATE * CHUNK_MS / 1000)
+PREROLL_MS = 1500       # audio kept before speech onset / barge-in
+MAX_TENTATIVE_MS = 12000
 
-# Audio level logging throttle
-_LAST_LEVEL_LOG = 0.0
-_LAST_LEVEL_LOG_TIME = 0.0
-
-# STT session state machine
-STT_STATE_CREATED = "CREATED"
-STT_STATE_RECORDING = "RECORDING"
-STT_STATE_ENDED = "ENDED"
+# STT session states (kept for diagnostics)
 STT_STATE_TRANSCRIBING = "TRANSCRIBING"
-STT_STATE_TRANSCRIBED = "TRANSCRIBED"
 STT_STATE_SUBMITTED = "SUBMITTED"
 STT_STATE_COMPLETED = "COMPLETED"
 
 
+class ListenPhase(str, Enum):
+    WAKE = "wake"
+    COMMAND = "command"
+    OPEN = "open"
+
+
+def _rms(x: np.ndarray) -> float:
+    if len(x) == 0:
+        return 0.0
+    if x.dtype == np.int16:
+        x = x.astype(np.float32) / 32768.0
+    return float(np.sqrt(np.mean(np.square(x))))
+
+
 class VoiceModule(BaseModule):
     name = "Voice"
-    description = "Voice input and speech recognition."
+    description = "Wake word, voice input, speech recognition and interruption handling."
 
     def __init__(self):
         super().__init__()
@@ -73,81 +96,62 @@ class VoiceModule(BaseModule):
             "Interruption Detection": True,
         }
 
-        # Use centralized voice state machine
-        self._voice_state = get_voice_state()
-
-        # Voice State Manager — single authoritative state
-        self._voice_active = False     # microphone capture is active
-        self._listening = False         # listening process is running
+        self._voice_active = False
+        self._listening = False
         self._ptt_held = False
         self._speaking = False
 
-        # Interrupt debouncing
-        self._last_interrupt_time = 0.0
-        self._interrupt_debounce_sec = 0.5  # 500ms debounce
-
-        # Audio machinery
         self._audio_queue: queue.Queue = queue.Queue()
         self._stream = None
+        self._actual_sr = SAMPLE_RATE
         self._vad: Optional[RmsVAD] = None
         self._stt: Optional[STTEngine] = None
-        self._wake: Optional[OpenWakeWordDetector] = None
+        self._wake: Optional[OnnxWakeWordDetector] = None
+        self._wake_error: str = ""
 
-        # Wake-word "wake window": a detection opens a timed window during which
-        # the STT activation gate is bypassed (explicit "Hey SAINT, ..."). The
-        # always-on path is unaffected — commands still work without the wake
-        # word, they just go through the normal confidence gate.
-        self._wake_until: float = 0.0
-        self._wake_window_sec: float = 8.0
-        self._wake_lock = threading.Lock()
+        self._phase = ListenPhase.OPEN
+        self._phase_lock = threading.RLock()
+        self._command_deadline = 0.0
+        self._command_reason = ""
+        self._awaiting_stt = False
+        self._last_wake_time = 0.0
 
-        # Worker threads
-        self._capture_thread: Optional[threading.Thread] = None
         self._process_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
+        self._stt_cancelled = threading.Event()
+        self._stt_worker: Optional[threading.Thread] = None
+        self._last_audio_time = 0.0
+        self._mic_error: str = ""
 
-        # Speech session ID — each speech session gets a unique ID
-        self._speech_session_id: int = 0
+        self._speech_session_id = 0
         self._speech_id_lock = threading.Lock()
 
-        # Cancel STT processing flag
-        self._stt_cancelled = threading.Event()
-
-        # TTS playback state — set by TTS engine when audio actually plays
         self._tts_playback_active = False
         self._tts_playback_lock = threading.Lock()
 
-        # Current turn_id being processed (for queue cancellation)
-        self._current_turn_id: int = -1
-        self._turn_id_lock = threading.Lock()
+        self._audio_level = 0.0
+        self._last_level_event_time = 0.0
+        self._last_score_event_time = 0.0
 
-        # Barge-in: track pending interrupt from VAD during TTS
-        self._pending_barge_in = False
-
-        # STT worker thread (non-blocking Whisper)
-        self._stt_worker: Optional[threading.Thread] = None
-        self._stt_worker_queue: queue.Queue = queue.Queue()
-        self._stt_worker_stop = threading.Event()
-        self._audio_level: float = 0.0
-        self._last_level_event_time: float = 0.0
-
-        # Diagnostics
-        self._stt_device_info: str = ""
-        self._tts_device_info: str = ""
-        self._worker_id_counter: int = 0
-        self._active_workers: dict = {}
-        self._worker_id_lock = threading.Lock()
-
-        # STT session state machine per session
+        self._stt_device_info = ""
         self._stt_session_state: dict = {}
         self._stt_session_state_lock = threading.Lock()
 
-        # Audio level logging throttle
-        self._last_level_log_time = 0.0
+        self._echo_gate = EchoGate(
+            margin=config.get("voice.barge_in_echo_margin", 2.5),
+            min_ms=config.get("voice.barge_in_min_ms", 240),
+            frame_ms=CHUNK_MS,
+            initial_coupling=0.3,
+        )
+        self._barge_in_count = 0
 
+        event_bus.subscribe(self._on_bus_event)
+
+    # ------------------------------------------------------------------ #
+    # Properties / diagnostics
+    # ------------------------------------------------------------------ #
     @property
     def voice_active(self) -> bool:
-        """Single authoritative answer: is microphone capture active?"""
         return self._voice_active
 
     @property
@@ -155,47 +159,49 @@ class VoiceModule(BaseModule):
         return self._audio_level
 
     @property
+    def phase(self) -> ListenPhase:
+        with self._phase_lock:
+            return self._phase
+
+    @property
+    def wake_mode(self) -> bool:
+        return bool(self._wake is not None and self._wake.ready)
+
+    def wake_status(self) -> dict:
+        enabled = bool(config.get("voice.wake_word_enabled", True))
+        if not enabled:
+            return {"enabled": False, "ready": False, "error": "", "code": "DISABLED"}
+        if self._wake is None:
+            return {"enabled": True, "ready": False,
+                    "error": self._wake_error or "Wake word not initialised yet.",
+                    "code": "NOT_LOADED"}
+        st = self._wake.status
+        return {"enabled": True, "ready": st.ready, "error": st.error, "code": st.code,
+                "model_path": st.model_path, "threshold": st.threshold,
+                "avg_infer_ms": round(self._wake.avg_infer_ms, 2)}
+
+    @property
     def diagnostics(self) -> dict:
         return {
             "voice_active": self._voice_active,
             "listening": self._listening,
             "ptt_active": self._ptt_held,
-            "stream_active": self._stream is not None and hasattr(self._stream, 'active') and self._stream.active if self._stream else False,
+            "phase": self.phase.value,
+            "stream_active": bool(self._stream is not None and getattr(self._stream, "active", False)),
             "stt_loaded": self._stt is not None,
-            "tts_loaded": False,
             "stt_device": self._stt_device_info,
-            "tts_device": self._tts_device_info,
-            "active_workers": list(self._active_workers.values()),
             "speech_session_id": self._speech_session_id,
-            "wake_ready": bool(self._wake and self._wake.ready),
-            "wake_active": self._in_wake_window(),
+            "wake": self.wake_status(),
+            "mic_error": self._mic_error,
+            "echo_coupling": round(self._echo_gate.coupling, 3),
+            "barge_ins": self._barge_in_count,
         }
 
     # ------------------------------------------------------------------ #
-    # Worker tracking
-    # ------------------------------------------------------------------ #
-    def _register_worker(self, name: str) -> int:
-        with self._worker_id_lock:
-            self._worker_id_counter += 1
-            wid = self._worker_id_counter
-            self._active_workers[str(wid)] = name
-            return wid
-
-    def _unregister_worker(self, wid: int):
-        with self._worker_id_lock:
-            self._active_workers.pop(str(wid), None)
-
-    def _log_worker_state(self):
-        with self._worker_id_lock:
-            if self._active_workers:
-                pass
-
-    # ------------------------------------------------------------------ #
-    # Enable / disable
+    # Enable / engines
     # ------------------------------------------------------------------ #
     def enable(self):
         super().enable()
-        # Idempotent: only init engines once
         if self._vad is None or self._stt is None:
             self._init_engines()
 
@@ -208,58 +214,86 @@ class VoiceModule(BaseModule):
         if stt_backend == "faster_whisper":
             stt_device = config.get("voice.stt_device", "cuda")
             stt_compute = config.get("voice.stt_compute_type", "float16")
-            stt_model = config.get("voice.stt_model", "tiny.en")
-            stt_lang = config.get("voice.stt_language", "en")
+            stt_model = config.get("voice.stt_model", "base.en")
             self._stt = make_stt(
                 "faster_whisper",
                 model_name=stt_model,
                 device=stt_device,
                 compute_type=stt_compute,
-                language=stt_lang,
+                language=config.get("voice.stt_language", "en"),
             )
             self._stt_device_info = f"{stt_device}/{stt_compute}/{stt_model}"
-            threading.Thread(
-                target=self._warmup_stt,
-                daemon=True,
-                name="voice-warmup",
-            ).start()
+            threading.Thread(target=self._warmup_stt, daemon=True, name="voice-warmup").start()
         else:
             self._stt = make_stt("mock")
             self._stt_device_info = "mock"
 
-        # Wake word (openWakeWord) — optional, gated by voice.wake_word_enabled.
-        self._wake_window_sec = config.get("voice.wake_word_window_sec", 8.0)
+        self.reload_wake_word()
+
+    def reload_wake_word(self):
+        """(Re)create the wake-word detector from current settings."""
         try:
             self._wake = make_wake_word_detector()
-        except Exception as e:
-            logging.getLogger("saint.voice").warning(f"wake.init_failed: {e}")
+            self._wake_error = ""
+        except Exception as e:  # defensive: never break voice because of the wake word
             self._wake = None
-        self.subtasks["Wake Word Detection"] = bool(self._wake and self._wake.ready)
+            self._wake_error = f"Wake word failed to initialise: {e}"
+            log.exception("wake.init_failed")
+        status = self.wake_status()
+        self.subtasks["Wake Word Detection"] = bool(status.get("ready"))
+        event_bus.emit_event(EventType.WAKE_STATUS, status)
+        if status.get("enabled") and not status.get("ready"):
+            event_bus.emit_event(EventType.WAKE_ERROR, {"error": status.get("error"),
+                                                        "code": status.get("code")})
+        with self._phase_lock:
+            self._phase = ListenPhase.WAKE if self.wake_mode else ListenPhase.OPEN
+        if self._listening:
+            self._apply_resting_state()
 
     def _warmup_stt(self):
         try:
             if self._stt:
                 self._stt.warm_up()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("stt.warmup_failed %s", e)
+            event_bus.emit_event(EventType.VOICE_STT_ERROR, {"error": f"STT warm-up failed: {e}"})
+
+    def _apply_resting_state(self):
+        if not self._listening:
+            assistant_state.set_resting(AssistantState.OFFLINE,
+                                        detail=self._mic_error)
+        elif self.wake_mode:
+            assistant_state.set_resting(AssistantState.WAKE_LISTENING)
+        else:
+            detail = ""
+            if config.get("voice.wake_word_enabled", True):
+                detail = "Wake word unavailable — responding to all speech"
+            assistant_state.set_resting(AssistantState.LISTENING, detail=detail)
 
     # ------------------------------------------------------------------ #
-    # Listening control — single authoritative lifecycle
+    # Listening lifecycle
     # ------------------------------------------------------------------ #
-    def start_listening(self):
+    def start_listening(self) -> bool:
         if self._listening:
-            return
-        self._voice_active = True
-        self._listening = True
+            return True
+        if self._vad is None:
+            self._init_engines()
         self._stop_event.clear()
         self._stt_cancelled.clear()
-        self._register_worker("mic_capture")
-        self._process_thread = threading.Thread(
-            target=self._process_loop, daemon=True, name="voice-process"
-        )
+        self._mic_error = ""
+        if not self._start_stream():
+            return False
+        self._voice_active = True
+        self._listening = True
+        with self._phase_lock:
+            self._phase = ListenPhase.WAKE if self.wake_mode else ListenPhase.OPEN
+        self._process_thread = threading.Thread(target=self._process_loop, daemon=True,
+                                                name="voice-process")
         self._process_thread.start()
-        self._start_stream()
-        event_bus.emit_event(EventType.VOICE_LISTENING_START)
+        event_bus.emit_event(EventType.VOICE_LISTENING_START, {"phase": self.phase.value})
+        log.info("voice.listening.start phase=%s", self.phase.value)
+        self._apply_resting_state()
+        return True
 
     def stop_listening(self):
         if not self._listening:
@@ -269,26 +303,21 @@ class VoiceModule(BaseModule):
         self._stop_event.set()
         self._stop_stream()
         self._stt_cancelled.set()
-        if self._stt_worker and self._stt_worker.is_alive():
-            self._stt_worker.join(timeout=2.0)
         if self._process_thread:
             self._process_thread.join(timeout=3.0)
             self._process_thread = None
         event_bus.emit_event(EventType.VOICE_LISTENING_STOP)
+        log.info("voice.listening.stop")
+        self._apply_resting_state()
 
     def stop(self):
-        """Full shutdown: stop everything."""
         self.stop_listening()
-        self._stream = None
 
-    # ------------------------------------------------------------------ #
-    # Push-to-talk
-    # ------------------------------------------------------------------ #
     def ptt_toggle(self, held: bool):
         self._ptt_held = held
 
     # ------------------------------------------------------------------ #
-    # External state
+    # External state (set by the conversation controller)
     # ------------------------------------------------------------------ #
     def set_saint_speaking(self, speaking: bool):
         self._speaking = speaking
@@ -297,56 +326,64 @@ class VoiceModule(BaseModule):
         with self._tts_playback_lock:
             if self._tts_playback_active != active:
                 self._tts_playback_active = active
-                import logging
-                logging.getLogger("saint.voice").info(
-                    f"voice.tts.playback {'start' if active else 'stop'}"
-                )
+                log.debug("voice.tts.playback %s", "start" if active else "stop")
+        if not active:
+            self._echo_gate.reset_run()
 
     def is_tts_playback_active(self) -> bool:
         with self._tts_playback_lock:
             return self._tts_playback_active
 
-    # ------------------------------------------------------------------ #
-    # Audio level — throttled
-    # ------------------------------------------------------------------ #
-    @property
-    def audio_level(self) -> float:
-        return self._audio_level
+    def _saint_is_talking(self) -> bool:
+        return self._speaking or self.is_tts_playback_active()
 
-    def _emit_audio_level(self, level: float):
-        now = time.perf_counter()
-        # Throttle to ~30Hz for UI, ~2Hz for logging
-        self._last_level_event_time = now
-        event_bus.emit_event(EventType.VOICE_AUDIO_LEVEL, {"level": level})
+    def _on_bus_event(self, ev):
+        if ev.type == EventType.CONVERSATION_TURN_END:
+            if not (self._listening and self.wake_mode):
+                return
+            if ev.payload.get("expects_reply"):
+                # SAINT asked a question (e.g. a confirmation) — accept the
+                # answer without requiring the wake word again.
+                self._enter_command(8.0, reason="awaiting reply", chime=True)
+                return
+            follow = float(config.get("voice.wake_word_followup_sec", 0.0) or 0.0)
+            if follow > 0:
+                self._enter_command(follow, reason="follow-up", chime=False)
 
     # ------------------------------------------------------------------ #
     # Sounddevice stream
     # ------------------------------------------------------------------ #
-    def _start_stream(self):
+    def _start_stream(self) -> bool:
         try:
             import sounddevice as sd
-
             device = config.get("voice.mic_device", None)
-
-            device_info = sd.query_devices(device, 'input')
-            actual_sr = int(device_info['default_samplerate'])
-            self._actual_sr = actual_sr
-
-            blocksize = int(actual_sr * CHUNK_MS / 1000)
-
+            try:
+                device_info = sd.query_devices(device, "input")
+            except Exception:
+                if device is None:
+                    raise
+                log.warning("voice.mic.configured_device_missing device=%s — using default", device)
+                device = None
+                device_info = sd.query_devices(None, "input")
+            self._actual_sr = int(device_info["default_samplerate"])
+            blocksize = int(self._actual_sr * CHUNK_MS / 1000)
             self._stream = sd.InputStream(
-                samplerate=actual_sr,
-                channels=CHANNELS,
-                dtype="int16",
-                blocksize=blocksize,
-                device=device,
-                callback=self._audio_callback,
+                samplerate=self._actual_sr, channels=CHANNELS, dtype="int16",
+                blocksize=blocksize, device=device, callback=self._audio_callback,
             )
             self._stream.start()
+            self._last_audio_time = time.monotonic()
+            log.info("voice.mic.open device=%s name=%r sr=%d", device,
+                     device_info.get("name"), self._actual_sr)
+            return True
         except Exception as e:
-            event_bus.emit_event(EventType.ERROR, {"error": f"Mic open failed: {e}"})
-            self._voice_active = False
-            self._listening = False
+            self._mic_error = f"Microphone unavailable: {e}"
+            log.error("voice.mic.open_failed %s", e)
+            event_bus.emit_event(EventType.ERROR, {"error": self._mic_error, "source": "voice"})
+            assistant_state.set_resting(AssistantState.OFFLINE, detail=self._mic_error)
+            assistant_state.set(AssistantState.ERROR, self._mic_error)
+            self._stream = None
+            return False
 
     def _stop_stream(self):
         if self._stream:
@@ -358,575 +395,489 @@ class VoiceModule(BaseModule):
             self._stream = None
 
     def _audio_callback(self, indata, frames, time_info, status):
-        if status:
-            pass
-        chunk = indata[:, 0].copy()
         if not self._voice_active:
             return
-        self._audio_queue.put(chunk)
-        if self._vad:
-            level = self._vad.get_level(chunk)
-            self._audio_level = level
-            now = time.perf_counter()
-            if now - self._last_level_event_time > 1.0 / 10:
-                self._last_level_event_time = now
-                self._emit_audio_level(level)
+        self._audio_queue.put(indata[:, 0].copy())
+
+    # ------------------------------------------------------------------ #
+    # Phase helpers
+    # ------------------------------------------------------------------ #
+    def _enter_command(self, timeout_sec: float, reason: str, chime: bool = False):
+        with self._phase_lock:
+            self._phase = ListenPhase.COMMAND
+            self._command_deadline = time.monotonic() + timeout_sec
+            self._command_reason = reason
+            self._awaiting_stt = False
+        assistant_state.set(AssistantState.COMMAND_LISTENING, reason)
+        if chime and config.get("voice.wake_word_chime", True):
+            _play_chime()
+
+    def _return_to_rest_phase(self, reason: str = ""):
+        with self._phase_lock:
+            self._phase = ListenPhase.WAKE if self.wake_mode else ListenPhase.OPEN
+            self._awaiting_stt = False
+        if reason:
+            log.info("voice.phase.rest reason=%s", reason)
+        if assistant_state.state in (AssistantState.COMMAND_LISTENING,
+                                     AssistantState.WAKE_DETECTED,
+                                     AssistantState.PROCESSING,
+                                     AssistantState.LISTENING,
+                                     AssistantState.ERROR):
+            assistant_state.return_to_rest()
+
+    def _on_wake_word(self, score: float):
+        self._last_wake_time = time.monotonic()
+        log.info("voice.wake_word.detected score=%.3f", score)
+        event_bus.emit_event(EventType.VOICE_WAKE_WORD, {
+            "keyword": config.get("voice.wake_word", "saint"),
+            "score": round(float(score), 3),
+        })
+        assistant_state.set(AssistantState.WAKE_DETECTED, f"score {score:.2f}")
+        self._enter_command(float(config.get("voice.wake_word_command_timeout_sec", 6.0)),
+                            reason="wake word", chime=True)
 
     # ------------------------------------------------------------------ #
     # Processing loop
     # ------------------------------------------------------------------ #
     def _process_loop(self):
         mode = config.get("voice.mode", "always_on")
-        silence_ms = config.get("voice.silence_duration_ms", 400)
-        silence_frames = int(silence_ms / CHUNK_MS)
-
-        # Minimum speech validation settings
-        min_speech_ms = config.get("voice.min_speech_duration_ms", 300)
-        min_speech_frames = int(min_speech_ms / CHUNK_MS)
+        silence_frames = max(1, int(config.get("voice.silence_duration_ms", 700) / CHUNK_MS))
+        min_speech_frames = max(1, int(config.get("voice.min_speech_duration_ms", 300) / CHUNK_MS))
         min_speech_rms = config.get("voice.min_speech_rms", 0.005)
+        barge_enabled = config.get("voice.barge_in_enabled", True)
+        debug_scores = config.get("voice.wake_word_debug_scores", False)
+        preroll = collections.deque(maxlen=int(PREROLL_MS / CHUNK_MS))
+        max_tentative = int(MAX_TENTATIVE_MS / CHUNK_MS)
 
-        speech_frames = []
-        silence_count = 0
+        seg: list = []
         in_speech = False
-        speech_frame_count = 0  # Count of frames where VAD detected speech
+        silence_count = 0
+        speech_count = 0
+        sid = 0
+        barge_capture = False
+        last_restart_try = 0.0
 
         while not self._stop_event.is_set():
             try:
-                chunk = self._audio_queue.get(timeout=0.1)
+                chunk = self._audio_queue.get(timeout=0.25)
             except queue.Empty:
+                # Mic watchdog: a vanished device stops delivering audio.
+                now = time.monotonic()
+                if self._listening and now - self._last_audio_time > 3.0 and now - last_restart_try > 5.0:
+                    last_restart_try = now
+                    log.warning("voice.mic.stalled — reopening input stream")
+                    self._stop_stream()
+                    if self._start_stream():
+                        self._mic_error = ""
+                        self._apply_resting_state()
+                self._check_command_timeout(in_speech)
                 continue
-
-            # Check cancellation (e.g., stop_listening was called)
             if self._stop_event.is_set() or not self._voice_active:
                 break
+            self._last_audio_time = time.monotonic()
 
-            chunk_np = chunk.astype(np.float32) / 32768.0
+            chunk16 = self._to_16k(chunk)
+            chunk_f = chunk16.astype(np.float32) / 32768.0
+            mic_rms = _rms(chunk_f)
+            preroll.append(chunk16)
+            self._update_level(chunk_f)
 
-            actual_sr = getattr(self, "_actual_sr", SAMPLE_RATE)
-            if actual_sr != SAMPLE_RATE:
-                target_len = int(len(chunk_np) * SAMPLE_RATE / actual_sr)
-                x_old = np.linspace(0, 1, len(chunk_np))
-                x_new = np.linspace(0, 1, target_len)
-                chunk_np = np.interp(x_new, x_old, chunk_np).astype(np.float32)
-                chunk = (chunk_np * 32768.0).astype(np.int16)
-
-            # Wake-word detection runs on every frame, in parallel with VAD/STT.
-            # A hit opens the wake window (gate bypass) but does NOT stop normal
-            # capture — so "Hey SAINT, skip this song" and a bare "skip this
-            # song" both flow through to STT.
-            if self._wake is not None and self._wake.ready:
-                score = self._wake.feed(chunk)
-                if score is not None:
-                    self._on_wake_word(score)
-
-            if mode == "push_to_talk":
-                is_active = self._ptt_held
-            else:
-                is_active = self._voice_active
-
-            if not is_active:
+            if mode == "push_to_talk" and not self._ptt_held and not in_speech:
                 continue
 
-            is_voice = self._vad.feed(chunk_np) if self._vad else False
+            playing = playback_monitor.active()
+            ref = playback_monitor.level() if playing else 0.0
+            raw_voice = self._vad.feed(chunk_f) if self._vad else False
+            if playing:
+                predicted = (self._echo_gate.coupling * ref * self._echo_gate.margin
+                             + self._echo_gate.floor)
+                is_voice = raw_voice and mic_rms > predicted
+            else:
+                is_voice = raw_voice
 
-            # Log VAD detection during TTS for debugging
-            if is_voice and self._speaking:
-                logging.getLogger("saint.voice").debug(
-                    f"voice.vad.detected session_id={self._speech_session_id} "
-                    f"speaking={self._speaking} tts_playback={self.is_tts_playback_active()}"
-                )
+            # ---- SAINT is speaking: only barge-in detection runs ------------
+            if self._saint_is_talking() and not barge_capture:
+                if barge_enabled and raw_voice and self._echo_gate.update(mic_rms, ref):
+                    self._barge_in_count += 1
+                    log.info("voice.barge_in mic_rms=%.4f playback_rms=%.4f coupling=%.3f",
+                             mic_rms, ref, self._echo_gate.coupling)
+                    event_bus.emit_event(EventType.VOICE_BARGE_IN, {
+                        "mic_rms": round(mic_rms, 4), "playback_rms": round(ref, 4)})
+                    event_bus.emit_event(EventType.VOICE_INTERRUPT, {"source": "barge_in"})
+                    # Capture the user's utterance starting a little before
+                    # the gate fired so the first word is not clipped.
+                    barge_capture = True
+                    in_speech = True
+                    silence_count = 0
+                    speech_count = self._echo_gate.min_frames
+                    with self._speech_id_lock:
+                        self._speech_session_id += 1
+                        sid = self._speech_session_id
+                    seg = list(preroll)[-(self._echo_gate.min_frames + 10):]
+                    self._enter_command(8.0, reason="interruption")
+                elif not raw_voice:
+                    self._echo_gate.reset_run()
+                continue
 
-            # Barge-in: user spoke during TTS playback — immediate interrupt
-            if self._speaking and is_voice:
-                now = time.perf_counter()
-                time_since_last = now - self._last_interrupt_time
-                if time_since_last >= self._interrupt_debounce_sec:
-                    self._last_interrupt_time = now
-                    self._pending_barge_in = True
-                    event_bus.emit_event(EventType.VOICE_INTERRUPT, {})
-                    logging.getLogger("saint.voice").info(
-                        f"voice.interruption.detected session_id={self._speech_session_id} "
-                        f"reason=barge_in"
-                    )
-                    # Do NOT transcribe during TTS — barge-in handles it via interrupt
-                    continue
+            # ---- wake word --------------------------------------------------
+            if self._wake is not None and self._wake.ready:
+                score = self._wake.feed(chunk16)
+                self._emit_wake_score(debug_scores)
+                if score is not None:
+                    if playing:
+                        log.debug("voice.wake_word.ignored_during_playback score=%.3f", score)
+                    elif self.phase == ListenPhase.WAKE:
+                        self._on_wake_word(score)
 
+            # ---- segmentation -----------------------------------------------
             if is_voice:
                 if not in_speech:
                     in_speech = True
                     silence_count = 0
-                    speech_frame_count = 0
+                    speech_count = 0
                     with self._speech_id_lock:
                         self._speech_session_id += 1
                         sid = self._speech_session_id
-                    event_bus.emit_event(EventType.VOICE_SPEECH_START, {"session_id": sid})
-                speech_frames.append(chunk)
-                speech_frame_count += 1
+                    seg = list(preroll)[-10:]  # 300 ms pre-roll
+                    if self.phase != ListenPhase.WAKE:
+                        event_bus.emit_event(EventType.VOICE_SPEECH_START, {"session_id": sid})
+                else:
+                    seg.append(chunk16)
+                speech_count += 1
                 silence_count = 0
-            else:
-                if in_speech:
-                    silence_count += 1
-                    speech_frames.append(chunk)
-                    if silence_count >= silence_frames:
-                        in_speech = False
-                        # During TTS playback, skip Whisper — run validation only
-                        # and only transcribe if TTS is no longer active
-                        is_tts_active = self.is_tts_playback_active()
-                        if is_tts_active:
-                            self._emit_vad_reject(sid, speech_frame_count, len(speech_frames), speech_frames)
-                            event_bus.emit_event(EventType.VOICE_STT_SKIP, {
-                                "session_id": sid,
-                                "reason": "tts_playback_active",
-                                "speech_frames": speech_frame_count,
-                                "total_frames": len(speech_frames),
-                            })
-                            speech_frames = []
-                            silence_count = 0
-                            speech_frame_count = 0
-                            continue
-                        # Normal validation + transcription
-                        if self._validate_speech_session(
-                            speech_frames, speech_frame_count, min_speech_frames, min_speech_rms
-                        ):
-                            self._transcribe(speech_frames, sid)
-                        else:
-                            self._emit_vad_reject(sid, speech_frame_count, len(speech_frames), speech_frames)
-                        speech_frames = []
-                        silence_count = 0
-                        speech_frame_count = 0
+                if len(seg) > max_tentative and self.phase == ListenPhase.WAKE:
+                    seg = seg[-max_tentative:]
+            elif in_speech:
+                silence_count += 1
+                seg.append(chunk16)
+                if silence_count >= silence_frames:
+                    in_speech = False
+                    was_barge = barge_capture
+                    barge_capture = False
+                    self._end_segment(seg, speech_count, sid, min_speech_frames,
+                                      min_speech_rms, was_barge)
+                    seg = []
+                    speech_count = 0
+                    silence_count = 0
 
-        # Flush remaining audio queue
+            self._check_command_timeout(in_speech)
+
         while not self._audio_queue.empty():
             try:
                 self._audio_queue.get_nowait()
             except queue.Empty:
                 break
 
-    def _validate_speech_session(
-        self, frames: list, speech_frame_count: int, min_speech_frames: int, min_speech_rms: float
-    ) -> bool:
-        """
-        Validate that a speech session contains meaningful speech before sending to STT.
-        
-        Checks:
-        - Minimum number of speech frames (VAD-positive frames)
-        - Minimum overall RMS energy
-        - Speech ratio (speech frames / total frames)
-        """
+    def _to_16k(self, chunk: np.ndarray) -> np.ndarray:
+        sr = self._actual_sr
+        if sr == SAMPLE_RATE:
+            return chunk.astype(np.int16, copy=False)
+        f = chunk.astype(np.float32)
+        target_len = max(1, int(round(len(f) * SAMPLE_RATE / sr)))
+        x_old = np.linspace(0, 1, len(f))
+        x_new = np.linspace(0, 1, target_len)
+        return np.interp(x_new, x_old, f).astype(np.int16)
+
+    def _update_level(self, chunk_f: np.ndarray):
+        level = self._vad.get_level(chunk_f) if self._vad else 0.0
+        self._audio_level = level
+        now = time.monotonic()
+        if now - self._last_level_event_time > 0.1:
+            self._last_level_event_time = now
+            event_bus.emit_event(EventType.VOICE_AUDIO_LEVEL, {"level": level})
+
+    def _emit_wake_score(self, debug_scores: bool):
+        now = time.monotonic()
+        if now - self._last_score_event_time < 0.1:
+            return
+        self._last_score_event_time = now
+        peak = self._wake.take_peak()
+        event_bus.emit_event(EventType.VOICE_WAKE_SCORE, {
+            "score": round(peak, 3), "threshold": self._wake.threshold})
+        if debug_scores and peak >= 0.1:
+            log.debug("wake.score peak=%.3f threshold=%.2f", peak, self._wake.threshold)
+
+    def _check_command_timeout(self, in_speech: bool):
+        with self._phase_lock:
+            if (self._phase != ListenPhase.COMMAND or in_speech or self._awaiting_stt
+                    or time.monotonic() < self._command_deadline):
+                return
+            reason = self._command_reason
+        log.info("voice.command.timeout reason=%s", reason)
+        event_bus.emit_event(EventType.VOICE_COMMAND_TIMEOUT, {"reason": reason})
+        self._return_to_rest_phase("command timeout")
+
+    # ------------------------------------------------------------------ #
+    # Segment end
+    # ------------------------------------------------------------------ #
+    def _end_segment(self, frames, speech_count, sid, min_speech_frames, min_speech_rms,
+                     was_barge: bool):
+        phase = self.phase
+        if phase == ListenPhase.WAKE:
+            # Tentative speech that never contained the wake word — dropped
+            # without transcription (this is what keeps SAINT from reacting
+            # to background conversation).
+            return
+        if not self._validate_speech_session(frames, speech_count, min_speech_frames, min_speech_rms):
+            self._emit_vad_reject(sid, speech_count, len(frames), frames)
+            return
+        wake_initiated = phase == ListenPhase.COMMAND
+        if wake_initiated:
+            with self._phase_lock:
+                self._awaiting_stt = True
+            assistant_state.set(AssistantState.PROCESSING, "transcribing")
+        self._transcribe(frames, sid, wake_initiated=wake_initiated, allow_during_tts=was_barge)
+
+    def _validate_speech_session(self, frames: list, speech_frame_count: int,
+                                 min_speech_frames: int, min_speech_rms: float) -> bool:
         if not frames:
             return False
-        
-        total_frames = len(frames)
-        if total_frames == 0:
-            return False
-            
-        # Check minimum speech frames
         if speech_frame_count < min_speech_frames:
             return False
-            
-        # Check speech ratio - at least 10% of frames should be speech
-        speech_ratio = speech_frame_count / total_frames
-        if speech_ratio < 0.1:
+        if speech_frame_count / len(frames) < 0.1:
             return False
-            
-        # Check overall RMS energy
         audio = np.concatenate(frames)
-        rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2) / 32768.0 ** 2))
-        if rms < min_speech_rms:
-            return False
-            
-        return True
+        return _rms(audio) >= min_speech_rms
 
     def _emit_vad_reject(self, session_id: int, speech_frames: int, total_frames: int, frames: list = None):
-        """Log when a speech session is rejected by VAD validation."""
-        rms = 0.0
-        if frames:
-            audio = np.concatenate(frames)
-            if len(audio) > 0:
-                rms = float(np.sqrt(np.mean(audio.astype(np.float32) ** 2) / (32768.0 ** 2)))
-        
-        speech_ratio = speech_frames / total_frames if total_frames > 0 else 0.0
-        
-        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
-            "trace": (
-                f"VAD REJECT session_id={session_id} "
-                f"speech_frames={speech_frames} total_frames={total_frames} "
-                f"speech_ratio={speech_ratio:.3f} rms={rms:.6f}"
-            ),
-        })
+        rms = _rms(np.concatenate(frames)) if frames else 0.0
+        ratio = speech_frames / total_frames if total_frames else 0.0
         event_bus.emit_event(EventType.VOICE_STT_SKIP, {
-            "session_id": session_id,
-            "reason": "insufficient_speech",
-            "speech_frames": speech_frames,
-            "total_frames": total_frames,
-            "speech_ratio": round(speech_ratio, 3),
-            "rms": round(rms, 6),
+            "session_id": session_id, "reason": "insufficient_speech",
+            "speech_frames": speech_frames, "total_frames": total_frames,
+            "speech_ratio": round(ratio, 3), "rms": round(rms, 6),
         })
 
-    def _trim_silence(self, frames: list, silence_frames: int) -> list:
-        """
-        Trim leading/trailing silence frames from captured audio.
-        Keeps the silence_frames that were used for VAD end detection.
-        """
-        if not frames or len(frames) <= silence_frames * 2:
+    @staticmethod
+    def _trim_silence(frames: list, pad: int = 3) -> list:
+        """Trim leading/trailing near-silent frames (thread-safe; no shared VAD)."""
+        if len(frames) <= pad * 2 + 1:
             return frames
-            
-        # Convert to numpy for analysis
-        audio_chunks = [f.astype(np.float32) / 32768.0 for f in frames]
-        
-        # Find first and last speech frames using VAD
-        first_speech_idx = 0
-        last_speech_idx = len(frames) - 1
-        
-        # Reset VAD for analysis
-        if self._vad:
-            self._vad.reset()
-            
-        # Find first speech
-        for i, chunk in enumerate(audio_chunks):
-            if self._vad and self._vad.feed(chunk):
-                first_speech_idx = i
-                break
-                
-        # Find last speech (search backwards)
-        if self._vad:
-            self._vad.reset()
-        for i in range(len(audio_chunks) - 1, -1, -1):
-            if self._vad and self._vad.feed(audio_chunks[i]):
-                last_speech_idx = i
-                break
-                
-        # Add some padding around speech (keep some context)
-        pad_frames = min(silence_frames, 3)  # ~90ms padding
-        start_idx = max(0, first_speech_idx - pad_frames)
-        end_idx = min(len(frames) - 1, last_speech_idx + pad_frames)
-        
-        if start_idx >= end_idx:
+        levels = np.array([_rms(f) for f in frames])
+        thresh = max(0.004, 0.1 * float(levels.max()))
+        voiced = np.nonzero(levels >= thresh)[0]
+        if len(voiced) == 0:
             return frames
-            
-        return frames[start_idx:end_idx + 1]
+        start = max(0, int(voiced[0]) - pad)
+        end = min(len(frames) - 1, int(voiced[-1]) + pad)
+        return frames[start:end + 1]
 
-    def _transcribe(self, frames, session_id: int = 0):
-        """Run STT transcription in a background thread (non-blocking)."""
+    # ------------------------------------------------------------------ #
+    # STT
+    # ------------------------------------------------------------------ #
+    def _transcribe(self, frames, session_id: int = 0, wake_initiated: bool = False,
+                    allow_during_tts: bool = False):
         if not frames or self._stt is None:
             self._emit_stt_error(session_id, "empty_audio_buffer")
+            self._stt_done(session_id, wake_initiated, "")
             return
-
         t0_total = time.perf_counter()
 
         def _run():
+            text = ""
             try:
-                self._stt_worker_func(frames, session_id, t0_total)
+                text = self._stt_worker_func(frames, session_id, t0_total,
+                                             wake_initiated, allow_during_tts) or ""
             except Exception as e:
-                self._emit_stt_error(session_id, str(e))
+                log.exception("stt.worker_failed")
+                self._emit_stt_error(session_id, f"STT failed: {e}")
+            finally:
+                self._stt_done(session_id, wake_initiated, text)
 
-        self._stt_worker = threading.Thread(
-            target=_run, daemon=True, name=f"stt-{session_id}"
-        )
+        self._stt_worker = threading.Thread(target=_run, daemon=True, name=f"stt-{session_id}")
         self._stt_worker.start()
 
-    def _stt_worker_func(self, frames: list, session_id: int, t0_total: float):
-        """Background STT worker — runs Whisper without blocking the voice loop."""
-        # Bail out if TTS playback started while we were queued
-        if self.is_tts_playback_active():
-            self._emit_stt_error(session_id, "tts_playback_active_during_stt")
-            event_bus.emit_event(EventType.VOICE_STT_SKIP, {
-                "session_id": session_id,
-                "reason": "tts_playback_active",
-            })
+    def _stt_done(self, session_id: int, wake_initiated: bool, text: str):
+        """Decide the next listening phase after a transcription finishes."""
+        if not wake_initiated:
+            if not text and assistant_state.state == AssistantState.PROCESSING:
+                assistant_state.return_to_rest()
             return
+        with self._phase_lock:
+            self._awaiting_stt = False
+            if self._phase != ListenPhase.COMMAND:
+                return
+        if text:
+            # A command was produced; the controller takes over.
+            with self._phase_lock:
+                self._phase = ListenPhase.WAKE if self.wake_mode else ListenPhase.OPEN
+        else:
+            # Only the wake phrase (or unintelligible speech) — keep waiting
+            # for the actual command.
+            timeout = float(config.get("voice.wake_word_command_timeout_sec", 6.0))
+            with self._phase_lock:
+                self._command_deadline = time.monotonic() + timeout
+            assistant_state.set(AssistantState.COMMAND_LISTENING, self._command_reason)
 
-        # Trim leading/trailing silence before transcription
-        silence_ms = config.get("voice.silence_duration_ms", 400)
-        silence_frames = int(silence_ms / CHUNK_MS)
-        trimmed = self._trim_silence(frames, silence_frames)
-        if not trimmed:
-            self._emit_stt_error(session_id, "empty_after_trim")
-            return
+    def _stt_worker_func(self, frames: list, session_id: int, t0_total: float,
+                         wake_initiated: bool = False, allow_during_tts: bool = False) -> str:
+        """Background STT worker. Returns the accepted transcript ('' if rejected)."""
+        if self.is_tts_playback_active() and not allow_during_tts and not wake_initiated:
+            self._emit_stt_error(session_id, "tts_playback_active_during_stt")
+            event_bus.emit_event(EventType.VOICE_STT_SKIP, {"session_id": session_id,
+                                                            "reason": "tts_playback_active"})
+            return ""
+        if self._stt_cancelled.is_set() or not self._voice_active:
+            self._emit_stt_error(session_id, "voice_inactive")
+            return ""
+
+        trimmed = self._trim_silence(frames)
+        audio = np.concatenate(trimmed)
+        if len(audio) == 0:
+            self._emit_stt_error(session_id, "empty_audio_buffer")
+            return ""
+        audio_duration_ms = round(len(audio) / SAMPLE_RATE * 1000, 1)
+        rms = round(_rms(audio), 6)
 
         with self._stt_session_state_lock:
             self._stt_session_state[session_id] = STT_STATE_TRANSCRIBING
-
-        if self._stt_cancelled.is_set():
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            self._emit_stt_error(session_id, "cancelled_by_stop_listening")
-            return
-
-        if not self._voice_active:
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            self._emit_stt_error(session_id, "voice_inactive")
-            return
-
-        t0 = time.perf_counter()
-        audio = np.concatenate(trimmed)
         t1 = time.perf_counter()
-        queue_ms = (t1 - t0) * 1000
-
-        audio_duration_ms = round(len(audio) / SAMPLE_RATE * 1000, 1)
-        total_samples = len(audio)
-        chunks = len(trimmed)
-        sample_rate = SAMPLE_RATE
-        channels = CHANNELS
-        rms = round(float(np.sqrt(np.mean(audio.astype(np.float32) ** 2) / (32768.0 ** 2))), 6)
-
-        self._emit_stt_buffer(session_id, chunks, total_samples, audio_duration_ms, sample_rate, channels)
-
-        if total_samples == 0:
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            self._emit_stt_error(session_id, "empty_audio_buffer")
-            return
-
-        self._emit_stt_submit(session_id)
-
         try:
-            self._emit_stt_inference_start(session_id)
             result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
-            self._emit_stt_inference_end(session_id)
         except Exception as e:
-            self._emit_stt_error(session_id, str(e))
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            return
-
+            log.error("stt.transcribe_failed session=%s %s", session_id, e)
+            self._emit_stt_error(session_id, f"Speech recognition failed: {e}")
+            return ""
         t2 = time.perf_counter()
         inference_ms = (t2 - t1) * 1000
         total_ms = (t2 - t0_total) * 1000
+        with self._stt_session_state_lock:
+            self._stt_session_state[session_id] = STT_STATE_SUBMITTED
 
         if result is None:
             self._emit_stt_error(session_id, "stt_returned_none")
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            return
+            return ""
+        raw_text = (getattr(result, "text", "") or "").strip()
+        confidence = float(getattr(result, "confidence", 0.0) or 0.0)
+        text = self._strip_wake_prefix(raw_text) if (wake_initiated or self.wake_mode) else raw_text
+        log.info("stt.result session=%s conf=%.2f wake=%s ms=%.0f text=%r",
+                 session_id, confidence, wake_initiated, inference_ms, raw_text)
+        event_bus.emit_event(EventType.VOICE_SPEECH_END, {"session_id": session_id})
 
-        result_text = getattr(result, "text", "") or ""
-        result_confidence = getattr(result, "confidence", 0.0) or 0.0
-
-        # Strip a captured "Hey SAINT" prefix so only the command reaches the AI.
-        # A bare wake word strips to empty and is dropped by the empty check
-        # below (its job — opening the wake window — is already done).
-        if self._wake is not None and self._wake.ready:
-            result_text = self._strip_wake_prefix(result_text)
-
-        self._emit_stt_result(session_id, result_text, result_confidence, inference_ms, total_ms)
-
-        event_bus.emit_event(EventType.VOICE_SPEECH_END, {
-            "session_id": session_id,
-        })
-
-        # Reject empty or whitespace-only results
-        if not result_text.strip():
-            self._emit_stt_error(session_id, "empty_transcription_result")
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            return
-
-        # Reject punctuation-only transcripts (hallucinations from silence)
-        stripped = result_text.strip()
-        if self._is_punctuation_only(stripped):
-            self._emit_stt_error(session_id, "punctuation_only_transcript")
+        if not text.strip() or self._is_punctuation_only(text.strip()):
             event_bus.emit_event(EventType.VOICE_STT_SKIP, {
-                "session_id": session_id,
-                "reason": "punctuation_only",
-                "text": stripped,
-            })
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            return
+                "session_id": session_id, "reason": "empty_after_wake_strip" if raw_text else "empty",
+                "text": raw_text})
+            return ""
 
-        # Activation gate: reject likely false triggers (noise, TV, other
-        # assistants' wake words, low-confidence hallucinations) before this
-        # becomes a user turn.
-        gate_ok, gate_reason = self._passes_activation_gate(result_text, result_confidence)
-        if not gate_ok:
-            logging.getLogger("saint.voice").info(
-                f"voice.activation.rejected session_id={session_id} "
-                f"reason={gate_reason} conf={result_confidence:.2f} text={result_text!r}"
-            )
+        ok, reason = self._passes_activation_gate(text, confidence, wake_initiated=wake_initiated)
+        if not ok:
+            log.info("voice.activation.rejected session=%s reason=%s conf=%.2f text=%r",
+                     session_id, reason, confidence, text)
             event_bus.emit_event(EventType.VOICE_STT_SKIP, {
-                "session_id": session_id,
-                "reason": f"activation_gate:{gate_reason}",
-                "text": result_text,
-                "confidence": round(result_confidence, 3),
-            })
-            with self._stt_session_state_lock:
-                self._stt_session_state[session_id] = STT_STATE_SUBMITTED
-            return
+                "session_id": session_id, "reason": f"activation_gate:{reason}",
+                "text": text, "confidence": round(confidence, 3)})
+            return ""
 
         event_bus.emit_event(EventType.VOICE_STT_FINAL, {
-            "text": result_text,
-            "confidence": result_confidence,
+            "text": text,
+            "confidence": confidence,
             "latency_ms": round(total_ms, 1),
             "inference_ms": round(inference_ms, 1),
             "session_id": session_id,
+            "wake": wake_initiated,
             "diagnostics": {
-                "sample_rate": SAMPLE_RATE,
-                "channels": CHANNELS,
                 "audio_duration_ms": audio_duration_ms,
                 "audio_rms": rms,
-                "model": getattr(self._stt, '_model_name', 'unknown'),
-                "device": getattr(self._stt, '_device', 'unknown'),
-                "queue_ms": round(queue_ms, 1),
-                "inference_ms": round(inference_ms, 1),
-                "total_stt_ms": round(total_ms, 1),
-                "num_chunks": chunks,
-                "total_samples": total_samples,
+                "model": getattr(self._stt, "_model_name", "unknown"),
+                "device": getattr(self._stt, "_device", "unknown"),
             },
         })
         event_bus.emit_event(EventType.LATENCY_STT, {"ms": round(total_ms, 1)})
-
         with self._stt_session_state_lock:
             self._stt_session_state[session_id] = STT_STATE_COMPLETED
+        return text
 
     # ------------------------------------------------------------------ #
-    # Wake word
+    # Transcript helpers
     # ------------------------------------------------------------------ #
-    def _on_wake_word(self, score: float):
-        """Handle a wake-word detection: open the wake window and announce it."""
-        now = time.perf_counter()
-        with self._wake_lock:
-            self._wake_until = now + self._wake_window_sec
-        logging.getLogger("saint.voice").info(
-            f"voice.wake_word.detected score={score:.3f} "
-            f"window_sec={self._wake_window_sec}"
-        )
-        event_bus.emit_event(EventType.VOICE_WAKE_WORD, {
-            "keyword": config.get("voice.wake_word", "saint"),
-            "score": round(float(score), 3),
-            "window_sec": self._wake_window_sec,
-        })
-        event_bus.emit_event(EventType.LATENCY_WAKE_WORD, {"ms": 0.0})
-
-    def _in_wake_window(self) -> bool:
-        """True if a wake-word detection recently opened the bypass window."""
-        with self._wake_lock:
-            return time.perf_counter() < self._wake_until
+    _WAKE_PREFIX = re.compile(
+        r"^\s*(?:(?:hey|hi|ok(?:ay)?)[\s,.!]+)?(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
+        re.IGNORECASE)
 
     def _strip_wake_prefix(self, text: str) -> str:
         """Remove a leading 'saint' / 'hey saint' from a transcript.
 
-        The wake word is captured by the always-on mic as part of the same
-        utterance ("Hey SAINT, skip this song"), so strip it before the command
-        reaches the AI. A bare wake word strips to empty and is dropped upstream.
+        The wake phrase is part of the captured utterance ("Hey SAINT, skip
+        this song"), so strip it before the command reaches the agent. A bare
+        wake word strips to "".
         """
         if not text:
             return text
-        stripped = re.sub(
-            r"^\s*(hey\s+|ok(ay)?\s+|hi\s+)?saints?\b[\s,.:;!?-]*",
-            "",
-            text,
-            count=1,
-            flags=re.IGNORECASE,
-        )
+        stripped = self._WAKE_PREFIX.sub("", text, count=1)
         if stripped == text:
-            return text          # no wake prefix present — leave untouched
-        return stripped.strip()  # matched: remainder (or "" for a bare wake word)
+            return text
+        return stripped.strip()
 
-    def _passes_activation_gate(self, text: str, confidence: float):
-        """Multi-signal gate that rejects likely false activations before a
-        transcript becomes a user turn. Returns (ok, reason).
+    def _passes_activation_gate(self, text: str, confidence: float, wake_initiated: bool = False):
+        """Transcript-level gate for speech that SAINT was not addressed with.
 
-        Signals combined: Whisper confidence, transcript length, foreign
-        assistant wake words, and common near-silence hallucinations. This is
-        deliberately NOT a single high threshold (which would reject quiet but
-        legitimate commands) — it's configurable via voice.min_stt_confidence.
+        Returns (ok, reason). Wake-initiated commands always pass: the user
+        asked for SAINT by name.
         """
-        # Explicit wake word bypasses the confidence gate for a short window —
-        # the user asked for SAINT by name, so honour even a quiet command.
-        if self._in_wake_window():
-            return True, "wake_window"
-
+        if wake_initiated:
+            return True, "wake_word"
         min_conf = config.get("voice.min_stt_confidence", 0.5)
         short_conf = config.get("voice.short_utterance_confidence", 0.7)
         stripped = (text or "").strip()
         lower = stripped.lower()
         words = stripped.split()
 
-        # Other assistants' wake words are almost always a misfire/background TV.
         if re.search(r"\b(alexa|hey google|ok(ay)? google|siri|hey siri|cortana)\b", lower):
             return False, "foreign_wake_word"
-
-        # Common Whisper hallucinations on near-silence.
-        hallucinations = {
-            "you", "thank you", "thanks for watching", "bye", "okay", "ok",
-            "yeah", "so", "uh", "um", "hmm", "the",
-        }
+        hallucinations = {"you", "thank you", "thanks for watching", "bye", "okay", "ok",
+                          "yeah", "so", "uh", "um", "hmm", "the"}
         if lower.strip(".!?, ") in hallucinations and confidence < short_conf:
             return False, "likely_hallucination"
-
-        # Single-word utterances need higher confidence to be trusted.
         if len(words) <= 1 and confidence < short_conf:
             return False, "short_low_confidence"
-
-        # Baseline confidence gate.
         if confidence > 0 and confidence < min_conf:
             return False, f"low_confidence_{confidence:.2f}"
-
         return True, ""
 
-    def _is_punctuation_only(self, text: str) -> bool:
-        """Check if text consists only of punctuation and whitespace."""
-        if not text:
-            return True
-        # Remove all punctuation and whitespace, check if anything remains
-        import string
-        for char in text:
-            if char not in string.punctuation and not char.isspace():
-                return False
-        return True
-
-    def _emit_stt_submit(self, session_id: int):
-        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
-            "trace": f"STT SUBMIT session_id={session_id}",
-        })
-
-    def _emit_stt_buffer(self, session_id, chunks, samples, duration_ms, sr, ch):
-        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
-            "trace": (
-                f"STT BUFFER session_id={session_id} "
-                f"chunks={chunks} samples={samples} duration_ms={duration_ms} "
-                f"sample_rate={sr} channels={ch}"
-            ),
-        })
-
-    def _emit_stt_inference_start(self, session_id: int):
-        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
-            "trace": f"STT INFERENCE START session_id={session_id}",
-        })
-
-    def _emit_stt_inference_end(self, session_id: int):
-        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
-            "trace": f"STT INFERENCE END session_id={session_id}",
-        })
-
-    def _emit_stt_result(self, session_id, text, confidence, inference_ms, total_ms):
-        event_bus.emit_event(EventType.VOICE_STT_DEBUG, {
-            "trace": (
-                f"STT RESULT session_id={session_id} text=\"{text}\" "
-                f"confidence={confidence} inference_ms={round(inference_ms,1)} "
-                f"total_ms={round(total_ms,1)}"
-            ),
-        })
+    @staticmethod
+    def _is_punctuation_only(text: str) -> bool:
+        return all(ch in string.punctuation or ch.isspace() for ch in text or "")
 
     def _emit_stt_error(self, session_id: int, error: str):
-        event_bus.emit_event(EventType.VOICE_STT_ERROR, {
-            "error": error, "session_id": session_id,
-        })
+        event_bus.emit_event(EventType.VOICE_STT_ERROR, {"error": error, "session_id": session_id})
 
     # ------------------------------------------------------------------ #
-    # Mock injection
+    # Injection (text input, tests)
     # ------------------------------------------------------------------ #
-    def inject_utterance(self, text: str, confidence: float = 0.95):
+    def inject_utterance(self, text: str, confidence: float = 0.95, source: str = "inject"):
         import random
-        session_id = random.randint(1, 1_000_000)
         event_bus.emit_event(EventType.VOICE_STT_FINAL, {
             "text": text,
             "confidence": confidence,
             "latency_ms": 0.0,
-            "session_id": session_id,
+            "session_id": random.randint(1, 1_000_000),
+            "source": source,
         })
 
     def inject_interrupt(self):
         event_bus.emit_event(EventType.VOICE_INTERRUPT, {})
+
+
+# ---------------------------------------------------------------------- #
+# Wake chime
+# ---------------------------------------------------------------------- #
+_CHIME = None
+
+
+def _play_chime():
+    """Short, quiet two-tone chime confirming the wake word (non-blocking)."""
+    global _CHIME
+    try:
+        import sounddevice as sd
+        sr = 24000
+        if _CHIME is None:
+            t1 = np.arange(int(sr * 0.07)) / sr
+            t2 = np.arange(int(sr * 0.09)) / sr
+            tone = np.concatenate([np.sin(2 * np.pi * 880 * t1), np.sin(2 * np.pi * 1320 * t2)])
+            env = np.minimum(1.0, np.minimum(np.arange(len(tone)), np.arange(len(tone))[::-1]) / (sr * 0.01))
+            _CHIME = (0.18 * tone * env).astype(np.float32)
+        playback_monitor.note_block(_rms(_CHIME), len(_CHIME) / sr)
+        sd.play(_CHIME, sr, blocking=False)
+    except Exception as e:
+        log.debug("voice.chime_failed %s", e)

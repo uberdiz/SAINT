@@ -21,7 +21,8 @@ from core.config import config
 
 logger = logging.getLogger("saint.analytics")
 
-ANALYTICS_FILE = "data/analytics.json"
+from core.paths import data_path
+ANALYTICS_FILE = str(data_path("analytics.json"))
 
 _MAX_SAMPLES = 200
 _MAX_TOOL_SAMPLES = 100

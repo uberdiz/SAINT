@@ -36,10 +36,10 @@ def test_tool_registry(automation_module):
     
     # Check for expected tools
     tool_names = [t["name"] for t in tools]
-    expected = ["mouse_move", "mouse_click", "type_text", "press_key", "hotkey",
-                "take_screenshot", "open_application", "close_application",
-                "focus_window", "list_windows", "read_file", "write_file",
-                "list_directory", "search_files", "run_command"]
+    expected = ["desktop.mouse_move", "desktop.mouse_click", "desktop.type_text", "desktop.press_keys",
+                "desktop.open_app", "desktop.close_app", "desktop.focus_window", "desktop.list_windows",
+                "desktop.move_window", "read_file", "write_file", "list_directory", "search_files",
+                "run_command"]
     for exp in expected:
         assert exp in tool_names
 
@@ -48,8 +48,8 @@ def test_tool_details(automation_module):
     """Test getting tool details."""
     m = automation_module
     
-    details = m.get_tool("mouse_move")
-    assert details["name"] == "mouse_move"
+    details = m.get_tool("desktop.mouse_move")
+    assert details["name"] == "desktop.mouse_move"
     assert "description" in details
     assert "arguments" in details
     assert details["permission"] == "low"
@@ -97,22 +97,22 @@ def test_permission_modes(automation_module):
     assert m.get_permission_mode() == "safe"
     
     # In safe mode, only LOW permission tools allowed
-    assert m.check_permission("mouse_move") is True  # LOW
-    assert m.check_permission("type_text") is False  # MEDIUM
+    assert m.check_permission("desktop.mouse_move") is True  # LOW
+    assert m.check_permission("desktop.type_text") is False  # MEDIUM
     assert m.check_permission("run_command") is False  # HIGH
     
     m.set_permission_mode("autonomous")
     assert m.get_permission_mode() == "autonomous"
     # In autonomous, all except HIGH allowed
-    assert m.check_permission("mouse_move") is True
-    assert m.check_permission("type_text") is True
+    assert m.check_permission("desktop.mouse_move") is True
+    assert m.check_permission("desktop.type_text") is True
     assert m.check_permission("run_command") is False  # HIGH still needs confirm
     
     m.set_permission_mode("confirm")
     assert m.get_permission_mode() == "confirm"
     # In confirm mode, all allowed (confirmation handled by caller)
-    assert m.check_permission("mouse_move") is True
-    assert m.check_permission("type_text") is True
+    assert m.check_permission("desktop.mouse_move") is True
+    assert m.check_permission("desktop.type_text") is True
     assert m.check_permission("run_command") is True
 
 
@@ -121,16 +121,16 @@ def test_tool_enable_disable(automation_module):
     m = automation_module
     
     # Disable a tool
-    assert m.set_tool_enabled("mouse_move", False) is True
-    result = m.execute_tool("mouse_move", x=100, y=100)
+    assert m.set_tool_enabled("desktop.mouse_move", False) is True
+    result = m.execute_tool("desktop.mouse_move", x=100, y=100)
     assert result["success"] is False
     assert "disabled" in result["error"].lower()
     
     # Re-enable
-    assert m.set_tool_enabled("mouse_move", True) is True
-    result = m.execute_tool("mouse_move", x=100, y=100)
-    # This will fail because pyautogui may not be available in test env
-    # but it shouldn't be "disabled"
+    assert m.set_tool_enabled("desktop.mouse_move", True) is True
+    result = m.execute_tool("desktop.mouse_move", x=100, y=100)
+    # Desktop control is switched off in the test config, so this must fail
+    # safely (without moving the real mouse) — but not as "disabled".
     error_msg = result.get("error", "") or ""
     assert "disabled" not in error_msg.lower()
 
@@ -165,18 +165,18 @@ def test_shell_command(automation_module):
     m = automation_module
     
     # Simple command
-    result = m.execute_tool("run_command", command="echo hello")
+    result = m.execute_tool("run_command", confirmed=True, command="echo hello")
     assert result["success"] is True
     assert "hello" in result["result"]["stdout"]
     assert result["result"]["exit_code"] == 0
     
     # Command with error
-    result = m.execute_tool("run_command", command="cmd /c exit 1")
+    result = m.execute_tool("run_command", confirmed=True, command="cmd /c exit 1")
     assert result["success"] is True
     assert result["result"]["exit_code"] == 1
     
     # Timeout - use ping to simulate delay on Windows
-    result = m.execute_tool("run_command", command="ping -n 5 127.0.0.1", timeout=1)
+    result = m.execute_tool("run_command", confirmed=True, command="ping -n 5 127.0.0.1", timeout=1)
     assert result["success"] is False
     assert "timed out" in result["error"].lower()
 

@@ -28,6 +28,8 @@ from typing import Optional, Callable, Tuple, List, Union
 
 import numpy as np
 
+from core.audio_echo import playback_monitor
+
 
 # ---------------------------------------------------------------------------
 # Word splitter
@@ -216,7 +218,12 @@ class KokoroTTS(TTSEngine):
                 for i in range(0, len(samples), chunk_size):
                     if self._interrupt_event.is_set() or (self._active_turn_id != -1 and turn_id != self._active_turn_id):
                         break
-                    stream.write(samples[i:i+chunk_size])
+                    block = samples[i:i+chunk_size]
+                    # Report what is being played so barge-in can tell SAINT's
+                    # own voice (echo) apart from the user.
+                    playback_monitor.note_block(float(np.sqrt(np.mean(np.square(block)))) if len(block) else 0.0,
+                                                len(block) / sample_rate)
+                    stream.write(block)
 
                 event_bus.emit_event(EventType.TTS_PLAYBACK_END, {"word_index": chunk_index})
                 self._audio_queue.task_done()
@@ -844,8 +851,10 @@ class QwenTTS(TTSEngine):
                 })
                 t_playback_start = time.perf_counter()
                 t_play_start = time.perf_counter()
-                sd.play(samples_int16, sample_rate)
                 duration = len(samples_int16) / sample_rate if sample_rate > 0 else 0
+                playback_monitor.note_block(float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0,
+                                            duration)
+                sd.play(samples_int16, sample_rate)
                 end_time = time.perf_counter() + duration
                 while time.perf_counter() < end_time:
                     if self._interrupt_event.is_set():
@@ -1007,6 +1016,7 @@ class MockTTS(TTSEngine):
                 })
 
                 # Simulate playback time (paced per word)
+                playback_monitor.note_block(0.1, 1.0 / self._wps)
                 time.sleep(1.0 / self._wps)
 
                 event_bus.emit_event(EventType.TTS_PLAYBACK_END, {

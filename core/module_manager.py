@@ -6,6 +6,7 @@ from modules.automation.module import AutomationModule
 from modules.vision.module import VisionModule
 from modules.memory.module import MemoryModule
 from modules.spotify.module import SpotifyModule
+from modules.desktop.module import DesktopModule
 
 
 class ModuleManager:
@@ -17,6 +18,7 @@ class ModuleManager:
             "vision": VisionModule(),
             "memory": MemoryModule(),
             "spotify": SpotifyModule(),
+            "desktop": DesktopModule(),
         }
         self._apply_initial_state()
 

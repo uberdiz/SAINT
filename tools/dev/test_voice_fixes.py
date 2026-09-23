@@ -172,9 +172,11 @@ def main():
     print("SAINT Voice Pipeline Fixes - Verification Tests")
     print("=" * 60)
 
-    # Change to project directory for imports
+    # Run from the project root so SAINT's packages import.
     import os
-    os.chdir(r"C:\python\SAINT\SAINT-1")
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    os.chdir(root)
+    sys.path.insert(0, root)
 
     results = []
     results.append(("CPU Normalization", test_cpu_normalization()))

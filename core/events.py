@@ -1,7 +1,23 @@
-"""Event bus and event type constants used throughout SAINT."""
-import time
+"""Event bus and event type constants used throughout SAINT.
+
+Two kinds of subscribers:
+
+* Core services (conversation controller, voice, assistant state, logger,
+  runtime, ...) use ``event_bus.subscribe(fn)``. They are called directly on
+  the thread that emitted the event, so the voice/agent pipeline never waits
+  on — or depends on — the Qt GUI thread.
+* UI widgets use ``event_bus.event_occurred.connect(slot)``. Qt queues those
+  deliveries onto the GUI thread, which is the only thread allowed to touch
+  widgets.
+"""
 import itertools
+import logging
+import threading
+import time
+
 from PySide6.QtCore import QObject, Signal
+
+_log = logging.getLogger("saint.events")
 
 
 class Event:
@@ -21,8 +37,34 @@ class Event:
 class EventBus(QObject):
     event_occurred = Signal(object)
 
+    def __init__(self):
+        super().__init__()
+        self._subscribers = []
+        self._sub_lock = threading.Lock()
+
+    def subscribe(self, fn):
+        """Register a core (non-UI) handler, called synchronously on emit."""
+        with self._sub_lock:
+            if fn not in self._subscribers:
+                self._subscribers.append(fn)
+
+    def unsubscribe(self, fn):
+        with self._sub_lock:
+            try:
+                self._subscribers.remove(fn)
+            except ValueError:
+                pass
+
     def emit_event(self, type_, payload=None):
         ev = Event(type_, payload)
+        with self._sub_lock:
+            subs = list(self._subscribers)
+        for fn in subs:
+            try:
+                fn(ev)
+            except Exception:
+                # One faulty subscriber must never break the pipeline.
+                _log.exception("event subscriber failed for %s", type_)
         self.event_occurred.emit(ev)
         return ev
 
@@ -58,6 +100,26 @@ class EventType:
     TOOL_REQUESTED="tool.requested"; TOOL_PERMISSION_REQUIRED="tool.permission.required"
     TOOL_PERMISSION_GRANTED="tool.permission.granted"; TOOL_PERMISSION_DENIED="tool.permission.denied"
     TOOL_STARTED="tool.started"; TOOL_COMPLETED="tool.completed"; TOOL_FAILED="tool.failed"
+    # Authoritative assistant state (core/assistant_state.py) — the UI renders
+    # this rather than inferring state from individual pipeline events.
+    ASSISTANT_STATE="assistant.state"
+    # Wake word
+    WAKE_STATUS="wake.status"; WAKE_ERROR="wake.error"; VOICE_WAKE_SCORE="voice.wake.score"
+    VOICE_COMMAND_TIMEOUT="voice.command.timeout"; VOICE_BARGE_IN="voice.barge_in"
+    # Agent
+    AGENT_INTENT="agent.intent"; AGENT_CONFIRM_REQUIRED="agent.confirm.required"
+    AGENT_CONFIRM_RESOLVED="agent.confirm.resolved"
+    # Memory
+    MEMORY_STORED="memory.stored"; MEMORY_UPDATED="memory.updated"; MEMORY_DELETED="memory.deleted"
+    MEMORY_RECALLED="memory.recalled"
+    # Automations / scheduler
+    AUTOMATION_CREATED="automation.created"; AUTOMATION_UPDATED="automation.updated"
+    AUTOMATION_CANCELLED="automation.cancelled"; AUTOMATION_TRIGGERED="automation.triggered"
+    AUTOMATION_FAILED="automation.failed"
+    # Desktop control / screen
+    DESKTOP_ACTION="desktop.action"; SCREEN_CAPTURED="screen.captured"
+    # User-facing notification (tray balloon / toast)
+    NOTIFY="notify"
     ERROR="error"; WARNING="warning"
 
 

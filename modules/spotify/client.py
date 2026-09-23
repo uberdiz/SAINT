@@ -34,6 +34,13 @@ class SpotifyAPIError(RuntimeError):
             return "NOT_CONNECTED"
         return "API_ERROR"
 
+    @property
+    def user_message(self) -> str:
+        """Clean, speakable description (used by the tool registry)."""
+        if self.code in _PASSTHROUGH:
+            return str(self)
+        return friendly_error(self)
+
 
 # error_code -> natural, speakable message. The AI/router should surface these
 # instead of a raw Python exception string.
@@ -46,7 +53,14 @@ _FRIENDLY = {
     "FORBIDDEN": "Spotify wouldn't allow that action right now.",
     "PREMIUM_REQUIRED": "That Spotify action needs a Premium account.",
     "NO_PLAYBACK": "Spotify isn't currently playing anything.",
+    "NETWORK": "I couldn't reach Spotify — check your internet connection.",
+    "NO_DEVICES": "I couldn't find a Spotify device. Open Spotify on this PC or your phone and try again.",
+    "NO_HISTORY": "I don't have enough of your listening history yet to pick something for you.",
 }
+
+
+# Codes whose exception message is already written for the user.
+_PASSTHROUGH = {"NO_MATCH", "NO_PLAYLIST", "NO_HISTORY", "VOLUME_UNSUPPORTED", "NO_PLAYBACK_SEED"}
 
 
 def friendly_error(exc) -> str:
@@ -66,7 +80,12 @@ class SpotifyClient:
         self.auth = auth
 
     def request(self, method, path, **kwargs):
-        token = self.auth.get_access_token()
+        try:
+            token = self.auth.get_access_token()
+        except requests.RequestException as e:
+            raise SpotifyAPIError(f"Network error refreshing Spotify login: {e}", code="NETWORK") from e
+        except RuntimeError as e:
+            raise SpotifyAPIError(str(e), status=401, code="AUTH_EXPIRED") from e
         if not token:
             raise SpotifyAPIError("Spotify is not connected.", status=None)
         headers = dict(kwargs.pop("headers", {}))
@@ -132,6 +151,8 @@ class SpotifyClient:
         return detail, reason
 
     def search(self, query, types="track,artist,album,playlist", limit=10):
+        # Spotify caps search pages at 10 results for development-mode apps.
+        limit = max(1, min(10, int(limit)))
         return self.request("GET", "/search", params={"q": query, "type": types, "limit": limit})[0]
 
     def playback(self):
@@ -209,3 +230,16 @@ class SpotifyClient:
 
     def add_to_playlist(self, playlist_id, uris):
         self.request("POST", f"/playlists/{playlist_id}/items", json={"uris": uris})
+
+    def transfer(self, device_id, play=False):
+        self.request("PUT", "/me/player", json={"device_ids": [device_id], "play": bool(play)})
+
+    def artist(self, artist_id):
+        return self.request("GET", f"/artists/{artist_id}")[0]
+
+    def me(self):
+        return self.request("GET", "/me")[0]
+
+    def playlist_items(self, playlist_id, limit=50):
+        return self.request("GET", f"/playlists/{playlist_id}/items",
+                            params={"limit": max(1, min(50, int(limit)))})[0]
