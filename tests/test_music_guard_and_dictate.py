@@ -74,3 +74,33 @@ def test_dictate_start_recognises_multiple_kinds():
         d = DictationManager()
         assert d.maybe_start(start) is not None, start
         assert d.active
+
+
+# ---------------------------------------------------------------- follow-ups SAINT acts on
+def test_music_guard_lets_real_commands_through_but_not_chatter():
+    """While music plays, follow-ups SAINT recognises as commands (or short
+    questions to it) pass; chatter and lyrics from the live log don't."""
+    vm = VoiceModule.__new__(VoiceModule)
+    vm._music_playing = True
+    for cmd in ("Skip that.", "Can you skip that?", "Click it.", "Click the first link.",
+                "Double click the recycling bin.", "Yes, open my browser.",
+                "Open a new tab in my browser and search YouTube.", "What's that reminder for?"):
+        ok, reason = _gate(vm, cmd, conf=0.45)
+        assert ok, (cmd, reason)
+    for chatter in ("that's actually amazing oh my gosh", "I think it's good", "Grove literally just put me on.",
+                    "I'm just not though", "That was completely wrong. What kind of one do you get there?"):
+        ok, reason = _gate(vm, chatter, conf=0.6)
+        assert not ok and reason == "music_playing_needs_wake_word", (chatter, reason)
+
+
+def test_recognised_follow_up_command_tolerates_low_whisper_confidence():
+    vm = VoiceModule.__new__(VoiceModule)
+    vm._music_playing = True
+    assert _gate(vm, "Click it.", conf=0.13)[0]              # Whisper scored this 0.13 live
+    assert not _gate(vm, "I think it's good", conf=0.13)[0]
+
+
+def test_lyrics_never_become_memories_or_typing():
+    from modules.agent.agent import agent
+    assert not agent.accepts_followup("my name is Slim Shady")
+    assert not agent.accepts_followup("type your name in the stars")

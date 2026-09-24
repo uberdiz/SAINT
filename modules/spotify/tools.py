@@ -279,6 +279,7 @@ class SpotifyTools:
             "repeat": data.get("repeat_state"),
             "context_uri": (data.get("context") or {}).get("uri", ""),
             "image": images[-1]["url"] if images else "",
+            "image_large": images[0]["url"] if images else "",      # Spotify lists 640px first
             "item": item or None,
         }
 

@@ -181,3 +181,113 @@ def test_multi_step_plans(text, parts):
                                   "what is the capital of France", "explain how rainbows form"])
 def test_questions_go_to_the_llm(text):
     assert route(text) is None
+
+
+# --- phrasings from the live MANUAL_TESTING run ---------------------------------
+@pytest.mark.parametrize("text,parts", [
+    ("Open my browser search YouTube for Kendrick Lamar, click the first video and turn down the volume.",
+     ["desktop.open_browser", "browser.search", "desktop.click_result", "desktop.volume"]),
+    ("Open up a new tab in my browser and search YouTube.", ["browser.new_tab", "browser.open_url"]),
+    ("Find the settings button and click it.", ["screen.locate", "desktop.click_last"]),
+])
+def test_run_on_multi_step_plans(text, parts):
+    it = route(text)
+    assert it is not None and it.name == "composite:" + "+".join(parts), (text, it and it.name)
+
+
+@pytest.mark.parametrize("text,intent", [
+    ("Open my monkey type browser.", "desktop.open_browser"),
+    ("Yes, open my browser.", "desktop.open_browser"),
+    ("turn down the volume", "desktop.volume"),
+    ("lower the volume a bit", "desktop.volume"),
+    ("Hide everything on my screen but Spotify.", "desktop.minimize_others"),
+    ("minimize all tabs besides claude", "desktop.minimize_others"),
+    ("show only Discord", "desktop.minimize_others"),
+    ("Can you summarize this website?", "screen.summarize"),
+    ("Can you summarize this page I'm on?", "screen.summarize"),
+    ("open a new tab", "browser.new_tab"),
+    ("Use DuckDuckGo and find the latest news about Nvidia.", "web.current"),
+])
+def test_live_run_phrasings(text, intent):
+    it = route(text)
+    assert it is not None and it.name == intent, (text, it and it.name)
+
+
+@pytest.mark.parametrize("text", [
+    "open browser search youtube for kendrick lamar, click the first video and turn down the volume",
+    "open a new tab in my browser",
+])
+def test_whole_requests_are_never_app_names(text):
+    from modules.agent.router import parse_desktop
+    it = parse_desktop(text)
+    assert it is None or it.name != "desktop.open_app", (text, it and it.name)
+
+
+def test_locate_then_click_drops_the_offer():
+    from modules.agent.router import Intent, Reply, run_plan
+    steps = [Intent("screen.locate", lambda: Reply('Found Settings at the top right of X. Say "click it" if you '
+                                                   'want me to.'), "desktop"),
+             Intent("desktop.click_last", lambda: Reply("Clicked Settings."), "desktop")]
+    assert run_plan(steps).text == "Found Settings at the top right of X. Clicked Settings."
+
+
+# --- element matching (modules/desktop/uia.py) -----------------------------------
+class _Ctl:
+    def __init__(self, name, ctype="ButtonControl"):
+        self.Name, self.ControlTypeName = name, ctype
+        self.AutomationId = self.HelpText = ""
+        self.LocalizedControlType = "button"
+
+
+def test_role_word_does_not_match_every_button():
+    from modules.desktop import uia
+    want, types = uia._target_words("the settings button")
+    assert want == ["settings"] and "ButtonControl" in types
+    assert uia._score(_Ctl("Minimize"), want, types) == 0          # was 0.5 → clicked Minimize
+    assert uia._score(_Ctl("Settings"), want, types) == 1
+
+
+def test_loose_stem_matches_recycle_bin():
+    from modules.desktop import uia
+    want, _ = uia._target_words("recycling bin")
+    assert uia._score(_Ctl("Recycle Bin", "ListItemControl"), want, uia._CLICK_TYPES) == 1
+
+
+def test_scope_phrases_are_split_off():
+    from modules.desktop import uia
+    assert uia._split_scope("settings button in my taskbar") == ("settings button", "taskbar")
+    assert uia._split_scope("recycle bin on the desktop") == ("recycle bin", "desktop")
+    assert uia._split_scope("send button") == ("send button", None)
+
+
+@pytest.mark.parametrize("text,intent", [
+    ("make it louder", "desktop.volume"),
+    ("Make it quieter.", "desktop.volume"),
+    ("Summarize everything on this page.", "screen.summarize"),
+])
+def test_second_live_run_phrasings(text, intent):
+    from modules.agent.context import desktop_context
+    desktop_context.note_domain("desktop")
+    try:
+        it = route(text)
+    finally:
+        desktop_context.clear()
+    assert it is not None and it.name == intent, (text, it and it.name)
+
+
+def test_llm_cannot_claim_volume_changes_it_did_not_make():
+    from modules.agent.output import honest, HONEST_NO_ACTION
+    from modules.agent.llm import might_need_tool
+    assert honest("Increased volume.", tool_succeeded=False) == HONEST_NO_ACTION
+    assert honest("Saved by the Bell is a TV show.", tool_succeeded=False).startswith("Saved")
+    assert might_need_tool("make it louder")
+
+
+def test_named_element_in_a_region_and_taskbar_names():
+    from modules.desktop import uia
+    assert uia._split_region("x button in the bottom right") == ("x button", "bottom", "right")
+    assert uia._split_region("the button in the bottom right") is None      # unnamed: nearest button
+    assert uia._target_words("x button")[0] == ["close"]
+    assert uia._clean_name("Spotify - 1 running window pinned") == "Spotify"
+    assert uia._is_exact(_Ctl("Settings pinned"), "settings button")
+    assert not uia._is_exact(_Ctl("Dictation settings"), "settings button")

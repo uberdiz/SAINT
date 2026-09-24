@@ -73,6 +73,15 @@ class Agent:
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "choice", "text": text[:80]})
             return AgentResult(chosen, "choice", expects_reply=choices.pending is not None)
 
+        from modules.automation.scenes import scenes
+        scene = scenes.match(text)
+        if scene is not None:
+            # Runs on its own thread: steps re-enter handle(), which holds _lock.
+            scenes.run_in_background(scene, self.run_command)
+            log.info("agent.intent scene.run name=%r", scene.name)
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "scene.run", "text": text[:80]})
+            return AgentResult(f"Running {scene.name}.", "scene.run")
+
         intent = route(text)
         if intent is None:
             log.info("agent.intent none → LLM text=%r", text[:80])
@@ -96,6 +105,32 @@ class Agent:
         event_bus.emit_event(EventType.LATENCY_INTENT, {
             "ms": round((time.perf_counter() - t0) * 1000, 1), "intent": intent.name})
         return AgentResult(reply.text, intent.name, ok=reply.ok, expects_reply=reply.expects_reply)
+
+    # Intents never started from speech SAINT wasn't addressed with: song lyrics
+    # like "my name is ..." or "type ..." must not be saved or typed.
+    _UNADDRESSED_BLOCKED = ("memory.remember", "memory.forget", "memory.forget_all", "desktop.type_text",
+                            "automation.schedule_command")
+
+    def accepts_followup(self, text: str) -> bool:
+        """Would ``text`` do something if it were a command? Used by the voice
+        module to tell a follow-up command ("click it", "skip that", "yes")
+        from chatter or lyrics while music plays. No side effects."""
+        text = (text or "").strip()
+        if not text:
+            return False
+        try:
+            from modules.agent.dictate import dictation
+            from modules.agent.confirm import choices
+            if dictation.active or confirmations.pending is not None or choices.pending is not None:
+                return True
+            from modules.automation.scenes import scenes
+            if scenes.match(text) is not None:
+                return True
+            intent = route(text)
+        except Exception:
+            log.exception("agent.accepts_followup_failed")
+            return False
+        return intent is not None and intent.name not in self._UNADDRESSED_BLOCKED
 
     def run_command(self, text: str) -> str:
         """Used by scheduled automations: run a command, return the result text."""

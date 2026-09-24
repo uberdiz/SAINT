@@ -137,7 +137,8 @@ _ACTION_CLAIM = re.compile(
     r"^\W*(?:(?:ok(?:ay)?|sure|done|alright|got it)[,.!]?\s*)?(?:i(?:'ve| have| just)?\s+)?"
     r"(closed|opened|moved|played|paused|skipped|clicked|launched|started|stopped|turned|set|searched|typed|"
     r"minimi[sz]ed|maximi[sz]ed|deleted|sent|scrolled|switched|muted|resumed|queued|created|scheduled|"
-    r"navigated|pressed)\b", re.I)
+    r"navigated|pressed|increased|decreased|raised|lowered|adjusted|hid|unmuted|enabled|disabled|"
+    r"removed|added|restored|shuffled)\b", re.I)
 
 
 def unverified_action_claim(text: str) -> bool:

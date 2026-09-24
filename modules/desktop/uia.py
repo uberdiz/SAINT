@@ -41,8 +41,17 @@ def _auto():
     return auto
 
 
+_STOP_WORDS = {"the", "a", "an", "box", "field", "bar", "in", "on", "at", "of", "my", "to", "for", "please"}
+
+
 def _words(s: str) -> List[str]:
-    return [w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if w not in {"the", "a", "box", "field", "bar"}]
+    return [w for w in re.findall(r"[a-z0-9]+", (s or "").lower()) if w not in _STOP_WORDS]
+
+
+def _clean_name(name: str) -> str:
+    """Taskbar buttons read "Settings pinned" / "Spotify - 1 running window pinned"."""
+    n = re.sub(r"\s+pinned$", "", (name or "").strip(), flags=re.I)
+    return re.sub(r"\s+-\s+\d+\s+running windows?$", "", n, flags=re.I)
 
 
 def _walk(root, max_depth=40, limit=3000):
@@ -141,18 +150,67 @@ def list_elements(limit: int = 60, interactive_only: bool = True) -> Dict:
     return {"window": top.Name, "elements": elements}
 
 
+# Words that say what *kind* of element is meant. They narrow the control
+# types instead of being matched against labels: otherwise "settings button"
+# half-matches every button (its control type is "button") — e.g. Minimize.
+_ROLE_TYPES = {
+    "button": {"ButtonControl", "SplitButtonControl", "MenuItemControl"},
+    "buttons": {"ButtonControl", "SplitButtonControl", "MenuItemControl"},
+    "link": {"HyperlinkControl"}, "links": {"HyperlinkControl"},
+    "icon": {"ListItemControl", "ButtonControl", "ImageControl", "TreeItemControl"},
+    "tab": {"TabItemControl", "ButtonControl"},
+    "menu": {"MenuItemControl", "ButtonControl", "SplitButtonControl"},
+    "checkbox": {"CheckBoxControl"}, "toggle": {"ButtonControl", "CheckBoxControl"},
+    "switch": {"ButtonControl", "CheckBoxControl"}, "option": {"RadioButtonControl", "ListItemControl",
+                                                              "MenuItemControl", "CheckBoxControl"},
+    "item": set(), "thing": set(), "element": set(),
+}
+
+
+def _target_words(target: str):
+    """'the settings button' -> (['settings'], {button types}); types may be None."""
+    words = _words(target)
+    types = set()
+    content = []
+    for w in words:
+        if w in _ROLE_TYPES:
+            types |= _ROLE_TYPES[w]
+        else:
+            content.append(w)
+    # "the X button" is the close button; spoken names for common icons.
+    content = [{"x": "close", "minus": "minimize", "dots": "more", "cog": "settings", "gear": "settings"}.get(w, w)
+               for w in content]
+    return content, (types or None)
+
+
+def _is_exact(el, target: str) -> bool:
+    """The element's label is exactly what was asked for ("Settings", not
+    "Dictation settings")."""
+    try:
+        return bool(el is not None and _words(_clean_name(el.Name)) == _target_words(target)[0])
+    except Exception:
+        return False
+
+
+def _word_hit(w: str, hay: str, hay_words: List[str]) -> bool:
+    if w in hay:
+        return True
+    # Loose stem: "recycling" ~ "recycle", "settings" ~ "setting".
+    return len(w) >= 5 and any(len(h) >= 5 and h[:5] == w[:5] for h in hay_words)
+
+
 def _score(c, want: List[str], types) -> float:
     try:
         if c.ControlTypeName not in types:
             return 0.0
         hay = " ".join([c.Name or "", getattr(c, "AutomationId", "") or "",
-                        getattr(c, "LocalizedControlType", "") or "",
                         getattr(c, "HelpText", "") or ""]).lower()
     except Exception:
         return 0.0
     if not want:
         return 0.1
-    hits = sum(1 for w in want if w in hay)
+    hay_words = re.findall(r"[a-z0-9]+", hay)
+    hits = sum(1 for w in want if _word_hit(w, hay, hay_words))
     return hits / len(want)
 
 
@@ -163,7 +221,11 @@ def _in(r, box) -> bool:
 
 
 def _find_once(top, target: str, types) -> Optional[object]:
-    want = _words(target)
+    want, role_types = _target_words(target)
+    if role_types and role_types & set(types):
+        types = role_types & set(types)
+    if not want:
+        return None                       # "the button" alone names nothing
     ctrls = _walk(top)
     # Web page content lives in a DocumentControl; prefer it over browser
     # chrome ("Search" on YouTube vs Chrome's "Address and search bar").
@@ -177,8 +239,11 @@ def _find_once(top, target: str, types) -> Optional[object]:
         if r is None:
             continue
         try:
-            if want and _words(c.Name) == want:
+            extra = len(set(_words(_clean_name(c.Name))) - set(want))
+            if want and extra == 0:
                 s += 0.3
+            else:
+                s -= min(0.2, 0.05 * extra)       # prefer "Settings" over "Dictation settings"
         except Exception:
             pass
         if _in(r, doc):
@@ -195,9 +260,54 @@ def _safe_type(c) -> str:
         return ""
 
 
-def _find(target: str, types, wait: float = 2.5, activate: bool = True) -> Optional[object]:
+_SCOPE = re.compile(r"\s+(?:in|on|from)\s+(?:my|the)\s+(task\s?bar|system tray|tray|desktop|home screen)$")
+
+
+def _split_scope(spec: str):
+    """'settings in my taskbar' -> ('settings', 'taskbar')."""
+    m = _SCOPE.search((spec or "").strip().lower())
+    if not m:
+        return spec, None
+    where = "taskbar" if m.group(1).replace(" ", "") in ("taskbar", "systemtray", "tray") else "desktop"
+    return spec.strip()[:m.start()].strip(), where
+
+
+_SCOPE_LABEL = {"taskbar": "the taskbar", "desktop": "your desktop"}
+
+
+def _scope_root(scope: str):
+    """Root control of the taskbar or the desktop icons (None if unavailable)."""
+    auto = _auto()
+    try:
+        if scope == "taskbar":
+            c = auto.PaneControl(searchDepth=1, ClassName="Shell_TrayWnd")
+            return c if c.Exists(0, 0) else None
+        # The icons live in Progman (or a WorkerW) > SHELLDLL_DefView > SysListView32.
+        for cls in ("Progman", "WorkerW"):
+            root = auto.PaneControl(searchDepth=1, ClassName=cls)
+            if not root.Exists(0, 0):
+                continue
+            icons = root.ListControl(searchDepth=3, ClassName="SysListView32")
+            if icons.Exists(0, 0):
+                return icons
+    except Exception as e:
+        log.debug("uia.scope_root_failed %s %s", scope, e)
+    return None
+
+
+def _desktop_icon_covered(x: int, y: int) -> bool:
+    """Is another window on top of the desktop icon at (x, y)?"""
+    try:
+        import win32gui
+        hwnd = win32gui.GetAncestor(win32gui.WindowFromPoint((x, y)), 2)   # GA_ROOT
+        return win32gui.GetClassName(hwnd) not in ("Progman", "WorkerW")
+    except Exception:
+        return False
+
+
+def _find(target: str, types, wait: float = 2.5, activate: bool = True, top=None) -> Optional[object]:
     """Find an element in the target window, polling briefly while a page loads."""
-    top = _top(activate=activate)
+    top = top if top is not None else _top(activate=activate)
     deadline = time.monotonic() + wait
     while True:
         el = _find_once(top, target, types)
@@ -302,23 +412,54 @@ def _snapshot(top) -> tuple:
     return title, fname
 
 
-def _element_by_region(top, spec: str):
-    """'the button in the bottom right' -> clickable element nearest that spot."""
-    m = _REGION.match(spec.strip().lower())
-    if not m or not (m.group(2) or m.group(3)):
+# "the X button in the bottom right" / "the settings icon at the top": a
+# named element, nearest the named part of the window.
+_NAMED_REGION = re.compile(r"^(.+?)\s+(?:in|at|on|near)\s+(?:the\s+)?(top|bottom|upper|lower|middle|center|centre)?"
+                           r"\s*-?\s*(left|right|middle|center|centre)?(?:\s+(?:corner|side|edge|part))?"
+                           r"(?:\s+of\s+the\s+(?:screen|window|page))?$")
+
+
+def _split_region(spec: str):
+    """'x button in the bottom right' -> ('x button', 'bottom', 'right'); None if no region."""
+    m = _NAMED_REGION.match((spec or "").strip().lower())
+    if not m or not (m.group(2) or m.group(3)) or _REGION.match((spec or "").strip().lower()):
         return None
+    return m.group(1), m.group(2) or "", m.group(3) or ""
+
+
+def _element_by_region(top, spec: str):
+    """'the button in the bottom right' -> clickable element nearest that spot;
+    'the X button in the bottom right' -> the element named X nearest it."""
+    named = _split_region(spec)
+    if named:
+        name, vword, hword = named
+    else:
+        m = _REGION.match(spec.strip().lower())
+        if not m or not (m.group(2) or m.group(3)):
+            return None
+        name, vword, hword = "", m.group(2) or "", m.group(3) or ""
+        role = m.group(1) or ""
     box = _rect(top)
     if not box:
         return None
-    v = {"top": 0.0, "upper": 0.15, "bottom": 1.0, "lower": 0.85}.get(m.group(2) or "", 0.5)
-    h = {"left": 0.0, "right": 1.0}.get(m.group(3) or "", 0.5)
+    v = {"top": 0.0, "upper": 0.15, "bottom": 1.0, "lower": 0.85}.get(vword, 0.5)
+    h = {"left": 0.0, "right": 1.0}.get(hword, 0.5)
     tx, ty = box["left"] + h * box["width"], box["top"] + v * box["height"]
-    want = {"link": {"HyperlinkControl"}}.get(m.group(1) or "", {"ButtonControl", "SplitButtonControl",
-                                                                 "HyperlinkControl", "MenuItemControl"})
+    if name:
+        want, role_types = _target_words(name)
+        types = role_types or _CLICK_TYPES
+        if not want:
+            named = None
+    if not named:
+        want, types = [], {"link": {"HyperlinkControl"}}.get(role if not name else "",
+                                                          {"ButtonControl", "SplitButtonControl",
+                                                           "HyperlinkControl", "MenuItemControl"})
     best, best_d = None, None
     for c in _walk(top, limit=3000):
-        if _safe_type(c) not in want:
+        if _safe_type(c) not in types:
             continue
+        if want and _score(c, want, types) < 0.5:
+            continue                      # named: only elements that match the name
         r = _rect(c)
         if not r or not _in(r, box):
             continue
@@ -337,27 +478,62 @@ def find_element(name: str, activate: bool = True):
     if m:
         kind = "video" if m.group(2) in ("video", "clip", "song") else "result"
         return _nth_result(_ORDINALS[m.group(1)], kind=kind)
-    if _REGION.match(spec):
+    if _REGION.match(spec) or _split_region(spec):
         return _element_by_region(_top(activate=activate), spec)
     return _find(name, _CLICK_TYPES | _INPUT_TYPES, activate=activate)
+
+
+def _find_anywhere(name: str, activate: bool, wait: float = 2.5):
+    """(element, root, scope): the named element in the target window, or on
+    the taskbar / desktop when the user said so ("…in my taskbar") or when the
+    window doesn't have it ("the recycle bin" lives on the desktop)."""
+    spec, scope = _split_scope(name)
+    if scope:
+        root = _scope_root(scope)
+        if root is None:
+            raise ToolError(f"I can't read {_SCOPE_LABEL[scope]} right now.", "UNSUPPORTED")
+        return _find(spec, _CLICK_TYPES | _INPUT_TYPES, wait=0.5, top=root), root, scope
+    top = _top(activate=activate)
+    low = spec.strip().lower()
+    if _REGION.match(low) or _split_region(low) or re.match(
+            r"^(?:the\s+)?(first|second|third|fourth|fifth|1st|2nd|3rd|4th|5th|top|last)\s", low):
+        return find_element(spec, activate=activate), top, None
+    el = _find(spec, _CLICK_TYPES | _INPUT_TYPES, wait=wait, activate=activate, top=top)
+    if el is not None and _is_exact(el, spec):
+        return el, top, None
+    # Not in the window, or only a partial match there ("Dictation settings"
+    # for "settings"): an exact match on the desktop / taskbar wins.
+    for fallback in ("desktop", "taskbar"):
+        root = _scope_root(fallback)
+        other = _find(spec, _CLICK_TYPES, wait=0, top=root) if root is not None else None
+        if other is not None and (el is None or _is_exact(other, spec)):
+            log.info("uia.found_elsewhere %r in %s (window match: %r)", spec, fallback,
+                     getattr(el, "Name", None))
+            return other, root, fallback
+    return el, top, None
 
 
 def click_element(name: str, action: str = "click") -> Dict:
     """Click (or double/right-click, hover) a named element and report whether
     the UI changed afterwards (title / focus), so success is not assumed."""
     import pyautogui
-    top = _top(activate=True)
-    before = _snapshot(top)
-    el = find_element(name)
+    el, top, scope = _find_anywhere(name, activate=True)
+    where = _SCOPE_LABEL.get(scope) or top.Name or "the active window"
     if el is None:
-        raise ToolError(f"I can't see anything called '{name}' in {top.Name or 'the active window'}.",
-                        "ELEMENT_NOT_FOUND")
+        raise ToolError(f"I can't see anything called '{name}' in {where}.", "ELEMENT_NOT_FOUND")
+    before = _snapshot(top)
     r = _rect(el)
     if r is None:
         raise ToolError(f"'{name}' isn't visible on screen right now.", "ELEMENT_NOT_FOUND")
     x, y = r["left"] + r["width"] // 2, r["top"] + r["height"] // 2
+    if scope == "desktop" and _desktop_icon_covered(x, y):
+        # Windows cover the icon: show the desktop so the click lands on it.
+        pyautogui.hotkey("win", "d")
+        time.sleep(0.6)
+        r = _rect(el) or r
+        x, y = r["left"] + r["width"] // 2, r["top"] + r["height"] // 2
     label = re.sub(r"\s+\d+\s*(?:hours?|minutes?|seconds?)(?:,?\s*\d+\s*(?:minutes?|seconds?))*$", "",
-                   " ".join((el.Name or name).split()))[:70]
+                   " ".join(_clean_name(el.Name or name).split()))[:70]
     how = action
     if action == "click":
         try:
@@ -389,7 +565,8 @@ def click_element(name: str, action: str = "click") -> Dict:
                 changed = True
                 break
     return {"clicked": label, "type": _safe_type(el).replace("Control", ""), "method": how,
-            "rect": r, "x": x, "y": y, "changed": changed, "window": top.Name or ""}
+            "rect": r, "x": x, "y": y, "changed": changed,
+            "window": _SCOPE_LABEL.get(scope) or top.Name or "", "scope": scope or ""}
 
 
 def read_text(limit: int = 40) -> Dict:
@@ -414,14 +591,13 @@ def read_text(limit: int = 40) -> Dict:
 
 def locate(name: str) -> Dict:
     """Where a named element is: screen coordinates and a plain-words position."""
-    top = _top()
-    el = _element_by_region(top, name) if _REGION.match((name or "").strip().lower()) \
-        else _find(name, _CLICK_TYPES | _INPUT_TYPES, wait=0.5, activate=False)
+    el, top, scope = _find_anywhere(name, activate=False, wait=0.5)
     if el is None:
         raise ToolError(f"I can't see a '{name}' in {top.Name or 'the active window'}.", "ELEMENT_NOT_FOUND")
-    r, box = _rect(el), _rect(top)
+    r = _rect(el)
+    box = _rect(top) if not scope else None
     x, y = r["left"] + r["width"] // 2, r["top"] + r["height"] // 2
-    where = "middle"
+    where = "" if scope else "middle"
     if box:
         fx = (x - box["left"]) / max(1, box["width"])
         fy = (y - box["top"]) / max(1, box["height"])
@@ -430,8 +606,8 @@ def locate(name: str) -> Dict:
         where = "center" if (v, h) == ("middle", "center") else f"{v} {h}" if v != "middle" else f"{h} side"
     try:
         from modules.agent.context import desktop_context
-        desktop_context.note_element((el.Name or name)[:60], x, y)
+        desktop_context.note_element(_clean_name(el.Name or name)[:60], x, y)
     except Exception:
         pass
-    return {"name": (el.Name or "")[:60], "type": _safe_type(el).replace("Control", ""), "x": x, "y": y,
-            "rect": r, "where": where, "window": top.Name or ""}
+    return {"name": _clean_name(el.Name or "")[:60], "type": _safe_type(el).replace("Control", ""), "x": x, "y": y,
+            "rect": r, "where": where, "window": _SCOPE_LABEL.get(scope) or top.Name or ""}

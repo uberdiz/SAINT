@@ -214,7 +214,8 @@ def _locate(what: str) -> Reply:
         return Reply(res.error, ok=False)
     r = res.result
     win = r["window"].split(" - ")[-1] or "the window"
-    return Reply(f"Found {r['name'] or what} at the {r['where']} of {win}. Say \"click it\" if you want me to.")
+    place = f"at the {r['where']} of {win}" if r.get("where") else f"on {win}"
+    return Reply(f"Found {r['name'] or what} {place}. Say \"click it\" if you want me to.")
 
 
 # ---------------------------------------------------------------------- #
@@ -290,6 +291,42 @@ def parse(text: str) -> Optional[Intent]:
         what = re.sub(r"\s+on (my|the) screen$", "", what)
         if not re.search(r"\b(my phone|my keys|file|folder|document)\b", what):
             return Intent("screen.locate", lambda: _locate(what), "desktop")
+
+    if re.match(r"^(?:summari[sz]e|sum up|give me (?:a |the )?(?:summary|gist|tl;?dr) of|tl;?dr)\s+"
+                r"(?:(?:everything|all(?: the text)?|what(?:'s| is))\s+(?:on|in)\s+)?(?:(?:this|the|my|that)\s+)?(?:current\s+)?(?:web\s*)?(?:page|website|site|article|window|tab|"
+                r"screen)(?:\s+i'?m on| i am on)?$|^what(?:'s| is) (?:this|the) (?:page|article|website) about$|"
+                r"^tl;?dr(?: this)?$", t):
+        return Intent("screen.summarize", _summarize_screen, "desktop")
+
+    # ---- hide everything except X ------------------------------------------------------------
+    m = re.match(r"^(?:hide|minimi[sz]e|close)\s+(?:everything|all(?: (?:the|my|of my|other))?(?: (?:windows|tabs|apps|"
+                 r"programs|other windows))?|every(?: other)? window)(?: else)?(?: on (?:my|the) screen)?(?: that'?s open)?"
+                 r"\s+(?:but|except(?: for)?|besides|apart from|other than|aside from|save)\s+(?:the\s+|my\s+)?(.+)$", t) \
+        or re.match(r"^(?:show|leave|keep)\s+(?:me\s+)?only\s+(?:the\s+|my\s+)?(.+?)(?:\s+(?:open|visible|on (?:my|the) "
+                    r"screen))?$", t) \
+        or re.match(r"^(?:focus on|leave) (?:just|only) (?:the\s+|my\s+)?(.+)$", t)
+    if m:
+        keep = re.sub(r"\s+(?:open|visible|window|windows)$", "", m.group(1).strip())
+
+        def run_only():
+            def ok(r):
+                what = " and ".join(r["kept"]) or keep
+                note = f" I couldn't find {', '.join(r['missing'])}." if r.get("missing") else ""
+                return (f"Hid {r['minimized']} window{'s' if r['minimized'] != 1 else ''}; {what} is still up."
+                        if r["minimized"] else f"Only {what} was open already.") + note
+            return run_tool("desktop.minimize_others", f"hide everything except {keep}", ok, keep=keep)
+        return Intent("desktop.minimize_others", run_only, "desktop")
+
+    # ---- a new browser tab ("open a new tab in my browser") -----------------------------------
+    if re.match(r"^(?:open|make|start|create|pull up)?\s*(?:up\s+)?(?:a\s+)?(?:new|fresh|blank)\s+tab"
+                r"(?:\s+(?:in|on)\s+(?:my|the)\s+(?:web\s+)?(?:browser|chrome|opera|edge|firefox))?$", t) \
+            or re.match(r"^(?:open|make|start)\s+(?:up\s+)?(?:a\s+)?(?:new\s+)?tab\s+(?:in|on)\s+(?:my|the)\s+"
+                        r"(?:web\s+)?browser$", t):
+        def run_new_tab():
+            desktop_context.note_domain("browser")
+            return run_tool("desktop.new_tab", "open a new tab",
+                            lambda r: "Started your browser." if r.get("started") else "Opened a new tab.")
+        return Intent("browser.new_tab", run_new_tab, "browser")
 
     # ---- act on the element SAINT just found ----------------------------------------------
     m = re.match(r"^(click|double[- ]?click|right[- ]?click|middle[- ]?click|hover over|hover on|tap|press)"
@@ -393,10 +430,16 @@ def parse(text: str) -> Optional[Intent]:
     # ---- volume: the computer (Spotify handles music volume when that's the context) --------
     m = re.match(r"^(?:turn|put|bring)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?(?:volume|sound|audio)\s+"
                  r"(up|down)(?:\s+(?:a (?:lot|bit|little)))?$|^(?:turn|put)\s+(?:it|the video)\s+(up|down)$|"
-                 r"^(?:volume|sound)\s+(up|down)$|^(louder|quieter|softer)$|^(mute|unmute)(?: (?:the )?(?:sound|audio|video|computer))?$", t)
+                 r"^(?:turn|bring)\s+(up|down)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?"
+                 r"(?:volume|sound|audio)(?:\s+(?:a (?:lot|bit|little)))?$|"
+                 r"^(lower|raise|reduce|increase)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?"
+                 r"(?:volume|sound|audio)(?:\s+(?:a (?:lot|bit|little)))?$|"
+                 r"^(?:volume|sound)\s+(up|down)$|^(?:make\s+(?:it|this|that|the\s+(?:sound|volume|audio|video))\s+)?(louder|quieter|softer)"
+                 r"(?:\s+(?:a (?:lot|bit|little)|please))?$|^(mute|unmute)(?: (?:the )?(?:sound|audio|video|computer))?$", t)
     if m and not desktop_context.music_is_context() and not re.search(r"\b(music|song|spotify|track)\b", t):
         word = next(g for g in m.groups() if g)
-        direction = {"louder": "up", "quieter": "down", "softer": "down", "mute": "mute", "unmute": "mute"}.get(word, word)
+        direction = {"louder": "up", "quieter": "down", "softer": "down", "mute": "mute", "unmute": "mute",
+                     "lower": "down", "reduce": "down", "raise": "up", "increase": "up"}.get(word, word)
         steps = 10 if "a lot" in t else (2 if re.search(r"a (bit|little)", t) else 5)
         return Intent("desktop.volume", lambda: _system_volume(direction, steps), "desktop")
 
@@ -585,7 +628,41 @@ def parse(text: str) -> Optional[Intent]:
             return _tool("desktop.open_app", "open your browser", ok, retry=run_browser, name="browser",
                          new_window=new)
         return Intent("desktop.open_browser", run_browser, "browser")
+
+    # "open my Monkeytype browser" / "switch to the YouTube browser window":
+    # the browser window whose title matches the words before "browser".
+    m = re.match(r"^(?:open|launch|bring up|pull up|switch to|go to|go back to)\s+(?:up\s+)?(?:my\s+|the\s+)?(.+?)\s+"
+                 r"(?:web\s+)?browser(?:\s+(?:window|tab))?$", t)
+    if m and m.group(1).strip() not in ("my", "the", "a", "new", "a new", "web", "default", "other", "your"):
+        hint = m.group(1).strip()
+
+        def run_browser_hint():
+            desktop_context.note_domain("browser")
+            return _tool("desktop.open_app", f"switch to your {hint} browser window",
+                         lambda r: f"Switched to {_title(r)}." if r.get("reused") else f"Opened {r.get('app', 'your browser')}.",
+                         retry=run_browser_hint, name="browser", hint=hint)
+        return Intent("desktop.open_browser", run_browser_hint, "browser")
     return None
+
+
+def _summarize_screen() -> Reply:
+    """'Summarize this page' — the window's visible text, condensed by the LLM."""
+    res = call("screen.read")
+    if not res.success:
+        return Reply(res.error, ok=False)
+    r = res.result
+    lines = [x for x in (r.get("text") or []) if len(x) > 2]
+    name = _title({"title": r.get("window") or ""})
+    if not lines:
+        return Reply(f"I can't read any text in {name}, so I can't summarize it.", ok=False)
+    from modules.agent.llm import complete
+    prompt = (f"The user is looking at \"{r.get('window', '')}\". Its visible text, top to bottom:\n"
+              + "\n".join(f"- {x}" for x in lines[:40])
+              + "\n\nSummarize what this page is about in two or three short spoken sentences. Only use the "
+                "text above. Skip menus, buttons and navigation.")
+    answer = complete(prompt)
+    desktop_context.note_domain("desktop")
+    return Reply(answer or f"I read {name}, but I couldn't summarize it.", ok=bool(answer))
 
 
 def _not_an_app(name: str) -> bool:

@@ -32,6 +32,7 @@ import logging  # noqa: E402
 
 from core import state as _state          # noqa: F401,E402
 from core import analytics as _analytics  # noqa: F401,E402
+from core import history as _history      # noqa: F401,E402  (local usage log for the History page)
 from core.paths import data_path          # noqa: E402
 from core.setup import run_first_run_setup, SetupWizard  # noqa: E402
 

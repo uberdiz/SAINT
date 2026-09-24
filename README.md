@@ -1,22 +1,85 @@
-# SAINT
+<p align="center"><img src="SAINT.png" width="88" alt="SAINT logo"></p>
 
-SAINT is a local AI assistant for Windows. It waits locally for its wake word ("Hey SAINT"),
-understands your request, remembers what you've told it, picks the right tool, performs the real
-action and answers out loud. Then it goes back to listening.
+<h1 align="center">SAINT</h1>
 
-It covers Spotify control with a personal listening memory, persistent memory about you, reminders
-and scheduled automations, and controlled desktop automation (apps, windows, keyboard, mouse, UI
-elements). The language model runs locally through [Ollama](https://ollama.com).
+<p align="center"><b>A local, voice-first AI assistant for Windows.</b><br>
+Say “Hey SAINT” — it listens, does the real thing, and answers out loud. Everything runs on your PC.</p>
 
-![SAINT dashboard](docs/screenshots/dashboard.png)
+<p align="center">
+  <a href="#installation">Install</a> ·
+  <a href="#the-interface">Tour</a> ·
+  <a href="#talking-to-saint">What you can say</a> ·
+  <a href="#privacy-and-security">Privacy</a>
+</p>
 
-<sub>Dashboard rendered offscreen with the mock language model and no microphone attached, which is why
-the header offers "Start listening". Every panel is driven by real events from the core runtime.</sub>
+![SAINT — Home](docs/screenshots/home.png)
+
+SAINT waits locally for its wake word, understands your request, remembers what you've told it, picks
+the right tool, performs the real action and answers out loud — then goes back to listening. It
+controls Spotify (with a personal listening memory), keeps long-term memory about you, runs reminders,
+scheduled commands and multi-step scenes, and automates your desktop (apps, windows, keyboard, mouse,
+UI elements). The language model runs locally through [Ollama](https://ollama.com).
+
+## Highlights
+
+- **Voice first.** A custom “Hey SAINT” wake model, GPU speech recognition, natural speech output,
+  and interruptions that just work. After it answers, follow-ups need no wake word.
+- **The Halo.** When SAINT is minimized, a soft light travels around the edge of your monitor —
+  slow while it waits, bright and fast while it listens (breathing with your voice), twin comets while
+  it thinks, and tinted by your album cover while music plays. It never blocks a click.
+- **The overlay.** Press <kbd>Alt</kbd>+<kbd>`</kbd> anywhere — or rest your cursor at the top-centre edge of
+  the screen — for a Steam-style overlay over whatever you're doing: ask anything, see what's playing,
+  the conversation, what SAINT is doing, what's next, and your scenes.
+- **Music, hands-free.** A floating always-on-top mini player with real album covers. While music plays,
+  just say **“skip”**, **“pause”**, **“go back”**, **“louder”** — no wake word.
+- **Scenes.** One phrase, many actions: “focus mode” → play lofi, set volume, open Notion. Run them by
+  voice, from the overlay, or on a schedule.
+- **History.** Everything you've asked and what SAINT did — with usage charts — stored only on your PC.
+- **Command palette.** <kbd>Ctrl</kbd>+<kbd>K</kbd> jumps to any page, runs scenes and actions, or asks
+  SAINT directly.
+- **Private by design.** Wake word, speech, voice and language model are all local. Nothing about you
+  is uploaded.
+
+## What's new in this version
+
+A ground-up rewrite of the interface:
+
+- New minimal design system: near-black surfaces, hairline borders, one accent, a monoline icon set,
+  and motion everywhere it helps (page transitions, a sliding nav pill, a living state orb, cross-fading
+  covers, toasts). One switch in Settings turns all animation off.
+- **Halo**, **overlay** (global hotkey + edge tab), **floating mini player**, **music hot-words**,
+  **scenes**, **History** with usage stats, **command palette**, and a merged **System** page (health,
+  latency, modules).
+- **Demo mode** — SAINT drives its own UI for 30 seconds (wake word, a request, music, a hands-free
+  skip, the palette and the overlay). It's fully scripted: nothing real runs, nothing is written to your
+  history. Start it from the palette, the overlay or the tray; <kbd>Esc</kbd> stops it.
+- Sharp album art everywhere (SAINT now uses Spotify's 640 px cover), loaded off the UI thread.
+- **Fixes from live testing:** follow-ups without the wake word now work while music plays (anything
+  SAINT recognises as a command is kept; chatter and lyrics are ignored), one-word commands ("pause",
+  "skip") are no longer dropped for low speech-recognition confidence, a long request said with
+  pauses arrives as one command, run-on multi-step requests ("open my browser search YouTube for …")
+  are split correctly, "find the settings button" / "the X button in the top right" / "the recycle bin"
+  find the right element (including on the taskbar and desktop), new commands ("hide everything except
+  Spotify", "open a new tab", "summarize this page", "open my Monkeytype browser"), news questions answered
+  from the Google News feed, and the overlay shows your Spotify queue.
+
+| | |
+|---|---|
+| ![Overlay](docs/screenshots/overlay.png) | ![The Halo and the mini player](docs/screenshots/halo.png) |
+| **Overlay** — over whatever you're doing | **Halo** — light around the screen edge, plus the mini player |
+| ![Music](docs/screenshots/music.png) | ![History](docs/screenshots/history.png) |
+| **Music** — cover-tinted player, hands-free words, queue | **History** — local usage stats and timeline |
+| ![Automations](docs/screenshots/automations.png) | ![System](docs/screenshots/system.png) |
+| **Scenes** — one phrase, many actions | **System** — health, latency, modules |
+
+<sub>Screenshots are generated by `tools/dev/screenshots.py` from synthetic demo data (fictional tracks
+with generated covers) — no personal data.</sub>
 
 ---
 
 ## Contents
 
+- [Highlights](#highlights)
 - [What works today](#what-works-today)
 - [Architecture](#architecture)
 - [Requirements](#requirements)
@@ -52,7 +115,7 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
 | Area | Status |
 |---|---|
 | Wake word "Hey SAINT" and "SAINT" | ✅ Two stages: the local ONNX model (CPU, ~1 ms per 80 ms frame) plus a transcript check for short utterances the model misses (it barely scores a bare "SAINT"). On synthetic speech from 4 voices, clean and with music at −8 dB, 64/64 wake decisions were correct, with no false wakes on "paint", "She is a saint" or plain commands. Background speech is never acted on or shown. |
-| Conversation mode (no wake word for follow-ups) | ✅ After SAINT answers, follow-ups such as "skip that" or "turn it down" work for 15 s (configurable), counted from when SAINT stops talking. |
+| Conversation mode (no wake word for follow-ups) | ✅ After SAINT answers, follow-ups such as "skip that" or "turn it down" work for 15 s (configurable), counted from when SAINT stops talking. While music plays, only follow-ups SAINT recognises as commands (or short questions to it) are taken, so lyrics and chatter are ignored. Verified live. |
 | Wake → command → STT → agent → tool → TTS → back to wake listening | ✅ |
 | Interrupting SAINT while it talks (barge-in) | ✅ Your speech interrupts it and SAINT's own voice doesn't. The interrupting request is then processed. |
 | Memory ("my favorite language is Python" → later "what language do I like?") | ✅ Persists across restarts. You can view, edit and delete memories. |
@@ -62,6 +125,9 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
 | LLM function calling for requests the command router doesn't recognise | ✅ With tool-capable Ollama models (`llama3.1`, `llama3.2`). |
 | Spotify: search, play track/artist/album/playlist/genre, pause/resume/skip/back, volume, queue, add to playlist, listening memory, recommendations | ✅ Covered by tests against a simulated Spotify API. ⚠️ Not yet run against a live account on this machine (see [Spotify](#spotify)). |
 | Screen understanding ("what's on my second screen?", "what am I looking at?", "what is this error?") | ✅ From Windows APIs + UI Automation: monitors, windows per monitor, focus, buttons, links, fields, tabs, visible text. Image-level description additionally needs a vision-capable Ollama model (none is bundled). |
+| Halo, overlay (global hotkey + edge tab), mini player, demo mode | ✅ Verified live with the real runtime. The Halo costs ~0.1–0.3 % CPU while animating. |
+| Music hot-words ("skip", "pause", "louder" with no wake word while music plays) | ✅ Tested end-to-end through the voice loop with synthetic audio. ⚠️ One-word hot-words were fixed after a live run (Whisper scores single words near zero confidence) and need a live re-check. |
+| Scenes (voice phrase, "run …", UI, schedule) and History | ✅ Covered by automated tests. |
 
 ### Known limitations
 
@@ -71,7 +137,8 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
   short passive utterance, and none for speech longer than 7 s. Retraining with more bare-word
   samples would make the first stage catch it too (see [Retraining](#retraining)).
 - **Wake-word accuracy on real voices** was measured on synthetic voices and background speech in
-  the room. Tune it in Settings → Wake Word.
+  the room. Tune it in Settings → Wake Word. A very low threshold (≈ 0.05) makes a bare "SAINT"
+  reliable but can fire mid-sentence; SAINT keeps the rest of the request as one command either way.
 - **Barge-in is energy based, not full acoustic echo cancellation.** With headphones it's excellent.
   With loud speakers right next to the microphone, raise *Echo margin* (Settings → Voice) if SAINT
   interrupts itself, or lower it if interrupting is too hard.
@@ -183,8 +250,9 @@ run.bat --background    & rem start hidden in the system tray
 ```
 
 - SAINT starts listening for **"Hey SAINT"** straight away (turn this off in Settings → General).
-- Closing the window keeps SAINT running in the **system tray**. Right-click the tray icon to
-  start/stop listening or quit.
+- Closing the window keeps SAINT running in the **system tray** — the Halo around your screen shows
+  it's still listening, and <kbd>Alt</kbd>+<kbd>`</kbd> opens the overlay. Right-click the tray icon to
+  start/stop listening, toggle the Halo or mini player, run the demo, or quit.
 - Only one instance runs at a time.
 
 ---
@@ -194,8 +262,17 @@ run.bat --background    & rem start hidden in the system tray
 Say **"Hey SAINT"** or **"SAINT"**, then your request, in one breath or after a short pause. After
 the wake word SAINT plays a soft chime and waits up to 6 seconds for the command. **After it answers,
 just keep talking**: for 15 seconds (Settings → Wake Word → *Conversation window*) follow-ups like
-"skip that", "turn it down" or "now put it on the left" need no wake word. You can also type into the
-dashboard; typed text goes through exactly the same agent.
+"skip that", "turn it down" or "now put it on the left" need no wake word. While music is playing,
+SAINT only takes follow-ups it recognises as commands (or short questions to it), so song lyrics and
+people talking don't trigger anything; say "Hey SAINT" first for anything else, even mid-conversation.
+Long requests can be said with natural pauses between the steps. You can also type into the
+Home page, the overlay or the command palette; typed text goes through exactly the same agent.
+
+**Music hot-words.** While Spotify is playing (or paused with the mini player on screen), a short
+playback command on its own works with **no wake word at all**: "skip", "skip this song", "next song",
+"go back", "pause", "resume", "louder", "quieter", "turn it up", "I love this". The whole utterance must
+be one of these, so lyrics and conversation around you are ignored. It rides on the wake word's existing
+transcript check, so it costs nothing extra. Turn it off in Settings → Spotify → *Hands-free*.
 
 References carry over: "it", "that", "that window", "there" and "the first one" mean the thing SAINT
 just worked with, unless you've switched to another window since. "Turn it down" means Spotify after
@@ -221,6 +298,8 @@ on my second screen".
 | "…every morning remind me to check my schedule" · "remind me every weekday at 8:30 to stand up" | Recurring reminders |
 | "…every weekday at 9 play my focus playlist" | Scheduled command |
 | "…what reminders do I have?" · "cancel the stretch reminder" | Manage automations |
+| "…focus mode" · "run wind down" · "start the morning scene" | Runs a [scene](#scenes) you made |
+| "skip" · "pause" · "louder" (music playing, no wake word) | Music hot-words |
 | "…open Discord" · "switch to Spotify" · "close Notepad" (asks first) | Apps and windows |
 | "…move this window to my second monitor" · "snap Chrome to the left" · "maximize this window" | Window placement |
 | "…type hello world into the search box" · "press ctrl+t" · "click the send button" | Keyboard and UI elements |
@@ -260,7 +339,7 @@ Anything else goes to the language model, which can also call the same tools.
 - While SAINT itself is speaking, wake detections are ignored so it can't wake itself. Interrupting is
   handled by barge-in (below), and the conversation window only starts counting once SAINT stops
   talking.
-- If the model file is missing or invalid, the dashboard and Settings show the exact error. SAINT
+- If the model file is missing or invalid, Home and Settings show the exact error. SAINT
   then falls back to transcript-gated listening; nothing is faked.
 
 Settings → **Wake Word**: enable/disable, model file, sensitivity, confirmation frames, detection
@@ -377,6 +456,8 @@ live playback wasn't exercised. Connect your account in Settings to use it.
 | Long-term | `data/memory/saint_memory.db` | Facts you tell SAINT, stored as key/value (`favorite programming language = Python`), with categories *preference*, *personal*, *fact* and *project*. Saying something again updates it; the old value is kept in its history. |
 | Spotify | `data/memory/spotify_memory.db` | Listening history, requests, skips, feedback, playlist aliases, genres. |
 | Automations | `data/memory/automations.db` | Reminders and scheduled commands. |
+| Scenes | `data/scenes.json` | Your scenes. |
+| History | `data/history.jsonl` | What you asked, how (voice, typed, hot-word, scene), SAINT's reply, tools used and timings. Powers the History page. Local only; turn it off or cap its size in Settings → Memory, clear or export it on the History page. |
 
 SAINT only stores clear personal statements ("my favorite X is Y", "call me Sam", "I live in…",
 "remember that…"). It does not store every conversation. Answers such as "Your favorite programming
@@ -400,8 +481,17 @@ me?", "forget my …"). Settings → Memory controls extraction, context injecti
 - **Persistence:** the SQLite store survives restarts. One-time reminders missed while SAINT was
   closed are delivered on start-up if they're within *missed_grace_hours* (default 12); recurring
   ones resume on schedule.
-- **Management:** the **Automations** page (create with a live preview of how the time was
+- **Management:** Automations → **Scheduled** (create with a live preview of how the time was
   understood; pause, resume, run now, cancel, delete) or by voice.
+
+### Scenes
+
+A scene is a name, an optional extra voice phrase, and a list of commands run in order — anything you
+could say to SAINT (“play lofi beats”, “set volume to 35”, “open notion”). Create them in Automations →
+**Scenes** (templates included), then trigger them by saying the name or phrase (“Hey SAINT, focus
+mode”, “run wind down”), from the overlay, Home or the command palette, or on a schedule (“every
+weekday at 8”). Scenes are stored in `data/scenes.json`; a scheduled scene is an ordinary scheduled
+command that says “run <name>”, so it survives restarts like any other automation.
 
 ---
 
@@ -459,23 +549,36 @@ Vision → *Screen reading* turns it off.
 
 ## The interface
 
+Everything you see is driven by real events from the core runtime — the UI never guesses what SAINT is
+doing.
+
 | Page | What it shows |
 |---|---|
-| **Dashboard** | The animated state orb (colour and motion follow the real assistant state), wake-word status and live score, mic level, conversation (typed input uses the same agent), Spotify now-playing with controls, upcoming automations, a live tool/activity feed and system stats. Errors (microphone, wake model, TTS) appear in a banner. |
-| **Memory** | Long-term memories (search, add, edit, delete) and a summary of your music memory. |
-| **Automations** | Create, pause, resume, run, cancel and delete reminders and scheduled commands. |
-| **Activity** | Live event log. |
-| **Modules / Health / Analytics** | Module toggles and progress, subsystem health, latency statistics. |
+| **Home** | The state orb (colour, breathing, rings and ripples follow the real assistant state and your voice), wake-word status with live score and mic meters, the conversation with typed input, now playing, a **Live** feed of tools as they run, what's up next, one-click scenes, and system stats. |
+| **Music** | A cover-tinted now-playing hero (sharp album art, live progress, shuffle / previous / play / next / like / volume), the hands-free words, your queue and quick actions. |
+| **Automations** | **Scenes** (editor with templates, voice phrase, steps, optional schedule, run now) and **Scheduled** reminders and commands. |
+| **History** | Totals, today, last 7 days, how much you use SAINT hands-free, a 30-day chart, your most-used tools and a searchable, filterable timeline. Export or clear it. |
+| **Memory** | Long-term memories (search, filter, add, edit, delete) and your music memory. |
+| **Activity** | Every event, live, with filters (voice, agent & tools, Spotify, problems) and pause. |
+| **System** | Health (status, CPU, memory, uptime, language model reachability, STT, voice, wake word), voice-pipeline latency against goals, and module status. |
 | **Settings** | General · Voice · AI · Wake Word · Spotify · Memory · Automation · Desktop Control · Appearance · Advanced, with search. |
 
-**Appearance** settings: dark, light or system theme; accent colour (presets or custom); font and
-size; compact density; animations on/off; window opacity; always on top; sidebar labels; and which
-dashboard panels are visible. Changes apply immediately.
+**Beyond the window**
 
 | | |
 |---|---|
-| ![Wake word settings](docs/screenshots/settings-wake-word.png) | ![Appearance settings](docs/screenshots/settings-appearance.png) |
-| ![Automations](docs/screenshots/automations.png) | ![Memory](docs/screenshots/memory.png) |
+| **Halo** | Light around the screen edge while SAINT is minimized (or always — Settings → Appearance → *Halo*; one or all monitors). Four thin click-through windows, so it never blocks anything. |
+| **Edge tab** | Rest the cursor at the top-centre edge of the screen for a moment and a small SAINT tab slides down; click it for the overlay. |
+| **Overlay** | <kbd>Alt</kbd>+<kbd>`</kbd> (configurable) from anywhere. A frosted copy of your screen with SAINT on top: state, input, now playing, live tools, conversation, up next, scenes, and toggles for the Halo, mini player and demo. <kbd>Esc</kbd> or a click on the background closes it. |
+| **Mini player** | Floating, always on top, draggable (it remembers where you put it). Double-click it to open Music. It flashes when it hears a hot-word. |
+| **Command palette** | <kbd>Ctrl</kbd>+<kbd>K</kbd>: pages, scenes, music controls, the Halo, the mini player, theme, demo — or “Ask SAINT: …”. <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>8</kbd> jump to pages. |
+| **Tray** | Open SAINT, open the overlay, mini player, Halo, start/stop listening, demo, quit. |
+
+**Appearance** settings: dark, light or system theme; accent colour (presets or custom); font and
+size; compact density; animations on/off; window opacity; always on top; sidebar labels; Halo, edge tab
+and overlay hotkey. Changes apply immediately. On Windows 11 the title bar follows the theme.
+
+![Settings](docs/screenshots/settings.png)
 
 ---
 
@@ -488,8 +591,9 @@ dashboard panels are visible. Changes apply immediately.
 - Most settings apply live when you press **Save settings**: the wake word reloads, the microphone
   restarts, TTS re-initialises, and the log level and appearance update.
 
-Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word), `ai.*`, `agent.*`, `memory.*`,
-`automation.*`, `desktop.*`, `spotify.*`, `vision.*`, `appearance.*`, `dashboard.*`,
+Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word, `music_hotwords`), `ai.*`,
+`agent.*`, `memory.*`, `history.*`, `automation.*`, `desktop.*`, `spotify.*`, `vision.*`,
+`appearance.*`, `overlay.*` (Halo mode, all screens, edge tab, hotkey), `widgets.*` (mini player),
 `notifications.*`, `permissions.overrides`, `logging.*`.
 
 ---
@@ -514,9 +618,13 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word), `ai.*`, `age
 .venv\Scripts\python -m pytest
 ```
 
-291 automated tests cover:
+329 automated tests cover:
 
 - wake-word model loading, silence and noise rejection, the windowed trigger and cooldown
+- music hot-words (accepted only while music is active, whole-utterance match, confidence floor)
+- the local history log (sources, tools, trimming, off switch) and scenes (voice matching, schedules)
+- a headless build of the whole UI: every page, the command palette, overlay, Halo, mini player, and
+  demo mode never reaching the core (no real actions, nothing in your history)
 - the listening state machine (transcript wake for bare "SAINT", passive speech never acted on,
   wake → command, the conversation window that waits while SAINT talks, timeouts)
 - natural-language intent understanding: many phrasings per action, action phrases never becoming
@@ -530,7 +638,8 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word), `ai.*`, `age
 - Spotify resolution, device recovery and listening memory against a simulated API
 
 Tests use a temporary data directory and mock STT, TTS and LLM backends, so they never touch your
-settings, microphone, Spotify account or desktop. `tools/dev/` holds manual diagnostic scripts.
+settings, microphone, Spotify account or desktop. `tools/dev/` holds manual diagnostic scripts, and
+`python tools/dev/screenshots.py` regenerates the README screenshots from synthetic data.
 
 Before a release, run through the **[manual testing checklist](docs/MANUAL_TESTING.md)** (voice,
 Spotify, screen, mouse/keyboard, windows, browser, multi-step, natural answers).
@@ -551,7 +660,10 @@ Spotify, screen, mouse/keyboard, windows, browser, multi-step, natural answers).
 | TTS on CPU / "CUDA unavailable" | Install the CUDA PyTorch build (see Installation). The reason is logged at start-up. |
 | Spotify: "isn't connected" / "no device" / "needs Premium" | Connect in Settings → Spotify. Open Spotify on a device. Playback control needs Premium. |
 | "I can't see a 'search box'" | The app doesn't expose that element through UI Automation; click into the field and say "type …" instead. |
-| DLL "blocked by Application Control" | A Windows Smart App Control / WDAC policy blocks a compiled package. SAINT avoids scikit-learn for this reason; allow the package or use a different Python environment. |
+| DLL "blocked by Application Control" | A Windows Smart App Control / WDAC policy blocks a compiled package. SAINT avoids scikit-learn for this reason; allow the package or use a different Python environment. Smart App Control can also intermittently block SciPy DLLs that Kokoro TTS loads — System shows TTS as not ready; restart SAINT or turn Smart App Control off. |
+| "Overlay hotkey is taken" toast | Another app already owns that shortcut. Pick a different one in Settings → Appearance → *Overlay hotkey* (e.g. `ctrl+alt+s`). |
+| No Halo | It shows while SAINT is minimized or in the tray (or always — Settings → Appearance → *Halo*). Exclusive-fullscreen games draw over it; borderless-windowed games don't. |
+| “Skip” without the wake word does nothing | Hot-words work while Spotify is playing (or paused with the mini player showing). Check Settings → Spotify → *Hands-free*. |
 
 ---
 
@@ -567,17 +679,25 @@ core/
   events.py             event bus (direct core subscribers + Qt signal for UI)
   config.py, paths.py   settings (+ migration) and project-relative paths
   permissions.py        allow / confirm / deny policy
+  history.py            local usage log (data/history.jsonl) behind the History page
   logger.py, device.py, analytics.py, state.py, setup.py
 modules/
   voice/                mic capture, VAD, wake word (ONNX), STT, TTS
   agent/                intent router, confirmations, LLM tool calling
-  automation/           tool registry, scheduler, time parser, background tasks
+  automation/           tool registry, scheduler, time parser, scenes, background tasks
   spotify/              OAuth PKCE, API client, tools, listening memory
   memory/               SQLite store + structured memory service
   desktop/              apps, windows, keyboard/mouse, UI Automation
   vision/               screen capture, UI context, optional vision model
   ai/                   providers (Ollama/OpenAI-compatible/mock), context
-ui/                     dashboard, memory, automations, settings, theme, widgets
+ui/
+  main_window.py        shell: sidebar, pages, tray, hotkey, palette, toasts
+  pages/                home, music (+ NowPlaying), automations, history, memory, activity, system
+  halo.py, overlay.py   screen-edge Halo + edge tab, Steam-style overlay
+  spotify_widget.py     floating mini player
+  palette.py, toast.py, demo.py
+  reactive.py           ui_bus: the UI's view of SAINT (and the demo's scripted feed)
+  theme.py, icons.py, motion.py, widgets.py, win.py, actions.py, settings_ui.py
 data/wake/              wake-word models (committed); everything else in data/ is local
 tests/                  pytest suite
 tools/                  wake-word training config, dev scripts
@@ -590,6 +710,11 @@ tools/                  wake-word training config, dev scripts
 - Wake word, speech recognition, speech output and the language model all run **locally**. Nothing
   is sent anywhere except Spotify API calls, and an OpenAI-compatible endpoint if you configure one.
 - Secrets never go in the repo. Spotify tokens live in the Windows Credential Manager. `data/`
-  (config, memories, logs) and `.env` files are git-ignored.
+  (config, memories, history, scenes, logs) and `.env` files are git-ignored — a fresh clone starts
+  clean, and your data stays on your PC.
+- **History** is a plain local file (`data/history.jsonl`) you can turn off, cap, export or clear. It
+  is never uploaded. Demo mode never writes to it.
+- The overlay's frosted background is a snapshot of your screen taken the moment it opens; it's kept
+  in memory only and dropped when the overlay closes.
 - The LLM can only act through explicit, validated tools. It has no shell access, and high-risk
   actions need your confirmation.

@@ -10,6 +10,8 @@ Listening phases (independent of the UI):
               on is transcribed once and accepted only if it *starts* with
               "SAINT" / "Hey SAINT" (second-stage wake: the ONNX model is
               trained mostly on "Hey SAINT" and barely scores a bare "SAINT").
+              While Spotify plays, that same check also accepts a bare
+              playback hot-word ("skip", "pause", "louder") — no wake word.
     COMMAND   "Hey SAINT" was heard (or SAINT was interrupted / the
               conversation window is open): the next utterance is captured and
               sent to STT. The conversation window
@@ -349,10 +351,12 @@ class VoiceModule(BaseModule):
         return self._speaking or self.is_tts_playback_active()
 
     _music_playing = False              # updated from spotify.playback.changed events
+    _music_loaded = False               # a track is loaded (playing or paused)
 
     def _on_bus_event(self, ev):
         if ev.type == EventType.SPOTIFY_PLAYBACK_CHANGED:
             self._music_playing = bool((ev.payload or {}).get("is_playing"))
+            self._music_loaded = bool((ev.payload or {}).get("track"))
         if ev.type == EventType.CONVERSATION_TURN_END:
             if not (self._listening and self.wake_mode):
                 return
@@ -471,6 +475,10 @@ class VoiceModule(BaseModule):
     def _process_loop(self):
         mode = config.get("voice.mode", "always_on")
         silence_frames = max(1, int(config.get("voice.silence_duration_ms", 700) / CHUNK_MS))
+        # A command gets a longer pause before it counts as finished: people
+        # breathe between the steps of "open my browser, search YouTube for X...".
+        command_silence_frames = max(silence_frames,
+                                     int(config.get("voice.command_silence_ms", 1000) / CHUNK_MS))
         min_speech_frames = max(1, int(config.get("voice.min_speech_duration_ms", 300) / CHUNK_MS))
         min_speech_rms = config.get("voice.min_speech_rms", 0.005)
         barge_enabled = config.get("voice.barge_in_enabled", True)
@@ -487,6 +495,7 @@ class VoiceModule(BaseModule):
         speech_count = 0
         sid = 0
         barge_capture = False
+        seg_reason = None          # command reason when the segment started (None: passive)
         last_restart_try = 0.0
 
         while not self._stop_event.is_set():
@@ -574,6 +583,8 @@ class VoiceModule(BaseModule):
                     # 600 ms pre-roll: VAD onset can lag a soft first word
                     # ("Saint" under music) and clipping it loses the wake word.
                     seg = list(preroll)[-20:]
+                    with self._phase_lock:
+                        seg_reason = self._command_reason if self._phase == ListenPhase.COMMAND else None
                     if self.phase != ListenPhase.WAKE:
                         event_bus.emit_event(EventType.VOICE_SPEECH_START, {"session_id": sid})
                 else:
@@ -588,17 +599,18 @@ class VoiceModule(BaseModule):
                     was_barge = barge_capture
                     barge_capture = False
                     self._end_segment(seg, speech_count, sid, min_speech_frames,
-                                      min_speech_rms, was_barge)
+                                      min_speech_rms, was_barge, seg_reason)
                     seg, speech_count, silence_count = [], 0, 0
             elif in_speech:
                 silence_count += 1
                 seg.append(chunk16)
-                if silence_count >= silence_frames:
+                if silence_count >= (command_silence_frames if self.phase == ListenPhase.COMMAND
+                                     else silence_frames):
                     in_speech = False
                     was_barge = barge_capture
                     barge_capture = False
                     self._end_segment(seg, speech_count, sid, min_speech_frames,
-                                      min_speech_rms, was_barge)
+                                      min_speech_rms, was_barge, seg_reason)
                     seg = []
                     speech_count = 0
                     silence_count = 0
@@ -660,17 +672,30 @@ class VoiceModule(BaseModule):
     # Segment end
     # ------------------------------------------------------------------ #
     def _end_segment(self, frames, speech_count, sid, min_speech_frames, min_speech_rms,
-                     was_barge: bool):
+                     was_barge: bool, started_reason: Optional[str] = None):
         phase = self.phase
+        if phase == ListenPhase.WAKE and started_reason:
+            # The user started talking while SAINT was listening for a command
+            # and kept going after an early fragment was handled: the rest of
+            # the sentence is still addressed to SAINT, not background speech.
+            log.info("voice.segment.continued reason=%s", started_reason)
+            self._enter_command(float(config.get("voice.wake_word_command_timeout_sec", 6.0)), started_reason)
+            phase = ListenPhase.COMMAND
         if phase == ListenPhase.WAKE:
             # Speech the wake model did not fire on. Short utterances get one
             # transcript check ("SAINT, skip this" — the model barely scores a
             # bare "SAINT"); they are acted on only if the transcript *starts*
             # with the wake word. Everything else is dropped untranscribed.
             dur = len(frames) * CHUNK_MS / 1000.0
-            if (config.get("voice.wake_word_transcript_check", True) and self._stt is not None
-                    and 0.3 <= dur <= float(config.get("voice.wake_word_transcript_max_sec", 7.0))
-                    and self._validate_speech_session(frames, speech_count, min_speech_frames, min_speech_rms)):
+            hot = self._hotwords_active()
+            # A quick "skip" is shorter than the normal minimum speech length.
+            min_frames = min(min_speech_frames, max(1, int(180 / CHUNK_MS))) if hot else min_speech_frames
+            checking = config.get("voice.wake_word_transcript_check", True) or hot
+            max_dur = float(config.get("voice.wake_word_transcript_max_sec", 7.0))
+            valid = self._validate_speech_session(frames, speech_count, min_frames, min_speech_rms)
+            if hot and checking and not (0.3 <= dur <= max_dur and valid):
+                log.debug("voice.passive.skipped dur=%.2fs speech_frames=%d valid=%s", dur, speech_count, valid)
+            if (checking and self._stt is not None and 0.3 <= dur <= max_dur and valid):
                 peak = getattr(self._wake, "recent_peak", lambda _s: 0.0)(dur + 1.0)
                 now = self._audio_clock
                 check = frames
@@ -823,25 +848,41 @@ class VoiceModule(BaseModule):
             return ""
         raw_text = (getattr(result, "text", "") or "").strip()
         confidence = float(getattr(result, "confidence", 0.0) or 0.0)
+        hot = False
         if wake_check:
             # Second-stage wake: only a transcript that starts with the wake
-            # word counts. Nothing else from passive listening is kept or shown.
-            if not self._starts_with_wake(raw_text) and not self._head_says_wake(audio):
-                # Never log what bystanders said — only that it wasn't addressed to SAINT.
-                log.debug("voice.wake.transcript_rejected session=%s words=%d", session_id, len(raw_text.split()))
-                return ""
-            text = self._strip_wake_prefix(raw_text)
-            bare = not text.strip() or self._is_punctuation_only(text.strip())
-            if self.phase == ListenPhase.WAKE or not bare:
-                self._on_wake_word(0.0, source="transcript")
-            wake_initiated = True
-            if bare:
-                return ""          # bare "SAINT" — the command window is now open
-            with self._phase_lock:
-                self._awaiting_stt = True
+            # word counts — or, while music plays, a bare playback hot-word
+            # ("skip", "pause"). Nothing else from passive listening is kept or shown.
+            hot = not self._starts_with_wake(raw_text) and self._is_music_hotword(raw_text, confidence)
+            if hot:
+                text = raw_text.strip()
+                log.info("voice.hotword session=%s conf=%.2f text=%r", session_id, confidence, text)
+                event_bus.emit_event(EventType.VOICE_HOTWORD, {"text": text.strip(".!?, ")})
+                wake_initiated = True
+            else:
+                if not self._starts_with_wake(raw_text) and not self._head_says_wake(audio):
+                    # Never log what bystanders said — only that it wasn't addressed to SAINT.
+                    log.debug("voice.wake.transcript_rejected session=%s words=%d",
+                              session_id, len(raw_text.split()))
+                    return ""
+                text = self._strip_wake_prefix(raw_text)
+                bare = not text.strip() or self._is_punctuation_only(text.strip())
+                if self.phase == ListenPhase.WAKE or not bare:
+                    self._on_wake_word(0.0, source="transcript")
+                wake_initiated = True
+                if bare:
+                    return ""          # bare "SAINT" — the command window is now open
+                with self._phase_lock:
+                    self._awaiting_stt = True
             wake_check = False
         else:
             text = self._strip_wake_prefix(raw_text) if (wake_initiated or self.wake_mode) else raw_text
+            if follow_up and self._starts_with_wake(raw_text):
+                # "Hey SAINT" said during a follow-up window addresses SAINT by
+                # name: treat it as a fresh wake, not an unaddressed follow-up.
+                follow_up = False
+                if not text.strip() or self._is_punctuation_only(text.strip()):
+                    self._on_wake_word(0.0, source="transcript")
         log.info("stt.result session=%s conf=%.2f wake=%s ms=%.0f text=%r",
                  session_id, confidence, wake_initiated, inference_ms, raw_text)
         event_bus.emit_event(EventType.VOICE_SPEECH_END, {"session_id": session_id})
@@ -850,6 +891,13 @@ class VoiceModule(BaseModule):
             event_bus.emit_event(EventType.VOICE_STT_SKIP, {
                 "session_id": session_id, "reason": "empty_after_wake_strip" if raw_text else "empty",
                 "text": raw_text})
+            return ""
+
+        if self._FRAGMENT.match(text.strip()):
+            # "and" / "um" is the start of a sentence cut at a breath, never a
+            # request: keep listening for the rest instead of answering it.
+            event_bus.emit_event(EventType.VOICE_STT_SKIP, {
+                "session_id": session_id, "reason": "fragment", "text": text})
             return ""
 
         ok, reason = self._passes_activation_gate(text, confidence,
@@ -870,6 +918,7 @@ class VoiceModule(BaseModule):
             "inference_ms": round(inference_ms, 1),
             "session_id": session_id,
             "wake": wake_initiated,
+            **({"source": "hotword"} if hot else {}),
             "diagnostics": {
                 "audio_duration_ms": audio_duration_ms,
                 "audio_rms": rms,
@@ -886,13 +935,13 @@ class VoiceModule(BaseModule):
     # Transcript helpers
     # ------------------------------------------------------------------ #
     _WAKE_PREFIX = re.compile(
-        r"^\s*(?:(?:hey|hi|ok(?:ay)?)[\s,.!]+)?(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
+        r"^\s*(?:(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+)?(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
         re.IGNORECASE)
 
     # Whisper sometimes renders "Hey SAINT" as "Hey, St." — only strip that
     # form after a greeting, so "St. Louis weather" is left alone.
     _WAKE_PREFIX_ALT = re.compile(
-        r"^\s*(?:hey|hi|ok(?:ay)?)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
+        r"^\s*(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
         re.IGNORECASE)
 
     def _strip_wake_prefix(self, text: str) -> str:
@@ -912,9 +961,9 @@ class VoiceModule(BaseModule):
         return stripped.strip()
 
     _WAKE_START = re.compile(
-        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh)[\s,.!]+)?(?:(?:hey|hi|ok(?:ay)?|yo)[\s,.!]+)?"
+        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh)[\s,.!]+)?(?:(?:hey|hay|they|hi|ok(?:ay)?|yo)[\s,.!]+)?"
         r"(?:saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)", re.IGNORECASE)
-    _WAKE_START_ALT = re.compile(r"^\s*(?:hey|hi|ok(?:ay)?)[\s,.!]+st\.?(?=[\s,.!?]|$)", re.IGNORECASE)
+    _WAKE_START_ALT = re.compile(r"^\s*(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+st\.?(?=[\s,.!?]|$)", re.IGNORECASE)
 
     def _head_says_wake(self, audio: np.ndarray) -> bool:
         """Whisper sometimes drops a short leading "SAINT" from a longer
@@ -927,7 +976,7 @@ class VoiceModule(BaseModule):
         except Exception:
             return False
         text = (getattr(r, "text", "") or "").strip()
-        ok = bool(re.match(r"^\W*(?:(?:hey|hi|ok(?:ay)?)\W+)?saint(?:s)?\b", text, re.I))
+        ok = bool(re.match(r"^\W*(?:(?:hey|hay|they|hi|ok(?:ay)?)\W+)?saint(?:s)?\b", text, re.I))
         log.debug("voice.wake.head_check ok=%s", ok)
         return ok
 
@@ -947,6 +996,57 @@ class VoiceModule(BaseModule):
         r"i\s+don'?t\s+like\s+this|dislike\s+this|thumbs\s+(?:up|down)|"
         r"add\s+this\s+to\s+.+|queue\s+.+|play\s+something\s+.+)"
         r"[.!?]?$", re.IGNORECASE)
+
+    # Playback commands accepted with NO wake word while music is active. The
+    # whole utterance must be one of these, so lyrics and chatter don't count.
+    _MUSIC_HOTWORD = re.compile(
+        r"^(?:skip(?:\s+(?:it|this|that|song|track|(?:this|that|the)\s+(?:song|track|one)))?|next(?:\s+(?:song|track))?|"
+        r"go\s+back|previous\s+(?:song|track)|last\s+song|"
+        r"pause(?:\s+(?:it|music|the\s+music|spotify))?|resume(?:\s+(?:the\s+)?music)?|unpause|"
+        r"(?:play|keep\s+playing)\s+(?:the\s+)?music|"
+        r"louder|quieter|volume\s+(?:up|down)|turn\s+(?:it|the\s+music)\s+(?:up|down)|"
+        r"(?:i\s+)?(?:like|love)\s+this(?:\s+song)?)$", re.IGNORECASE)
+
+    _FRAGMENT = re.compile(r"^(?:and|and then|then|so|um+|uh+|but|or|also|like|okay so)[\s.,!?…-]*$", re.IGNORECASE)
+
+    # A question put to SAINT ("What's that reminder for?"), as opposed to a
+    # lyric or a remark. Whisper only adds the '?' when it hears a question.
+    _DIRECT_QUESTION = re.compile(
+        r"^(?:what|what's|whats|who|who's|where|where's|when|why|how|is|are|can|could|will|would|do|does|"
+        r"did|should)\b.*\?$", re.IGNORECASE)
+
+    @staticmethod
+    def _is_command(text: str) -> bool:
+        """Does the agent recognise ``text`` as something to do?"""
+        try:
+            from modules.agent.agent import agent
+            return agent.accepts_followup(text)
+        except Exception as e:
+            log.debug("voice.is_command_failed %s", e)
+            return False
+
+    def _hotwords_active(self) -> bool:
+        """Music is playing, or paused while the Spotify widget is on screen."""
+        if not config.get("voice.music_hotwords", True):
+            return False
+        return self._music_playing or (self._music_loaded and bool(config.get("widgets.spotify", False)))
+
+    def _is_music_hotword(self, text: str, confidence: float) -> bool:
+        if not self._hotwords_active():
+            return False
+        said = (text or "").strip().strip(".!?,").strip()
+        if not self._MUSIC_HOTWORD.match(said):
+            return False
+        # Whisper gives one- and two-word utterances near-zero confidence
+        # ("Skip." came back at 0.02), so it can't judge them; the exact
+        # whole-utterance match above is the safeguard for those.
+        if len(said.split()) <= 2:
+            return True
+        floor = float(config.get("voice.hotword_min_confidence", 0.2))
+        if 0 < confidence < floor:
+            log.info("voice.hotword.rejected conf=%.2f floor=%.2f text=%r", confidence, floor, text)
+            return False
+        return True
 
     def _passes_activation_gate(self, text: str, confidence: float, wake_initiated: bool = False,
                                 follow_up: bool = False):
@@ -969,16 +1069,26 @@ class VoiceModule(BaseModule):
                           "yeah", "so", "uh", "um", "hmm", "the"}
         if lower.strip(".!?, ") in hallucinations and confidence < short_conf:
             return False, "likely_hallucination"
-        if len(words) <= 1 and confidence < (0.45 if follow_up else short_conf):
+        # Whisper scores short commands low ("Click it." came back at 0.13), so a
+        # follow-up SAINT recognises as a command gets a lower confidence floor.
+        command = follow_up and (bool(self._MUSIC_FOLLOWUP_OK.match(stripped.strip(".!? ")))
+                                 or self._is_command(stripped))
+        command_conf = float(config.get("voice.followup_command_min_confidence", 0.1))
+        # One-word follow-ups ("Pause.") come back at confidence 0.00; a word
+        # SAINT recognises as a command is trusted, anything else isn't.
+        if len(words) <= 1 and not command and confidence < (0.45 if follow_up else short_conf):
             return False, "short_low_confidence"
         # MUSIC GUARD: when Spotify is playing, follow-ups get bombarded with
-        # transcribed lyrics. Reject anything that isn't a short playback-style
-        # command; the user can still say "Hey SAINT, <anything>" to bypass.
+        # transcribed lyrics. Keep what SAINT would act on (a command it
+        # recognises, an answer to its question) or a short direct question;
+        # drop chatter and lyrics. "Hey SAINT, <anything>" always bypasses.
         if follow_up and self._music_playing and config.get("voice.music_strict_followup", True):
-            if not self._MUSIC_FOLLOWUP_OK.match(stripped.strip(".!? ")):
+            if not (command or self._DIRECT_QUESTION.match(stripped) and len(words) <= 14):
                 return False, "music_playing_needs_wake_word"
         if follow_up:
             min_conf = min(min_conf, float(config.get("voice.followup_min_confidence", 0.25)))
+            if command:
+                min_conf = 0.0 if len(words) <= 2 else min(min_conf, command_conf)
         if confidence > 0 and confidence < min_conf:
             return False, f"low_confidence_{confidence:.2f}"
         return True, ""

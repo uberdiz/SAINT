@@ -69,8 +69,11 @@ def search_url(site: str, query: str) -> Optional[str]:
 
 
 def _browser_window(hint: str = "", new_window: bool = False):
-    """The browser window to use: foreground/recent/matching, else None."""
-    from modules.desktop.controller import desktop, AmbiguousWindow
+    """The browser window to navigate in: the one SAINT is working with, the
+    one in front, one whose title matches ``hint``, else the most recently
+    used one. Navigating never needs to ask "which window?" — the user can
+    name one ("in my YouTube window") when it matters."""
+    from modules.desktop.controller import desktop
     if new_window:
         return None
     wins = desktop.app_windows("browser")
@@ -85,8 +88,26 @@ def _browser_window(hint: str = "", new_window: bool = False):
         return tw
     chosen = desktop.pick_window(wins, hint)
     if chosen is None:
-        raise AmbiguousWindow("browser", wins)
+        visible = [w for w in wins if not w.minimized]
+        chosen = (visible or wins)[0]          # z-order: the most recently used
+        log.info("browser.window recent=%r of %d", chosen.title[:50], len(wins))
     return chosen
+
+
+def new_tab() -> dict:
+    """Open a new tab in the user's browser (starting the browser if none is open)."""
+    from modules.desktop.controller import desktop, _require
+    _require("allow_keyboard", "Keyboard control")
+    w = _browser_window()
+    if w is None:
+        res = desktop.open_app("browser")
+        return {"window": res.get("window", ""), "app": res.get("app", "browser"), "started": True}
+    w = desktop._activate(w)
+    desktop.press_keys("ctrl+t")
+    time.sleep(0.3)
+    info = desktop._info(w.hwnd)
+    desktop._note(info)
+    return {"window": info.title, "hwnd": info.hwnd, "started": False}
 
 
 def open_url(url: str, hint: str = "", new_window: bool = False, hwnd: Optional[int] = None) -> dict:

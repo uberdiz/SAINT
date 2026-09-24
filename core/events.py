@@ -106,6 +106,10 @@ class EventType:
     # Wake word
     WAKE_STATUS="wake.status"; WAKE_ERROR="wake.error"; VOICE_WAKE_SCORE="voice.wake.score"
     VOICE_COMMAND_TIMEOUT="voice.command.timeout"; VOICE_BARGE_IN="voice.barge_in"
+    # A music hot-word ("skip", "pause", "louder") accepted without the wake word
+    VOICE_HOTWORD="voice.hotword"
+    # A turn / scene run was written to the local history log (core/history.py)
+    HISTORY_APPENDED="history.appended"
     # Agent
     AGENT_INTENT="agent.intent"; AGENT_CONFIRM_REQUIRED="agent.confirm.required"
     AGENT_CONFIRM_RESOLVED="agent.confirm.resolved"

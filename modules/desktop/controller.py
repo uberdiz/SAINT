@@ -356,7 +356,9 @@ class DesktopController:
         fg = next((w for w in wins if w.foreground), None)
         try:
             from modules.agent.context import desktop_context
-            ref = desktop_context.window()
+            # The working window only stays the default for a short while;
+            # after that "click X" means the window the user is looking at.
+            ref = desktop_context.window(max_age=float(config.get("desktop.context_window_ttl_sec", 45.0)))
             fg_then = desktop_context.foreground_at_note()
         except Exception:
             ref = fg_then = None
@@ -435,6 +437,43 @@ class DesktopController:
             raise ToolError(f"I tried, but {w.title} is still on monitor {info.monitor}.", "MOVE_FAILED")
         self._note(info)
         return info
+
+    def minimize_others(self, keep: str) -> dict:
+        """Minimize every window except those of ``keep`` ("spotify",
+        "claude and discord") and SAINT's own. Nothing is touched when none of
+        the named windows can be found."""
+        _require("allow_window_control", "Window control")
+        names = [n.strip() for n in re.split(r",|\s+and\s+|\s+or\s+|&", (keep or "").lower())
+                 if n.strip()]
+        names = [re.sub(r"^(the|my)\s+", "", n) for n in names]
+        wins = [w for w in self.list_windows() if not self._is_own(w)]
+        kept, missing = [], []
+        for n in names:
+            n = re.sub(r"\s+(app|application|window|windows|tabs?)$", "", n)
+            hits = self.app_windows(n) or [w for w in wins
+                                            if n in w.title.lower() or n in w.process.lower()]
+            (kept.extend(hits) if hits else missing.append(n))
+        if not kept:
+            raise ToolError(f"I couldn't find a window for {keep}, so I left everything as it is.", "NOT_FOUND")
+        keep_ids = {w.hwnd for w in kept}
+        hidden = 0
+        for w in wins:
+            if w.hwnd in keep_ids or w.minimized:
+                continue
+            try:
+                win32gui.ShowWindow(w.hwnd, win32con.SW_MINIMIZE)
+                hidden += 1
+            except Exception as e:
+                log.debug("desktop.minimize_others_failed %s %s", w.title[:40], e)
+        for w in kept:
+            if w.minimized:
+                win32gui.ShowWindow(w.hwnd, win32con.SW_RESTORE)
+        kept_names = []
+        for w in kept:
+            n = w.process.replace(".exe", "").title()
+            if n not in kept_names:
+                kept_names.append(n)
+        return {"minimized": hidden, "kept": kept_names, "missing": missing}
 
     def arrange(self, query: str, action: str) -> WindowInfo:
         """maximize | minimize | restore | snap_left | snap_right | center"""

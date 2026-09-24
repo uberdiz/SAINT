@@ -15,7 +15,7 @@ def _w(hwnd, title, fg=False, proc="opera.exe"):
 def ctl(monkeypatch):
     c = DesktopController()
     monkeypatch.setattr(DesktopController, "_is_own", staticmethod(lambda w: w.process == "saint.exe"))
-    monkeypatch.setattr(desktop_context, "window", lambda: desktop_context._test_ref)
+    monkeypatch.setattr(desktop_context, "window", lambda max_age=None: desktop_context._test_ref)
     monkeypatch.setattr(desktop_context, "foreground_at_note", lambda: desktop_context._test_fg)
     yield c
     desktop_context.clear()

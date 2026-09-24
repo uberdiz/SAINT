@@ -1,7 +1,8 @@
 """Tiny web-search helper for current-information questions.
 
 Providers:
-    duckduckgo   Instant Answer API (no key, best for definitions/summaries)
+    duckduckgo   Instant Answer API (no key, best for definitions/summaries);
+                 news questions fall back to the Google News RSS feed
     tavily       requires web.api_key
     serpapi      requires web.api_key
 
@@ -12,8 +13,10 @@ Returns a short natural answer or raises; the router turns raises into a
 
 from __future__ import annotations
 
+import html
 import json
 import logging
+import re
 from typing import List
 
 import requests
@@ -59,6 +62,37 @@ def _duckduckgo(query: str) -> List[dict]:
     for t in (data.get("RelatedTopics") or [])[:config.get("web.max_results", 4)]:
         if isinstance(t, dict) and t.get("Text"):
             hits.append({"title": t.get("Text", "")[:80], "text": t["Text"], "url": t.get("FirstURL", "")})
+    # The Instant Answer API only knows encyclopedic topics — never news.
+    # For news questions use the Google News RSS feed (public, keyless).
+    if not hits and _NEWSY.search(query):
+        hits = _news_rss(query)
+    return hits
+
+
+_NEWSY = re.compile(r"\b(news|latest|headlines?|happening|updates?|today|this week|recent(?:ly)?)\b", re.I)
+_NEWS_FILLER = re.compile(
+    r"^(?:(?:use|using|with|on)\s+\w+\s+(?:and|to)\s+)?(?:please\s+)?(?:find|get|tell me|give me|look up|search|"
+    r"what(?:'s| is| are)?)?\s*(?:the\s+)?(?:latest|newest|current|recent|today'?s)?\s*"
+    r"(?:news|headlines|updates?)?\s*(?:about|on|for|regarding|with)?\s*", re.I)
+
+
+def _news_rss(query: str) -> List[dict]:
+    topic = _NEWS_FILLER.sub("", query.strip().rstrip("?.! ")).strip() or query
+    try:
+        r = requests.get("https://news.google.com/rss/search", timeout=8, headers={"User-Agent": _UA},
+                         params={"q": topic, "hl": "en-US", "gl": "US", "ceid": "US:en"})
+        feed = r.text if r.status_code == 200 else ""
+    except requests.RequestException as e:
+        log.warning("news_rss.failed %s", e)
+        return []
+    hits: List[dict] = []
+    for item in re.findall(r"<item>(.*?)</item>", feed, re.S)[:int(config.get("web.max_results", 4))]:
+        title = re.search(r"<title>(.*?)</title>", item, re.S)
+        link = re.search(r"<link>(.*?)</link>", item, re.S)
+        if title:
+            text = html.unescape(re.sub(r"<!\[CDATA\[|\]\]>", "", title.group(1))).strip()
+            hits.append({"title": text, "text": text, "url": link.group(1).strip() if link else ""})
+    log.info("news_rss topic=%r results=%d", topic, len(hits))
     return hits
 
 

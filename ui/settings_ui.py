@@ -90,7 +90,7 @@ class SettingsUI(QWidget):
         return w
 
     def _section(self, title, desc=""):
-        box = QGroupBox(title)
+        box = QGroupBox(title.replace("&", "&&"))
         form = QFormLayout(box)
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignLeft)
@@ -134,8 +134,8 @@ class SettingsUI(QWidget):
     # ------------------------------------------------------------------ #
     def _build(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(36, 28, 36, 24)
+        root.setSpacing(16)
         head = QHBoxLayout()
         t = QLabel("Settings")
         t.setObjectName("PageTitle")
@@ -523,6 +523,10 @@ class SettingsUI(QWidget):
         self._row(f, "Wake a device", self._check("spotify.auto_device",
                                                    "If nothing is playing anywhere, activate a device (or open Spotify)"))
         self._row(f, "Volume step", self._spin("spotify.volume_step", 5, 50, 5, 0, " %"))
+        self._row(f, "Hands-free", self._check("voice.music_hotwords",
+                                               "While music plays, “skip”, “pause”, “louder”… need no wake word"),
+                  "Only a short playback command on its own counts — lyrics and chatter are ignored.")
+        self._row(f, "Mini player", self._check("widgets.spotify", "Show the floating always-on-top player"))
         lay.addWidget(box)
 
         box, f = self._section("Music memory", "Used for “play something I'd like” and “what did I listen to today”.")
@@ -601,6 +605,11 @@ class SettingsUI(QWidget):
         wipe.setObjectName("Danger")
         wipe.clicked.connect(self._wipe_memory)
         f.addRow("", wipe)
+        lay.addWidget(box)
+        box, f = self._section("History", "A private log of what you asked and what SAINT did, shown on the History "
+                                          "page. It is stored only in data/history.jsonl on this PC and never uploaded.")
+        self._row(f, "History", self._check("history.enabled", "Keep a local history of requests"))
+        self._row(f, "Keep up to", self._spin("history.max_entries", 100, 100000, 500, 0, " entries"))
         lay.addWidget(box)
         self._add_page(w, lay)
 
@@ -758,7 +767,7 @@ class SettingsUI(QWidget):
         self._row(f, "Font", self.font_combo)
         self._row(f, "Font size", self._spin("appearance.font_size", 10, 20, 1, 0, " px"))
         self._row(f, "Density", self._check("appearance.compact", "Compact"))
-        self._row(f, "Animations", self._check("appearance.animations", "Animate the state orb and meters"))
+        self._row(f, "Animations", self._check("appearance.animations", "Animate the orb, Halo and transitions"))
         lay.addWidget(box)
 
         box, f = self._section("Window")
@@ -771,11 +780,16 @@ class SettingsUI(QWidget):
         self._row(f, "Sidebar", self._check("appearance.sidebar_labels", "Show labels"))
         lay.addWidget(box)
 
-        box, f = self._section("Dashboard panels")
-        for key, label in (("conversation", "Conversation"), ("spotify", "Now playing"),
-                           ("automations", "Upcoming automations"), ("activity", "Activity feed"),
-                           ("system", "System stats")):
-            self._row(f, label, self._check(f"dashboard.panels.{key}", "Show"))
+        box, f = self._section("Halo & overlay",
+                               "The Halo is a soft light that travels around your screen edge while SAINT works in "
+                               "the background. Rest the cursor at the top-centre edge, or press the hotkey, to open "
+                               "the overlay.")
+        self._row(f, "Halo", self._combo("overlay.halo", ["When SAINT is minimized", "Always", "Off"],
+                                         data=["minimized", "always", "off"]))
+        self._row(f, "Screens", self._check("overlay.halo_all_screens", "Show on every monitor"))
+        self._row(f, "Edge tab", self._check("overlay.edge_tab", "Reveal a SAINT tab at the top edge"))
+        self._row(f, "Overlay hotkey", self._line("overlay.hotkey", "alt+`"),
+                  "Works from anywhere. Combine ctrl / alt / shift / win with a key, e.g. alt+` or ctrl+alt+s.")
         lay.addWidget(box)
         self._add_page(w, lay)
 

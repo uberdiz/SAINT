@@ -9,6 +9,7 @@ AI module: every user turn goes through here.
   - Short-term conversation context tracked via ConversationContext
 """
 
+import re
 import threading
 import time
 from typing import Callable, Optional, Dict, List, Any
@@ -20,9 +21,23 @@ from core.events import event_bus, EventType
 from core.config import config
 
 
+def _model_weight(m: Dict[str, Any]) -> float:
+    """Rough model size for ranking: bytes on disk, else the parameter count
+    ("8.0B", or the ":1b" / ":360m" tag); an untagged ":latest" is assumed to
+    be a typical full-size model."""
+    if m.get("size"):
+        return float(m["size"])
+    tag = str((m.get("details") or {}).get("parameter_size") or (m.get("name") or "").split(":")[-1]).lower()
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([bm])", tag)
+    if match:
+        return float(match.group(1)) * (1e9 if match.group(2) == "b" else 1e6)
+    return 5e9
+
+
 class AIModule(BaseModule):
     name = "AI"
     description = "Sends prompts to a configured LLM provider and returns responses."
+    _warned_models: set = set()   # configured models already reported as missing
 
     def __init__(self):
         super().__init__()
@@ -82,7 +97,7 @@ class AIModule(BaseModule):
             models = provider.list_models(base_url)
             names = [m.get("name") for m in models if m.get("name")]
         except Exception:
-            names = []
+            models, names = [], []
         if not names:
             # Can't verify (Ollama unreachable). Keep configured so the request
             # surfaces a clear connection/model error rather than guessing.
@@ -101,7 +116,10 @@ class AIModule(BaseModule):
                 s += 50
             return s
 
-        best = max(names, key=score)
+        sizes = {m.get("name"): _model_weight(m) for m in models if m.get("name")}
+        # Equal matches (llama3 -> llama3.2:1b / llama3.1:latest): take the
+        # biggest model — a 1B model can't follow the assistant's instructions.
+        best = max(names, key=lambda n: (score(n), sizes.get(n, 0)))
         return best, {"configured": configured, "resolved": best, "available": names}
 
     # ------------------------------------------------------------------ #
@@ -272,7 +290,8 @@ class AIModule(BaseModule):
         # ---- 2. LLM ------------------------------------------------------------
         provider = get_provider(provider_name)
         model, model_info = self._resolve_model(provider_name, base_url, configured_model)
-        if model_info:
+        if model_info and model_info["configured"] not in self._warned_models:
+            self._warned_models.add(model_info["configured"])
             _ai_log.warning("Configured model '%s' is not installed; using '%s'. Installed: %s.",
                             model_info["configured"], model_info["resolved"], model_info["available"])
             event_bus.emit_event(EventType.WARNING, {"message": (

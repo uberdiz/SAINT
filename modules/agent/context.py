@@ -64,10 +64,10 @@ class DesktopContext:
         with self._lock:
             return getattr(self, "_fg_at_note", None)
 
-    def window(self) -> Optional[int]:
+    def window(self, max_age: Optional[float] = None) -> Optional[int]:
         with self._lock:
             w = self._window
-        if not w or time.time() - w[2] > REFERENCE_TTL:
+        if not w or time.time() - w[2] > (REFERENCE_TTL if max_age is None else max_age):
             return None
         try:
             import win32gui

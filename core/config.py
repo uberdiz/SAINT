@@ -147,11 +147,18 @@ DEFAULT_CONFIG = {
         "wake_word_followup_action_bonus_sec": 15.0,
         "wake_word_followup_max_sec": 45.0,
         # When Spotify is playing, follow-up transcripts get flooded with
-        # song lyrics. Reject anything that isn't a short playback-style
-        # command; the user can still say "Hey SAINT, <anything>" to override.
+        # song lyrics. Only follow-ups SAINT recognises as commands (or short
+        # direct questions) are kept; "Hey SAINT, <anything>" always works.
         "music_strict_followup": True,
+        # Whisper scores short commands low; a follow-up SAINT recognises as a
+        # command ("click it") only needs this much confidence.
+        "followup_command_min_confidence": 0.1,
         "wake_word_chime": True,            # short tone on detection
-        "wake_word_debug_scores": False,    # log every score above 0.1
+        "wake_word_debug_scores": False,
+        # While Spotify is playing, short playback commands ("skip", "pause",
+        # "louder", "go back") work without saying "Hey SAINT" first.
+        "music_hotwords": True,
+        "hotword_min_confidence": 0.2,     # the whole utterance must be a playback command
 
         # Conversation
         "max_context_turns": 6,
@@ -168,20 +175,6 @@ DEFAULT_CONFIG = {
     },
 
     # ------------------------------------------------------------------
-    # Dashboard
-    # ------------------------------------------------------------------
-    "dashboard": {
-        "complexity": "Standard",         # "Simple" | "Standard" | "Advanced" | "Developer"
-        "panels": {
-            "conversation": True,
-            "spotify": True,
-            "automations": True,
-            "activity": True,
-            "system": True,
-        },
-    },
-
-    # ------------------------------------------------------------------
     # Appearance
     # ------------------------------------------------------------------
     "appearance": {
@@ -194,6 +187,28 @@ DEFAULT_CONFIG = {
         "animations": True,
         "always_on_top": False,
         "sidebar_labels": True,
+    },
+
+    # ------------------------------------------------------------------
+    # Halo (animated screen-edge glow), overlay and floating widgets
+    # ------------------------------------------------------------------
+    "overlay": {
+        "halo": "minimized",              # "minimized" | "always" | "off"
+        "halo_all_screens": False,
+        "edge_tab": True,                 # rest the cursor at the top-centre edge to reveal the SAINT tab
+        "hotkey": "alt+`",                # opens / closes the overlay from anywhere (the key left of 1)
+    },
+    "widgets": {
+        "spotify": False,                 # floating always-on-top now-playing widget
+        "spotify_pos": None,              # [x, y], remembered after dragging
+    },
+
+    # ------------------------------------------------------------------
+    # Local usage history (data/history.jsonl — never uploaded)
+    # ------------------------------------------------------------------
+    "history": {
+        "enabled": True,
+        "max_entries": 5000,
     },
 
     # ------------------------------------------------------------------
@@ -227,6 +242,9 @@ DEFAULT_CONFIG = {
         "allow_keyboard": True,
         "allow_mouse": True,
         "confirm_close_apps": True,
+        # How long the window SAINT last worked in stays the default target
+        # for "click X" / "scroll down" before the foreground window wins.
+        "context_window_ttl_sec": 45.0,
         "multi_window_policy": "ask",     # several matching windows: "ask" which one | "recent" = use the latest
         "max_type_length": 500,
         "apps": {},                       # custom "name": "path or URI" launch aliases

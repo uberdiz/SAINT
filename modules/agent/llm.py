@@ -31,7 +31,8 @@ log = logging.getLogger("saint.agent.llm")
 # Only offer tools when the request plausibly needs one: small local models
 # otherwise call tools for ordinary chat.
 _ACTION_HINT = re.compile(
-    r"\b(play|put on|queue|skip|pause|resume|volume|music|song|playlist|spotify|listen|"
+    r"\b(play|put on|queue|skip|pause|resume|volume|louder|quieter|softer|mute|turn (?:it )?(?:up|down)|"
+    r"music|song|playlist|spotify|listen|"
     r"remind|reminder|timer|alarm|schedule|every (day|morning|week)|tomorrow|"
     r"remember|forget|note|jot|write down|nudge|my (favou?rite|name)|do i (like|prefer)|"
     r"open|launch|close|quit|switch|window|monitor|screen|type|press|click|minimi|maximi|snap|"

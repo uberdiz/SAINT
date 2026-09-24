@@ -66,7 +66,8 @@ def run_tool(tool: str, describe: str, on_ok: Callable[[object], str], **kwargs)
     return Reply(res.error or f"I couldn't {describe}.", ok=False)
 
 
-_FILLERS = re.compile(r"^(?:actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|also|wait|alright|right)[,.!\s]+",
+_FILLERS = re.compile(r"^(?:actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|also|wait|alright|right|yes|yeah|yep|"
+                      r"sure|just)[,.!\s]+",
                       re.I)
 
 
@@ -783,19 +784,29 @@ def parse_desktop(text: str) -> Optional[Intent]:
     m = re.match(r"^(?:open|launch|start|run|fire up|boot up)\s+(?:up\s+)?(?:the\s+|my\s+)?(.+?)(?:\s+app(?:lication)?)?$", t)
     if m and not re.search(r"\b(timer|reminder|playlist|song|music)\b", t):
         name = m.group(1)
-        if name in ("it", "that", "this"):
+        if name in ("it", "that", "this") or not _looks_like_app_name(name):
             return None
 
+        def ok(r):
+            if r.get("reused"):
+                t = re.sub(r"^\(\d+\)\s*", "", r.get("window") or "")
+                return f"Switched to {t.split(' - ')[-1] or r['app']}" + (
+                    f" (you have {r['count']} of its windows open)." if r.get("count", 1) > 1 else ".")
+            if r.get("window"):
+                return f"Opened {r['app']}."
+            return f"Launched {r['app']}; its window hasn't appeared yet."
+
         def run_open():
-            def ok(r):
-                if r.get("reused"):
-                    t = re.sub(r"^\(\d+\)\s*", "", r.get("window") or "")
-                    return f"Switched to {t.split(' - ')[-1] or r['app']}" + (
-                        f" (you have {r['count']} of its windows open)." if r.get("count", 1) > 1 else ".")
-                if r.get("window"):
-                    return f"Opened {r['app']}."
-                return f"Launched {r['app']}; its window hasn't appeared yet."
-            return run_tool("desktop.open_app", f"open {name}", ok, name=name)
+            reply = run_tool("desktop.open_app", f"open {name}", ok, name=name)
+            guess = re.search(r"Did you mean ([^,?]+)\?$", reply.text) if not reply.ok else None
+            if guess:
+                # "Did you mean Opera Browser?" is a question: "yes" opens it.
+                other = guess.group(1).strip()
+                confirmations.ask(PendingAction(
+                    f"open {other}", lambda: run_tool("desktop.open_app", f"open {other}", ok, name=other).text,
+                    tool="desktop.open_app"))
+                reply.expects_reply = True
+            return reply
         return Intent("desktop.open_app", run_open, "desktop")
 
     # close
@@ -917,6 +928,17 @@ def parse_desktop(text: str) -> Optional[Intent]:
             return run_tool("desktop.click_element", f"click {name}", lambda r: f"Clicked {r['clicked']}.", name=name)
         return Intent("desktop.click_element", run_click, "desktop")
     return None
+
+
+_COMMAND_VERB = re.compile(r"\b(?:search|click|play|type|press|scroll|turn|pause|go to|navigate|close|find|"
+                           r"minimi[sz]e|maximi[sz]e|move|put|make|tabs?)\b")
+
+
+def _looks_like_app_name(name: str) -> bool:
+    """'discord', 'task manager', 'visual studio code' — not 'browser search
+    youtube for x, click the first video' (a whole request, which the
+    multi-step splitter or the LLM should handle)."""
+    return len(name.split()) <= 4 and "," not in name and not _COMMAND_VERB.search(name)
 
 
 def _describe_screen() -> Reply:
@@ -1050,7 +1072,9 @@ _CURRENT_INFO = re.compile(
     r"|(?:latest|any)\s+news\s+(?:about|on|for|regarding)\b"
     r"|whats?(?:'s| is)?\s+the\s+(?:weather|forecast|temperature)\b"
     r"|who\s+won\s+(?:the\s+)?\b"
-    r"|(?:what|any)\s+(?:updates?|news)\s+on\b)")
+    r"|(?:what|any)\s+(?:updates?|news)\s+on\b"
+    r"|(?:(?:use|using|with|on)\s+(?:duckduckgo|the web|google)\s+(?:and|to)\s+)?(?:find|get|tell me|give me|look up)"
+    r"\s+(?:the\s+|me\s+(?:the\s+)?)?(?:latest|newest|recent|current)\s+(?:news|headlines|updates?)\b)")
 
 
 def parse_web(text: str) -> Optional[Intent]:
@@ -1084,7 +1108,10 @@ def parse_web(text: str) -> Optional[Intent]:
         except Exception as e:
             log.warning("web.search_failed %s", e)
             return Reply("I couldn't reach the web just now.", ok=False)
-        return Reply(answer or "I couldn't find anything current on that.")
+        if not answer:
+            name = {"duckduckgo": "DuckDuckGo", "tavily": "Tavily", "serpapi": "Google"}.get(provider, "The web search")
+            return Reply(f"{name} didn't return anything for that.", ok=False)
+        return Reply(answer)
     return Intent("web.current", run_web, "web")
 
 
@@ -1174,6 +1201,8 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
                 return (first + " " + rest.text).strip()
             pending.run = resume
             return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
+        if it.name == "screen.locate" and i + 1 < len(intents) and intents[i + 1].name == "desktop.click_last":
+            r.text = re.sub(r'\s*Say "click it" if you want me to\.$', "", r.text)
         replies.append(r.text)
         if not r.ok:
             if i < len(intents) - 1:
@@ -1192,7 +1221,7 @@ def _route_composite(text: str) -> Optional[Intent]:
     cleaned = _clean(text)
     parts = [p.strip() for p in re.split(r",?\s+(?:and then|then|and also|after that|and)\s+|,\s+", cleaned, flags=re.I)
              if p.strip()]
-    if len(parts) < 2 or len(parts) > 8:
+    if len(parts) > 8:
         return None
     # Parse each step in the context the earlier steps will create: after
     # "search YouTube for X", "pause" / "turn it down" mean the video.
@@ -1200,13 +1229,42 @@ def _route_composite(text: str) -> Optional[Intent]:
     saved = desktop_context.domain()
     intents: List[Intent] = []
     for p in parts:
-        it = route_single(p)
-        if it is None:
+        steps = _route_steps(p)
+        if steps is None:
             desktop_context.note_domain(saved)
             return None
-        intents.append(it)
-        if it.domain in ("browser", "spotify"):
-            desktop_context.note_domain(it.domain)
+        for it in steps:
+            intents.append(it)
+            if it.domain in ("browser", "spotify"):
+                desktop_context.note_domain(it.domain)
     desktop_context.note_domain(saved)
+    if len(intents) < 2:
+        return None
     log.info("agent.plan %s", [i.name for i in intents])
     return Intent("composite:" + "+".join(i.name for i in intents), lambda: run_plan(intents), "composite")
+
+
+# A new command starting mid-sentence: "open my browser search YouTube for X"
+# (speech has no commas). Only tried when the text doesn't parse as one step.
+_NEXT_VERB = re.compile(r"\s+(?=(?:search|google|look up|click|double click|right click|play|go to|navigate to|"
+                        r"turn|pause|type|press|scroll|put|make|open|close|find)\b)", re.I)
+
+
+def _route_steps(text: str, depth: int = 0) -> Optional[List[Intent]]:
+    """One spoken step -> its intents, splitting a run-on step at a second verb."""
+    it = route_single(text)
+    if it is not None:
+        return [it]
+    if depth > 4:
+        return None
+    for m in _NEXT_VERB.finditer(text):
+        left, right = text[:m.start()].strip(), text[m.end():].strip()
+        if not left or not right:
+            continue
+        first = route_single(left)
+        if first is None:
+            continue
+        rest = _route_steps(right, depth + 1)
+        if rest is not None:
+            return [first] + rest
+    return None

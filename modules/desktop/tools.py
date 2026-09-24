@@ -58,6 +58,13 @@ def register_desktop_tools(registry: ToolRegistry):
     def close_app(name):
         return desktop.close(name)
 
+    def new_tab():
+        from modules.desktop import browser
+        return browser.new_tab()
+
+    def minimize_others(keep):
+        return desktop.minimize_others(keep)
+
     def focus_window(name):
         return desktop.focus(name).to_dict()
 
@@ -137,6 +144,13 @@ def register_desktop_tools(registry: ToolRegistry):
              {"query": "string", "site": "string"}, PermissionLevel.MEDIUM, web_search,
              parameters={"query": P("string"), "site": P("string", required=False, default="google")},
              llm_exposed=True, category="browser"),
+        Tool("desktop.new_tab", "Open a new tab in the user's browser", {}, PermissionLevel.MEDIUM, new_tab,
+             parameters={}, llm_exposed=True, category="browser"),
+        Tool("desktop.minimize_others", "Hide (minimize) every window except the named app(s), "
+             "e.g. 'hide everything except Spotify'",
+             {"keep": "string"}, PermissionLevel.LOW, minimize_others,
+             parameters={"keep": P("string", "app(s) to keep visible, e.g. 'spotify' or 'claude and discord'")},
+             llm_exposed=True, category="desktop"),
         Tool("desktop.close_app", "Close an application window (asks for confirmation)",
              {"name": "string"}, close_permission(), close_app,
              parameters={"name": win_param}, llm_exposed=True, category="desktop"),
