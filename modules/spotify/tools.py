@@ -60,6 +60,12 @@ def _sim(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
+def _pnorm(s: str) -> str:
+    """Playlist-name normaliser: unlike _norm it keeps "(...)" and " - ..." parts."""
+    s = re.sub(r"[^\w\s&']", " ", (s or "").lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _artists(item: Dict[str, Any]) -> str:
     return ", ".join(a.get("name", "") for a in (item or {}).get("artists", []) if a and a.get("name"))
 
@@ -104,10 +110,22 @@ class SpotifyTools:
                  parameters={"uri": P("string", "spotify: URI", required=False)}, llm_exposed=True),
             Tool("spotify.play_liked", "Play the user's Liked Songs", {}, L, self.play_liked,
                  parameters={"shuffle": P("boolean", required=False, default=True)}, llm_exposed=True),
-            Tool("spotify.play_recommended", "Play personalized picks based on the user's listening history",
+            Tool("spotify.play_recommended", "Play personalized picks: from listening history, similar to "
+                 "what's playing, or similar to a named song/album/artist ('something like DAMN by Kendrick Lamar')",
                  {"context": "string (optional)"}, L, self.play_recommended,
                  parameters={"context": P("string", "mood/genre hint", required=False, default=""),
-                             "similar_to_current": P("boolean", required=False, default=False)},
+                             "similar_to_current": P("boolean", required=False, default=False),
+                             "seed": P("string", "song/album/artist to base it on", required=False, default="")},
+                 llm_exposed=True),
+            Tool("spotify.seek", "Jump within the current track (seconds from the start, or relative)",
+                 {"seconds": "int"}, L, self.seek,
+                 parameters={"seconds": P("integer", "target or offset in seconds"),
+                             "relative": P("boolean", "true = move forward/back by that many seconds",
+                                           required=False, default=False)}, llm_exposed=True),
+            Tool("spotify.replay", "Start the current track again from the beginning", {}, L, self.replay,
+                 parameters={}, llm_exposed=True),
+            Tool("spotify.smart_shuffle", "Turn Spotify Smart Shuffle on or off (via the Spotify app)",
+                 {"state": "bool"}, L, self.smart_shuffle, parameters={"state": P("boolean")},
                  llm_exposed=True),
             Tool("spotify.pause", "Pause Spotify playback", {}, L, self.pause, parameters={}, llm_exposed=True),
             Tool("spotify.next", "Skip to the next track", {}, L, self.next, parameters={}, llm_exposed=True),
@@ -150,7 +168,8 @@ class SpotifyTools:
                  {"context": "string (optional)"}, L, self.recommend,
                  parameters={"context": P("string", required=False, default=""),
                              "limit": P("integer", required=False, default=5, minimum=1, maximum=20),
-                             "similar_to_current": P("boolean", required=False, default=False)}),
+                             "similar_to_current": P("boolean", required=False, default=False),
+                             "seed": P("string", "song/album/artist to base it on", required=False, default="")}),
             Tool("spotify.feedback", "Record that the user likes or dislikes the current track",
                  {"signal": "float"}, L, self.feedback,
                  parameters={"signal": P("number", "1 = like, -1 = dislike", minimum=-1, maximum=1),
@@ -223,10 +242,28 @@ class SpotifyTools:
     # ------------------------------------------------------------------ #
     # Playback state
     # ------------------------------------------------------------------ #
-    def _state(self) -> Dict[str, Any]:
+    _state_cache = (0.0, None)              # (fetched_at, state_dict)
+    _STATE_TTL = 2.0                        # seconds
+
+    def _state(self, force: bool = False) -> Dict[str, Any]:
+        # Back-to-back reads within one turn (router → verify → reply) don't
+        # need a fresh API call. Playback changes emitted by the poller /
+        # explicit actions invalidate the cache.
+        now = time.time()
+        ts, cached = self._state_cache
+        if not force and cached is not None and now - ts < self._STATE_TTL:
+            return cached
         data = self.client.playback() or {}
         item = data.get("item") or {}
         images = ((item.get("album") or {}).get("images") or [])
+        st = self._build_state(data, item, images)
+        self._state_cache = (now, st)
+        return st
+
+    def invalidate_state_cache(self):
+        self._state_cache = (0.0, None)
+
+    def _build_state(self, data: Dict[str, Any], item: Dict[str, Any], images: List[Dict[str, Any]]) -> Dict[str, Any]:
         return {
             "is_playing": bool(data.get("is_playing")),
             "track": item.get("name"),
@@ -257,10 +294,11 @@ class SpotifyTools:
                              {k: v for k, v in st.items() if k != "item"})
 
     def _refresh_soon(self, delay: float = 0.8):
+        self.invalidate_state_cache()
         def run():
             time.sleep(delay)
             try:
-                self._publish(self._state())
+                self._publish(self._state(force=True))
             except Exception:
                 pass
         threading.Thread(target=run, daemon=True).start()
@@ -312,29 +350,68 @@ class SpotifyTools:
                 "id": best.get("id"), "context": True}
 
     def _user_playlists(self) -> List[Dict[str, Any]]:
-        return [p for p in (self.client.playlists(50) or {}).get("items", []) if p]
+        # /me/playlists is paged (50 max); users often have more than 50.
+        data = self.client.playlists(50) or {}
+        items = [p for p in data.get("items", []) if p]
+        while data.get("next") and len(items) < 250:
+            data = self.client.playlists(50, len(items)) or {}
+            page = [p for p in data.get("items", []) if p]
+            if not page:
+                break
+            items += page
+        return items
+
+    def _my_user_id(self) -> str:
+        if getattr(self, "_me_id", None) is None:
+            try:
+                self._me_id = (self.client.me() or {}).get("id") or ""
+            except Exception:
+                self._me_id = ""
+        return self._me_id
 
     def _resolve_playlist(self, q: str, allow_public: bool = True) -> Optional[Dict[str, Any]]:
         q_clean = re.sub(r"\b(my|the|playlist)\b", " ", q, flags=re.I)
         q_clean = re.sub(r"\s+", " ", q_clean).strip()
+        # Only edge words stripped, so names like "Songs for the Road" still match exactly.
+        q_core = re.sub(r"^(?:my|the)\s+|^playlist\s+|\s+playlist$", "", q.strip(), flags=re.I).strip()
         alias = self.memory.resolve_playlist_alias(q_clean) if q_clean else None
         if alias:
             return {"kind": "playlist", "uri": f"spotify:playlist:{alias['playlist_id']}",
                     "name": alias["playlist_name"], "id": alias["playlist_id"], "context": True, "owned": True}
         mine = self._user_playlists()
         if mine:
+            me = self._my_user_id()
+
+            def owned(p):
+                return not me or (p.get("owner") or {}).get("id") == me
+
             chosen = None
             if not q_clean or q_clean.lower() in {"top", "favorite", "favourite", "usual", "main"}:
                 chosen = next((p for p in mine if "top" in p.get("name", "").lower()), mine[0])
             else:
+                cands = {c for c in (_pnorm(q_core), _pnorm(q_clean)) if c}
+
                 def pscore(p):
-                    return _sim(q_clean, p.get("name", "")) + (0.5 if _norm(q_clean) in _norm(p.get("name", "")) else 0)
+                    name = _pnorm(p.get("name", ""))
+                    best = 0.0
+                    for c in cands:
+                        if name == c:
+                            sc = 3.0                                  # exact name
+                        elif name and (re.search(rf"\b{re.escape(c)}\b", name)
+                                       or re.search(rf"\b{re.escape(name)}\b", c)):
+                            sc = 1.0 + difflib.SequenceMatcher(None, c, name).ratio()   # whole-word containment
+                        else:
+                            sc = difflib.SequenceMatcher(None, c, name).ratio()          # fuzzy
+                        best = max(best, sc)
+                    # Prefer the user's own playlists when names collide.
+                    return best + (0.05 if owned(p) else 0.0)
+
                 best = max(mine, key=pscore)
-                if pscore(best) >= 0.72:
+                if pscore(best) >= 0.75:
                     chosen = best
             if chosen:
                 return {"kind": "playlist", "uri": chosen["uri"], "name": chosen["name"], "id": chosen["id"],
-                        "context": True, "owned": True}
+                        "context": True, "owned": owned(chosen)}
         if not allow_public or not q_clean:
             return None
         pls = _items(self.client.search(q_clean, "playlist", limit=5), "playlist")
@@ -385,6 +462,10 @@ class SpotifyTools:
         sa = _sim(q, a["name"]) if a else 0
         st = _sim(q, t["name"]) if t else 0
         sal = _sim(q, al["name"]) if al else 0
+        # Same name for an artist and a track ("Blinding Lights"): the far more
+        # popular one is what people mean.
+        if a and t and sa >= 0.88 and st >= 0.95 and (t.get("popularity") or 0) > (a.get("popularity") or 0) + 20:
+            sa = 0.0
         if a and sa >= 0.88 and sa >= st:
             return {"kind": "artist", "uri": a["uri"], "name": a["name"], "artist": a["name"],
                     "id": a.get("id"), "context": True}
@@ -602,7 +683,28 @@ class SpotifyTools:
                 seeds[artist] = seeds.get(artist, 0) + 2 * score
         return {k: v for k, v in seeds.items() if v > 0}
 
-    def recommend(self, context="", limit=5, similar_to_current=False):
+    def _seed_from(self, seed: str):
+        """(main_artist {id,name}, exclude_track_id, label) for 'something like <seed>'."""
+        title, by = self._split_by(seed)
+        ent = None
+        if by:
+            cands = [e for e in (self._resolve_album(seed), self._resolve_track(seed)) if e]
+            if cands:
+                ent = max(cands, key=lambda e: (_sim(title, e.get("name", "")), e["kind"] == "album"))
+        ent = ent or self.resolve(seed, "auto")
+        if ent is None:
+            raise SpotifyAPIError(f"I couldn't find {seed} on Spotify.", status=404, code="NO_MATCH")
+        if ent["kind"] == "artist":
+            return {"id": ent.get("id"), "name": ent["name"]}, None, ent["name"]
+        if ent.get("item"):
+            main = (ent["item"].get("artists") or [{}])[0]
+            return main, ent.get("id"), f"{ent['name']} by {ent.get('artist', '')}".strip(" by")
+        artist = ent.get("artist", "")
+        found = _items(self.client.search(artist, "artist", limit=1), "artist") if artist else []
+        main = {"id": found[0]["id"], "name": found[0]["name"]} if found else {"id": None, "name": artist}
+        return main, None, f"{ent['name']} by {artist}".strip(" by")
+
+    def recommend(self, context="", limit=5, similar_to_current=False, seed=""):
         limit = max(1, min(20, int(limit)))
         recent_ids = {r["track_id"] for r in self.memory.recent(time.time() - 3 * 3600, 200)}
         skipped = self.memory.skipped_track_ids(30)
@@ -616,22 +718,52 @@ class SpotifyTools:
             if tid not in candidates or candidates[tid][0] < score:
                 candidates[tid] = (score, track, why)
 
-        if similar_to_current:
-            st = self._state()
-            if not st["item"]:
-                raise SpotifyAPIError("Nothing is playing to base that on.", status=404, code="NO_PLAYBACK")
-            recent_ids.add(st["id"])
-            main = (st["item"].get("artists") or [{}])[0]
+        if similar_to_current or seed:
+            if seed:
+                main, exclude, label = self._seed_from(seed)
+                if exclude:
+                    recent_ids.add(exclude)
+                basis = f"similar to {label}"
+            else:
+                st = self._state()
+                if not st["item"]:
+                    raise SpotifyAPIError("Nothing is playing to base that on.", status=404, code="NO_PLAYBACK")
+                recent_ids.add(st["id"])
+                main = (st["item"].get("artists") or [{}])[0]
+                basis = f"similar to {st['track']} by {st['artists']}"
             genres = self._genres_for(main.get("id"), main.get("name", ""))
-            basis = f"similar to {st['track']} by {st['artists']}"
-            for g in genres[:2]:
-                for t in _items(self.client.search(f'genre:"{g}"', "track", limit=10), "track"):
-                    if all((a or {}).get("id") != main.get("id") for a in t.get("artists", [])):
-                        add(t, 2.0 + random.random(), g)
+            gset = set(genres)
+            # 1. The artist's own catalogue (the most reliable "like X").
             for t in _items(self.client.search(f'artist:"{main.get("name", "")}"', "track", limit=10), "track"):
-                add(t, 1.2 + random.random() * 0.5, f"more {main.get('name')}")
+                add(t, 2.0 + random.random() * 0.4, f"more {main.get('name')}")
+            # 2. Artists featured alongside them.
+            featured = {}
+            for t in list(v[1] for v in candidates.values()):
+                for a in (t.get("artists") or [])[1:]:
+                    if a and a.get("id") != main.get("id") and a.get("name"):
+                        featured[a["name"]] = a
+            for name in list(featured)[:3]:
+                for t in _items(self.client.search(f'artist:"{name}"', "track", limit=5), "track"):
+                    add(t, 1.9 + random.random() * 0.4, f"features with {main.get('name')}")
+            # 3. Artists the user already plays who share a genre (personal + similar).
+            if gset:
+                for name, weight in sorted(self._seed_artists().items(), key=lambda kv: kv[1], reverse=True)[:12]:
+                    if name == main.get("name"):
+                        continue
+                    found = _items(self.client.search(name, "artist", limit=1), "artist")
+                    if not found or not gset & set(self._genres_for(found[0]["id"], found[0]["name"])):
+                        continue
+                    for t in _items(self.client.search(f'artist:"{name}"', "track", limit=5), "track"):
+                        add(t, 2.2 + random.random() * 0.4, f"you like {name}, similar style")
+            # 4. Genre search only as a weak fallback (it surfaces obscure uploads).
+            if len(candidates) < 8:
+                for g in genres[:2]:
+                    for t in _items(self.client.search(f'genre:"{g}"', "track", limit=10), "track"):
+                        if all((a or {}).get("id") != main.get("id") for a in t.get("artists", [])) \
+                                and (t.get("popularity") or 0) >= 40:
+                            add(t, 1.0 + random.random() * 0.4, g)
             if not genres:
-                basis += " (Spotify has no genre data for this artist, so I leaned on the same artist)"
+                logger.info("spotify.recommend no genre data for %s — using the artist and collaborators", main.get("name"))
         else:
             seeds = self._seed_artists()
             if not seeds:
@@ -650,9 +782,13 @@ class SpotifyTools:
                     add(t, 1.5 + random.random(), context)
         ranked = sorted(candidates.values(), key=lambda x: x[0], reverse=True)
         per_artist: Dict[str, int] = {}
-        out = []
-        for score, t, why in ranked:      # variety: at most 2 tracks per artist
+        out, names = [], set()
+        for score, t, why in ranked:      # variety: at most 2 tracks per artist, no re-releases
             a = _artists(t)
+            key = (_norm(t.get("name", "")), a.split(",")[0])
+            if key in names:
+                continue
+            names.add(key)
             if per_artist.get(a, 0) >= 2:
                 continue
             per_artist[a] = per_artist.get(a, 0) + 1
@@ -662,8 +798,8 @@ class SpotifyTools:
                 break
         return {"recommendations": out, "basis": basis, "context": context}
 
-    def play_recommended(self, context="", similar_to_current=False):
-        rec = self.recommend(context=context, limit=10, similar_to_current=similar_to_current)
+    def play_recommended(self, context="", similar_to_current=False, seed=""):
+        rec = self.recommend(context=context, limit=10, similar_to_current=similar_to_current, seed=seed)
         recs = rec["recommendations"]
         if not recs:
             if rec.get("reason") == "no_history":
@@ -675,7 +811,8 @@ class SpotifyTools:
         with self._lock:
             for r in recs:
                 self._rec_ids[r["id"]] = now
-        self.memory.record_request(context or ("similar" if similar_to_current else "something I like"),
+        self.memory.record_request(context or (f"like {seed}" if seed else
+                                               "similar" if similar_to_current else "something I like"),
                                    "recommendation", recs[0]["name"], recs[0]["uri"], recs[0]["artists"])
         self._refresh_soon()
         return {"success": True, "action": "play", "kind": "recommendation", "name": recs[0]["name"],
@@ -707,6 +844,80 @@ class SpotifyTools:
             self.memory.record_feedback({"id": track_id, "name": "", "artists": []}, 0.5,
                                         "recommendation accepted (listened)")
 
+    def seek(self, seconds, relative=False):
+        st = self._state()
+        if not st["item"]:
+            raise SpotifyAPIError("Nothing is playing.", status=404, code="NO_PLAYBACK")
+        pos = int(seconds) * 1000
+        if relative:
+            pos += int(st.get("progress_ms") or 0)
+        dur = int((st["item"] or {}).get("duration_ms") or 0)
+        pos = max(0, min(pos, dur - 1000 if dur else pos))
+        self._with_device(lambda d: self.client.seek(pos, device_id=d))
+        self._refresh_soon(0.5)
+        return {"position_s": pos // 1000, "track": st["track"]}
+
+    def replay(self):
+        r = self.seek(0)
+        return {"track": r["track"]}
+
+    def smart_shuffle(self, state=True):
+        """Smart Shuffle isn't in Spotify's Web API. The Spotify desktop app
+        exposes it on its shuffle button (Off -> Shuffle -> Smart Shuffle), so
+        drive that button through UI Automation and verify its label.
+        Falls back to normal shuffle when the app isn't open."""
+        def mode(lbl):
+            # Label names the NEXT action: "Enable shuffle" (off) -> "Enable Smart
+            # Shuffle" (shuffle on) -> "Disable shuffle" (smart shuffle on).
+            if lbl.startswith("enable smart"):
+                return "shuffle"
+            if lbl.startswith("disable"):
+                return "smart"
+            return "off"
+
+        label = self._spotify_shuffle_label()
+        if label is None:
+            self.shuffle(bool(state))
+            return {"smart": False, "shuffle": bool(state), "fallback": True}
+        want = "smart" if state else "off"
+        for _ in range(3):
+            if mode(label) == want:
+                break
+            label = self._spotify_shuffle_label(click=True) or ""
+        got = mode(label)
+        self._refresh_soon()
+        return {"smart": got == "smart", "shuffle": got != "off", "fallback": False, "verified": got == want}
+
+    def _spotify_shuffle_label(self, click: bool = False) -> Optional[str]:
+        """Accessible name of the Spotify app's shuffle button (lower case),
+        optionally clicking it first. None if the app/button isn't available."""
+        try:
+            from modules.desktop.controller import desktop
+            from modules.desktop import uia
+            wins = desktop.app_windows("spotify")
+            if not wins:
+                return None
+            auto = uia._auto()
+            top = auto.ControlFromHandle(wins[0].hwnd)
+            btn = None
+            for c in uia._walk(top, limit=4000):
+                if uia._safe_type(c) == "ButtonControl" and "shuffle" in (c.Name or "").lower():
+                    btn = c
+                    break
+            if btn is None:
+                return None
+            if click:
+                try:
+                    btn.GetInvokePattern().Invoke()
+                except Exception:
+                    btn.Click(simulateMove=False)
+                time.sleep(0.6)
+                return self._spotify_shuffle_label(click=False)
+            return (btn.Name or "").lower()
+        except Exception as e:
+            logger.debug("spotify.smart_shuffle_uia_failed %s", e)
+            return None
+
     def feedback(self, signal, reason=""):
         st = self._state()
         if not st["item"]:
@@ -731,7 +942,8 @@ class SpotifyTools:
     # Background poller (listening memory + live UI state)
     # ------------------------------------------------------------------ #
     def poll_once(self):
-        st = self._state()
+        # Poller must see fresh state or it can't detect skips.
+        st = self._state(force=True)
         self._publish(st)
         if not config.get("spotify.track_history", True):
             return st

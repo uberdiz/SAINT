@@ -57,6 +57,9 @@ def mock_setup():
     config.set("ai.provider", "mock", persist=False)
     config.set("voice.tts_backend", "mock", persist=False)
     config.set("voice.stt_backend", "mock", persist=False)
+    # These tests exercise interruption mechanics against the mock LLM's
+    # streamed answers; bypass the agent's instant deterministic replies.
+    config.set("agent.enabled", False, persist=False)
 
     # Reset analytics so counts are fresh
     from core.analytics import analytics
@@ -88,6 +91,7 @@ def mock_setup():
 
     # Cleanup
     ctrl.shutdown()
+    config.set("agent.enabled", True, persist=False)
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +265,8 @@ def test_02_action_interruption(mock_setup):
             lambda: ctrl.state == ConvState.IDLE,
             timeout=8.0,
         ), "SAINT did not complete second response"
+        # Analytics is a Qt-side subscriber: drain queued events before reading it.
+        flush_events(200)
 
         all_spoken = " ".join(spoken_chunks).lower()
         assert "firefox" in all_spoken, (
@@ -305,6 +311,8 @@ def test_03_latency_metrics_recorded(mock_setup):
         lambda: ctrl.state == ConvState.IDLE,
         timeout=8.0,
     ), "SAINT did not complete the turn"
+    # Analytics is a Qt-side subscriber: drain queued events before reading it.
+    flush_events(200)
 
     snap = analytics.snapshot()
 

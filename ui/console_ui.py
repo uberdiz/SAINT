@@ -9,7 +9,9 @@ file on disk.
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QPlainTextEdit, QPushButton, QHBoxLayout
 
 from core.events import event_bus
-from core.logger import read_recent_lines
+import logging
+
+from core.logger import read_recent_lines, NOISY_EVENTS
 
 
 class ConsoleUI(QWidget):
@@ -42,6 +44,9 @@ class ConsoleUI(QWidget):
         event_bus.event_occurred.connect(self._on_event)
 
     def _on_event(self, ev):
+        # Per-frame diagnostics (wake scores, audio levels, tokens) only in Verbose/debug.
+        if ev.type in NOISY_EVENTS and not logging.getLogger("saint").isEnabledFor(logging.DEBUG):
+            return
         msg = f"{ev.formatted_time()}  {ev.type}"
         if ev.payload:
             msg += f"  {ev.payload}"

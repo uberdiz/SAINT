@@ -72,11 +72,19 @@ class OnnxWakeWordDetector:
         refractory_sec: float = 2.0,
         trigger_frames: int = 1,
         keyword: str = "saint",
+        window_frames: int = 4,
+        strong_threshold: Optional[float] = None,
     ):
         self.keyword = keyword
         self.threshold = float(threshold)
         self.refractory_sec = float(refractory_sec)
         self.trigger_frames = max(1, int(trigger_frames))
+        # Trigger policy: fire when ``trigger_frames`` of the last
+        # ``window_frames`` scores clear the threshold (not necessarily
+        # consecutive — a short "Hey SAINT" often peaks for one or two frames
+        # with a dip between), or immediately on one very confident frame.
+        self.window_frames = max(self.trigger_frames, int(window_frames))
+        self.strong_threshold = float(strong_threshold) if strong_threshold is not None             else min(0.95, self.threshold + 0.25)
         self._model_path = resolve_project_path(model_path)
         self._feature_dir = resolve_project_path(feature_dir)
         self._lock = threading.Lock()
@@ -89,10 +97,13 @@ class OnnxWakeWordDetector:
 
         # Streaming state
         self._pending = np.empty(0, dtype=np.int16)
-        self._raw = collections.deque(maxlen=WAKE_SAMPLE_RATE * 10)
+        # Only the samples the melspectrogram needs (frame + context); keeping
+        # 10 s here and converting it every 80 ms wasted CPU.
+        self._tail = np.zeros(WAKE_FRAME_SAMPLES + _MEL_CONTEXT, dtype=np.int16)
         self._mel_buf = np.ones((_MEL_WINDOW, 32), dtype=np.float32)
         self._feat_buf = None
-        self._above = 0
+        self._recent = collections.deque(maxlen=self.window_frames)
+        self._history = collections.deque(maxlen=int(12 * WAKE_SAMPLE_RATE / WAKE_FRAME_SAMPLES))
         self._last_fire = 0.0
         self.last_score = 0.0
         self.peak_score = 0.0          # max score since last read (for the UI meter)
@@ -171,9 +182,9 @@ class OnnxWakeWordDetector:
         noise = rng.integers(-1000, 1000, WAKE_SAMPLE_RATE * 4).astype(np.int16)
         self._feat_buf = self._embed_clip(noise)
         self._mel_buf = np.ones((_MEL_WINDOW, 32), dtype=np.float32)
-        self._raw.clear()
+        self._tail = np.zeros(WAKE_FRAME_SAMPLES + _MEL_CONTEXT, dtype=np.int16)
         self._pending = np.empty(0, dtype=np.int16)
-        self._above = 0
+        self._recent.clear()
 
     # ------------------------------------------------------------------ #
     # Feature pipeline
@@ -191,9 +202,8 @@ class OnnxWakeWordDetector:
         return self._emb.run(None, {"input_1": batch})[0].squeeze()
 
     def _process_frame(self, frame: np.ndarray) -> float:
-        self._raw.extend(frame.tolist())
-        raw = np.fromiter(self._raw, dtype=np.int16, count=len(self._raw))
-        spec = self._melspec(raw[-(WAKE_FRAME_SAMPLES + _MEL_CONTEXT):])
+        self._tail = np.concatenate((self._tail[len(frame):], frame))
+        spec = self._melspec(self._tail)
         self._mel_buf = np.vstack((self._mel_buf, spec))[-_MEL_MAX:]
         window = self._mel_buf[-_MEL_WINDOW:].astype(np.float32)[None, :, :, None]
         emb = self._emb.run(None, {"input_1": window})[0].reshape(1, 96)
@@ -241,17 +251,24 @@ class OnnxWakeWordDetector:
                 self.last_score = score
                 self.peak_score = max(self.peak_score, score)
 
-                if score >= self.threshold:
-                    self._above += 1
-                else:
-                    self._above = 0
-                if self._above >= self.trigger_frames:
-                    now = time.monotonic()
-                    if now - self._last_fire >= self.refractory_sec:
-                        self._last_fire = now
-                        fired = score if fired is None else max(fired, score)
-                    self._above = 0
+                now = time.monotonic()
+                self._recent.append(score)
+                self._history.append((now, score))
+                if score >= 0.2:
+                    log.debug("wake.score %.3f threshold=%.2f", score, self.threshold)
+                hits = sum(1 for x in self._recent if x >= self.threshold)
+                if (hits >= self.trigger_frames or score >= self.strong_threshold)                         and now - self._last_fire >= self.refractory_sec:
+                    self._last_fire = now
+                    self._recent.clear()
+                    fired = max(score, fired or 0.0)
         return fired
+
+    def recent_peak(self, seconds: float) -> float:
+        """Highest score in the last ``seconds`` (used to decide whether a
+        near-miss utterance deserves a transcript check)."""
+        cutoff = time.monotonic() - seconds
+        with self._lock:
+            return max((sc for t, sc in self._history if t >= cutoff), default=0.0)
 
     def take_peak(self) -> float:
         """Return and reset the peak score (used for throttled UI updates)."""
@@ -292,4 +309,5 @@ def make_wake_word_detector() -> Optional[OnnxWakeWordDetector]:
         refractory_sec=config.get("voice.wake_word_refractory_sec", 2.0),
         trigger_frames=config.get("voice.wake_word_trigger_frames", 1),
         keyword=config.get("voice.wake_word", "saint"),
+        window_frames=config.get("voice.wake_word_window_frames", 4),
     )

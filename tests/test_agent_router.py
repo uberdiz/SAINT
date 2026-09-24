@@ -30,7 +30,14 @@ from modules.agent.router import spotify_intent, route, route_single, parse_desk
     ("what have I listened to today", "spotify.history", {"period": "today"}),
 ])
 def test_spotify_phrases(text, tool, kwargs):
-    si = spotify_intent(text)
+    # Ambiguous phrases ("turn it down", "go back") mean the music after a
+    # music command — that is the context these cases are about.
+    from modules.agent.context import desktop_context
+    desktop_context.note_domain("spotify")
+    try:
+        si = spotify_intent(text)
+    finally:
+        desktop_context.clear()
     assert si is not None, text
     assert si.tool == tool
     for k, v in kwargs.items():
@@ -72,7 +79,7 @@ def test_open_timer_is_not_an_app():
 
 def test_composite_split():
     it = route("open chrome and search for cats")
-    assert it is not None and it.name == "composite:desktop.open_app+desktop.web_search"
+    assert it is not None and it.name == "composite:desktop.open_app+browser.search"
 
 
 def test_reminder_with_and_is_not_split():

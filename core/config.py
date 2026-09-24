@@ -12,7 +12,7 @@ import threading
 
 from core.paths import data_path
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 6
 
 DEFAULT_CONFIG = {
     "config_version": CONFIG_VERSION,
@@ -22,8 +22,12 @@ DEFAULT_CONFIG = {
         "model": "llama3.1",
         "base_url": "http://localhost:11434",
         "api_key": "",
-        "temperature": 0.7,
+        "temperature": 0.5,
         "timeout_seconds": 30,
+        # Hard cap on generated tokens per turn. SAINT is voice-first: long
+        # replies rarely serve the user and often mean the model started
+        # rambling. Applied as `num_predict` for Ollama.
+        "max_tokens": 160,
         # Let the LLM call SAINT's explicit, validated tools (Ollama models
         # with the "tools" capability, e.g. llama3.1 / llama3.2). Deterministic
         # intent routing always runs first, so common commands never wait on
@@ -63,6 +67,10 @@ DEFAULT_CONFIG = {
         "noise_suppression": True,      # subtract rolling noise floor
 
         # VAD hysteresis thresholds (for start/end detection)
+        "vad_backend": "silero",        # "silero" (speech vs music/noise) | "rms"
+        "vad_speech_prob": 0.5,         # silero speech probability to start an utterance
+        "max_utterance_sec": 15.0,      # cut an utterance that never pauses (TV, music vocals)
+        "followup_min_confidence": 0.25, # STT confidence floor inside the conversation window
         "vad_start_threshold": 0.015,   # RMS threshold to START speech detection
         "vad_end_threshold": 0.0075,    # RMS threshold to END speech detection (lower = hysteresis)
 
@@ -124,20 +132,38 @@ DEFAULT_CONFIG = {
         # embedding_model.onnx), shipped in data/wake/.
         "wake_word_feature_dir": "data/wake",
         "wake_word_threshold": 0.5,         # detection score threshold (0-1); lower = more sensitive
-        "wake_word_trigger_frames": 2,      # consecutive 80 ms frames above threshold (2 rejects one-frame spikes like "saved")
+        "wake_word_trigger_frames": 1,      # frames above threshold needed within the detection window
+        "wake_word_window_frames": 4,       # detection window (80 ms frames) for trigger_frames
+        "wake_word_transcript_check": True, # 2nd stage: transcribe short utterances the model missed and
+                                            # accept them only if they start with "SAINT" / "Hey SAINT"
+        "wake_word_transcript_max_sec": 7.0,
         "wake_word_refractory_sec": 2.0,    # cooldown between detections
         "wake_word_command_timeout_sec": 6.0,  # give up if no command starts in this time
-        "wake_word_followup_sec": 0.0,      # listen for a follow-up without the wake word (0 = off)
+        "wake_word_followup_sec": 12.0,     # conversation window: follow-ups need no wake word (0 = off);
+                                            # counted from when SAINT stops talking
+        # Adaptive follow-up: after an action reply ("Playing music."), extend
+        # the window because a follow-up ("skip", "louder") is likely. Capped so
+        # SAINT still returns to wake-word listening if the user walks away.
+        "wake_word_followup_action_bonus_sec": 15.0,
+        "wake_word_followup_max_sec": 45.0,
+        # When Spotify is playing, follow-up transcripts get flooded with
+        # song lyrics. Reject anything that isn't a short playback-style
+        # command; the user can still say "Hey SAINT, <anything>" to override.
+        "music_strict_followup": True,
         "wake_word_chime": True,            # short tone on detection
         "wake_word_debug_scores": False,    # log every score above 0.1
 
         # Conversation
         "max_context_turns": 6,
         "system_prompt": (
-            "You are SAINT, a helpful local AI assistant running on the user's PC. "
-            "Be concise and natural; your replies are spoken aloud. "
+            "You are SAINT, a voice-first assistant on the user's PC. "
+            "Answer in ONE short sentence — usually under 15 words. "
+            "For actions, a short confirmation like 'Skipped it.' or 'Spotify is open.' "
+            "is enough; do not narrate steps. For facts, give the direct answer only "
+            "(e.g. '828 meters.'). Never repeat the user's request, never explain what you're "
+            "about to do, never use markdown, JSON, code fences or tool names. "
             "Only say an action happened if a tool result confirms it. "
-            "If the user interrupts you, adapt immediately without apologising."
+            "Expand only when the user explicitly asks for detail."
         ),
     },
 
@@ -160,7 +186,7 @@ DEFAULT_CONFIG = {
     # ------------------------------------------------------------------
     "appearance": {
         "theme": "Dark",                  # "Dark" | "Light" | "System"
-        "accent": "#2563eb",
+        "accent": "#feaa34",             # SAINT orange (from the logo)
         "opacity": 1.0,                   # window opacity 0.6-1.0
         "font_family": "Segoe UI",
         "font_size": 13,
@@ -201,6 +227,7 @@ DEFAULT_CONFIG = {
         "allow_keyboard": True,
         "allow_mouse": True,
         "confirm_close_apps": True,
+        "multi_window_policy": "ask",     # several matching windows: "ask" which one | "recent" = use the latest
         "max_type_length": 500,
         "apps": {},                       # custom "name": "path or URI" launch aliases
     },
@@ -209,9 +236,36 @@ DEFAULT_CONFIG = {
     # Vision / screen awareness
     # ------------------------------------------------------------------
     "vision": {
-        "analyzer": "none",               # "none" | "ollama" (needs a vision-capable model)
+        "analyzer": "none",               # "none" | "ollama" | "flux"
+        "allow_screen_context": True,     # read windows/controls/text via UI Automation (on demand)
         "model": "",                      # e.g. "llama3.2-vision"
         "keep_screenshots": 20,
+        # FLUX.2 Klein 4B (local vision-language model). Loaded on demand and
+        # kept in memory between calls. When required packages/weights are
+        # missing SAINT reports the actual dependency instead of falling back
+        # silently. Get weights: `hf download black-forest-labs/FLUX.2-Klein-4B`.
+        "flux_model_id": "black-forest-labs/FLUX.2-Klein-4B",
+        "flux_model_dir": "data/vision/flux2-klein-4b",
+        "flux_device": "auto",           # "auto" | "cuda" | "cpu"
+        "flux_dtype": "float16",          # "float16" | "bfloat16" | "float32"
+        "flux_max_image_side": 1024,
+        "flux_max_new_tokens": 160,
+    },
+
+    # ------------------------------------------------------------------
+    # Web / current information
+    # ------------------------------------------------------------------
+    # SAINT distinguishes "search Google for X" (browser automation) from
+    # "what's the latest news about X" (a factual current-info question).
+    # When no provider is configured the current-info intent replies honestly
+    # instead of opening the browser.
+    "web": {
+        # Default: open DuckDuckGo in the user's existing browser (no key needed).
+        # Alternatives: "duckduckgo" (Instant Answer API), "tavily", "serpapi", "none".
+        "provider": "duckduckgo_browser",
+        "api_key": "",
+        "max_results": 4,
+        "answer_style": "concise",       # "concise" | "detailed"
     },
 
     # ------------------------------------------------------------------
@@ -283,6 +337,46 @@ def _migrate(data: dict) -> dict:
         if "theme" in data and "theme" not in appearance:
             appearance["theme"] = data["theme"]
         data["config_version"] = 2
+    if version < 3:
+        # SAINT's accent is now orange; only replace the old *default* blue.
+        appearance = data.setdefault("appearance", {})
+        if str(appearance.get("accent", "#2563eb")).lower() == "#2563eb":
+            appearance["accent"] = "#feaa34"
+        data["config_version"] = 3
+    if version < 4:
+        # Reworked wake word + conversation window (see modules/voice/module.py).
+        voice = data.setdefault("voice", {})
+        if float(voice.get("wake_word_followup_sec", 0) or 0) <= 0:
+            voice["wake_word_followup_sec"] = 15.0
+        if int(voice.get("wake_word_trigger_frames", 1) or 1) >= 2:
+            voice["wake_word_trigger_frames"] = 1
+        voice["wake_word_enabled"] = True
+        data["config_version"] = 4
+    if version < 5:
+        # Accent now matches the SAINT logo; only earlier *defaults* are replaced.
+        appearance = data.setdefault("appearance", {})
+        if str(appearance.get("accent", "")).lower() in ("#f97316", "#2563eb", ""):
+            appearance["accent"] = "#feaa34"
+        data["config_version"] = 5
+    if version < 6:
+        # Voice-first response policy: replace the older, longer default prompt
+        # with the concise-by-default one. Only touches the default text — a
+        # user-customised prompt is preserved.
+        voice = data.setdefault("voice", {})
+        old_prompts = {
+            "You are SAINT, a helpful AI assistant. Be concise.",
+            ("You are SAINT, a helpful local AI assistant running on the user's PC. "
+             "Be concise and natural; your replies are spoken aloud. "
+             "Only say an action happened if a tool result confirms it. "
+             "If the user interrupts you, adapt immediately without apologising."),
+        }
+        if voice.get("system_prompt") in old_prompts:
+            voice["system_prompt"] = DEFAULT_CONFIG["voice"]["system_prompt"]
+        ai = data.setdefault("ai", {})
+        ai.setdefault("max_tokens", 160)
+        if ai.get("temperature") in (0.7, None):
+            ai["temperature"] = 0.5
+        data["config_version"] = 6
     return data
 
 

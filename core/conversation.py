@@ -474,9 +474,16 @@ class ConversationController:
             expects_reply = bool(getattr(self._ai, "expects_reply", False))
             assistant_state.end_turn()
             log.info("conversation.turn.end turn=%d chars=%d", turn_id, len(final_response))
+            # Hint for the voice module's adaptive follow-up window: an action
+            # (open, play, skip, etc.) tends to be followed by another action;
+            # a bare Q&A rarely is. Kept as a signal — voice module decides.
+            was_action = bool(final_response) and any(w in final_response.lower().split()[:3]
+                                                     for w in ("opened", "playing", "paused", "skipped",
+                                                                "closed", "moved", "clicked", "focused",
+                                                                "minimized", "maximized", "queued"))
             event_bus.emit_event(EventType.CONVERSATION_TURN_END, {
                 "turn_id": turn_id, "user_text": text, "response": final_response,
-                "expects_reply": expects_reply})
+                "expects_reply": expects_reply, "was_action": was_action})
         finally:
             self._thinking_lock.release()
 

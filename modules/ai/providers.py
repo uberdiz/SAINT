@@ -222,9 +222,18 @@ class OllamaProvider(AIProvider):
         except requests.RequestException as e:
             raise ConnectionError(f"Network error contacting Ollama: {e}") from e
 
+    def _options(self, temperature: float) -> Dict[str, Any]:
+        from core.config import config
+        opts: Dict[str, Any] = {"temperature": temperature, "num_gpu": -1}
+        cap = int(config.get("ai.max_tokens", 0) or 0)
+        if cap > 0:
+            opts["num_predict"] = cap
+        return opts
+
     def send(self, messages, model, api_key, base_url, temperature, timeout) -> str:
         resp = self._request("POST", "/api/chat", base_url, timeout,
-                            json={"model": model, "messages": messages, "stream": False, "keep_alive": -1, "options": {"temperature": temperature, "num_gpu": -1}})
+                            json={"model": model, "messages": messages, "stream": False,
+                                  "keep_alive": -1, "options": self._options(temperature)})
         if resp.status_code != 200:
             if resp.status_code == 404:
                 raise ModelNotFoundError(f"Model '{model}' not found. Run 'ollama pull {model}' first.")
@@ -237,7 +246,8 @@ class OllamaProvider(AIProvider):
     def stream_send(self, messages, model, api_key, base_url, temperature, timeout,
                     on_token, cancel_flag) -> str:
         resp = self._request("POST", "/api/chat", base_url, timeout,
-                            json={"model": model, "messages": messages, "stream": True, "keep_alive": -1, "options": {"temperature": temperature, "num_gpu": -1}},
+                            json={"model": model, "messages": messages, "stream": True,
+                                  "keep_alive": -1, "options": self._options(temperature)},
                             stream=True)
         if resp.status_code != 200:
             if resp.status_code == 404:

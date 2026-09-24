@@ -24,6 +24,21 @@ from ui.theme import current_palette, state_color
 from ui.widgets import Card, ChatView, LevelMeter, StateOrb, run_async
 
 
+def _tool_label(tool) -> str:
+    """Human description of a tool for the activity feed — never its internal id."""
+    try:
+        from modules.automation.tools import get_tool_registry
+        t = next((x for x in get_tool_registry().list_tools() if x.name == tool), None)
+        if t is not None and t.description:
+            import re
+            d = re.sub(r"\s*\([^)]*\)", "", t.description)
+            return re.split(r"[:,;]| — ", d)[0].strip()[:60]
+    except Exception:
+        pass
+    from core.assistant_state import tool_activity
+    return tool_activity(tool)
+
+
 class Dashboard(QWidget):
     def __init__(self, runtime=None):
         super().__init__()
@@ -175,9 +190,9 @@ class Dashboard(QWidget):
         self._sp_meta = QLabel("")
         self._sp_meta.setObjectName("Faint")
         ctl = QHBoxLayout()
-        self._sp_prev = QPushButton("⏮")
-        self._sp_play = QPushButton("⏯")
-        self._sp_next = QPushButton("⏭")
+        self._sp_prev = QPushButton("◀◀")
+        self._sp_play = QPushButton("▶ ❚❚")
+        self._sp_next = QPushButton("▶▶")
         for b, tool in ((self._sp_prev, "spotify.previous"), (self._sp_play, None), (self._sp_next, "spotify.next")):
             b.setFixedWidth(52)
             b.clicked.connect(lambda _=False, t=tool: self._spotify_action(t))
@@ -292,10 +307,12 @@ class Dashboard(QWidget):
             if p.get("turn_id") == self._stream_turn:
                 self._chat.stream(p.get("token", ""))
         elif t == EventType.AI_STREAM_DONE and p.get("tool_routed"):
-            self._pending_meta = ("error · " if not p.get("ok", True) else "") + f"{p.get('intent', '')}"
+            self._pending_meta = "" if p.get("ok", True) else "couldn't finish"
         elif t == EventType.UI_CHAT_RENDER and p.get("role") == "assistant":
             if p.get("source"):
-                self._chat.add("assistant", p.get("text", ""), p.get("source"))
+                src = p.get("source", "")
+                self._chat.add("assistant", p.get("text", ""),
+                               "reminder" if src.startswith(("automation", "reminder")) else "")
             elif p.get("turn_id") == self._stream_turn:
                 meta = getattr(self, "_pending_meta", "") or ""
                 self._pending_meta = ""
@@ -307,11 +324,11 @@ class Dashboard(QWidget):
                 self._stream_turn = None
             self._add_activity("Interrupted", "muted")
         elif t == EventType.TOOL_STARTED:
-            self._add_activity(f"▶ {p.get('tool')}", "info")
+            self._add_activity(f"Running · {_tool_label(p.get('tool'))}…", "info")
         elif t == EventType.TOOL_COMPLETED:
-            self._add_activity(f"✓ {p.get('tool')} ({p.get('duration_ms', 0):.0f} ms)", "ok")
+            self._add_activity(f"✓ {_tool_label(p.get('tool'))} · {p.get('duration_ms', 0):.0f} ms", "ok")
         elif t == EventType.TOOL_FAILED:
-            self._add_activity(f"✗ {p.get('tool')}: {p.get('error', '')[:80]}", "error")
+            self._add_activity(f"✗ {_tool_label(p.get('tool'))} failed: {p.get('error', '')[:80]}", "error")
         elif t == EventType.AGENT_CONFIRM_REQUIRED:
             self._add_activity(f"Waiting for your OK: {p.get('description')}", "warn")
         elif t == EventType.SPOTIFY_PLAYBACK_CHANGED:
@@ -350,7 +367,7 @@ class Dashboard(QWidget):
         self._state_label.setStyleSheet(f"color: {state_color(state, pal)};")
         self._detail_label.setText(s.get("detail", "") or "")
         self._detail_label.setVisible(bool(s.get("detail")))
-        self._stop_btn.setEnabled(state in ("speaking", "processing", "executing"))
+        self._stop_btn.setEnabled(state in ("speaking", "processing", "executing", "observing"))
 
     def _render_wake(self, w):
         pal = current_palette()

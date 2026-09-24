@@ -21,17 +21,45 @@ from ui.widgets import StatusDot
 
 PAGES = [
     ("Dashboard", "◉"),
+    ("Spotify", "♫"),
     ("Memory", "✦"),
-    ("Automations", "⏰"),
+    ("Automations", "◷"),
     ("Activity", "≡"),
     ("Modules", "▦"),
     ("Health", "♥"),
     ("Analytics", "↗"),
-    ("Settings", "⚙"),
+    ("Settings", "⛭"),
 ]
 
 
-def make_icon(color: str) -> QIcon:
+LOGO_PATH = "SAINT.png"       # the SAINT logo shipped in the repository root
+
+
+def logo_pixmap(size: int = 64, dot_color: str = None) -> QPixmap:
+    """The SAINT logo, optionally with a small status dot (tray icon)."""
+    from core.paths import resolve_project_path
+    src = QPixmap(str(resolve_project_path(LOGO_PATH)))
+    if src.isNull():
+        return make_icon(dot_color or "#feaa34", _fallback=True).pixmap(size, size)
+    pm = src.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if dot_color:
+        out = QPixmap(size, size)
+        out.fill(Qt.transparent)
+        p = QPainter(out)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.drawPixmap((size - pm.width()) // 2, (size - pm.height()) // 2, pm)
+        r = size // 3
+        p.setPen(QColor("#101215"))
+        p.setBrush(QColor(dot_color))
+        p.drawEllipse(size - r - 1, size - r - 1, r, r)
+        p.end()
+        return out
+    return pm
+
+
+def make_icon(color: str, _fallback: bool = False) -> QIcon:
+    if not _fallback:
+        return QIcon(logo_pixmap(64, color))
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
@@ -58,6 +86,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(980, 640)
 
         from ui.dashboard import Dashboard
+        from ui.spotify_ui import SpotifyUI
         from ui.memory_ui import MemoryUI
         from ui.automations_ui import AutomationsUI
         from ui.console_ui import ConsoleUI
@@ -78,9 +107,15 @@ class MainWindow(QMainWindow):
         sl = QVBoxLayout(self.side)
         sl.setContentsMargins(0, 16, 0, 12)
         sl.setSpacing(6)
-        self.brand = QLabel("  SAINT")
-        self.brand.setStyleSheet("font-size: 20px; font-weight: 700; letter-spacing: 2px; padding-left: 12px;")
-        sl.addWidget(self.brand)
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(18, 0, 12, 8)
+        brand_row.setSpacing(10)
+        self.brand_logo = QLabel()           # SAINT's "S" badge, in the accent colour
+        self.brand = QLabel("SAINT")
+        self.brand.setStyleSheet("font-size: 18px; font-weight: 700; letter-spacing: 3px;")
+        brand_row.addWidget(self.brand_logo)
+        brand_row.addWidget(self.brand, 1)
+        sl.addLayout(brand_row)
         self.sidebar = QListWidget()
         self.sidebar.setObjectName("Sidebar")
         for name, icon in PAGES:
@@ -108,8 +143,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.stack, 1)
         self.dashboard = Dashboard(runtime)
         self.settings_ui = SettingsUI(on_appearance_changed=self.apply_appearance)
-        pages = [self.dashboard, MemoryUI(), AutomationsUI(), ConsoleUI(), ModuleManagerUI(), HealthUI(),
-                 AnalyticsUI(), self.settings_ui]
+        self.spotify_ui = SpotifyUI()
+        pages = [self.dashboard, self.spotify_ui, MemoryUI(), AutomationsUI(), ConsoleUI(), ModuleManagerUI(),
+                 HealthUI(), AnalyticsUI(), self.settings_ui]
         for page in pages:
             self.stack.addWidget(page)
 
@@ -135,7 +171,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
     def apply_appearance(self):
         a = config.get("appearance", {}) or {}
-        self.app.setStyleSheet(build_stylesheet(a.get("theme", "Dark"), a.get("accent", "#2563eb"),
+        self.app.setStyleSheet(build_stylesheet(a.get("theme", "Dark"), a.get("accent", "#feaa34"),
                                                 a.get("font_family", "Segoe UI"), a.get("font_size", 13),
                                                 a.get("compact", False)))
         self.setWindowOpacity(max(0.6, min(1.0, float(a.get("opacity", 1.0)))))
@@ -149,7 +185,8 @@ class MainWindow(QMainWindow):
         for i, (name, icon) in enumerate(PAGES):
             self.sidebar.item(i).setText(f"{icon}   {name}" if labels else icon)
         self.side.setFixedWidth(210 if labels else 72)
-        self.brand.setText("  SAINT" if labels else " S")
+        self.brand.setVisible(labels)
+        self.brand_logo.setPixmap(logo_pixmap(32))
         self.status_text.setVisible(labels)
         self.dashboard.apply_settings()
         self._render_state(assistant_state.snapshot())
@@ -166,7 +203,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "tray", None):
             self.tray.setIcon(make_icon(color))
             self.tray.setToolTip(f"SAINT — {label}")
-        self.setWindowIcon(make_icon(pal.accent))
+        self.setWindowIcon(QIcon(logo_pixmap(64)))
 
     def _build_tray(self):
         self.tray = None

@@ -169,7 +169,14 @@ class AppCatalog:
         if query in custom:
             target = str(custom[query])
             kind = "uri" if re.match(r"^[a-z][\w+.-]*:(?![\\/])", target, re.I) else "path"
-            return AppEntry(name, kind, target, "custom", process_hint=query.split(" ")[0])
+            # Prefer the target's filename stem as the process hint — the display
+            # alias ("AIDE") often has no relation to the actual process
+            # (e.g. aide.exe / VSCodium.exe). Falls back to the alias.
+            stem = ""
+            if kind == "path":
+                stem = os.path.splitext(os.path.basename(target.strip('"')))[0].lower()
+            return AppEntry(name, kind, target, "custom",
+                            process_hint=stem or query.split(" ")[0])
 
         if query in _BUILTIN:
             kind, target, hint = _BUILTIN[query]
@@ -220,6 +227,41 @@ class AppCatalog:
         entries = self.entries()
         close = difflib.get_close_matches(_norm(name), list(entries), n=n, cutoff=0.5)
         return [entries[c].name for c in close]
+
+
+# Executable names for apps whose process isn't their display name.
+_KNOWN_PROCESSES = {
+    "chrome": {"chrome"}, "google chrome": {"chrome"}, "edge": {"msedge"}, "microsoft edge": {"msedge"},
+    "firefox": {"firefox"}, "opera": {"opera"}, "opera gx": {"opera"}, "opera browser": {"opera"},
+    "brave": {"brave"}, "vivaldi": {"vivaldi"}, "spotify": {"spotify"}, "discord": {"discord"},
+    "steam": {"steam", "steamwebhelper"}, "vs code": {"code"}, "vscode": {"code"},
+    "visual studio code": {"code"}, "code": {"code"}, "file explorer": {"explorer"}, "explorer": {"explorer"},
+    "files": {"explorer"}, "word": {"winword"}, "excel": {"excel"}, "powerpoint": {"powerpnt"},
+    "outlook": {"outlook", "olk"}, "teams": {"ms-teams", "teams"}, "terminal": {"windowsterminal"},
+    "windows terminal": {"windowsterminal"}, "notepad": {"notepad"}, "calculator": {"calculatorapp", "calculator"},
+    "settings": {"systemsettings"}, "task manager": {"taskmgr"}, "obs": {"obs64", "obs"},
+    "roblox studio": {"robloxstudiobeta"}, "roblox": {"robloxplayerbeta"}, "claude": {"claude"},
+}
+
+
+def process_names_for(name: str, entry: Optional[AppEntry] = None) -> set:
+    """Likely executable stems (no .exe) for an app, used to find its windows."""
+    q = _norm(re.sub(r"^(the|my)\s+", "", _norm(name or "")))
+    procs = set(_KNOWN_PROCESSES.get(q, set()))
+    if entry is not None:
+        procs |= _KNOWN_PROCESSES.get(_norm(entry.name), set())
+        # Any path-shaped target — including custom entries pointing at a
+        # launcher .exe — contributes its basename stem. Previously we only
+        # accepted targets ending exactly in ".exe", which missed .lnk / .bat.
+        tgt = (entry.target or "").strip('"')
+        stem = os.path.splitext(os.path.basename(tgt))[0].lower()
+        if stem and entry.kind in ("path", "exe"):
+            procs.add(stem)
+        if entry.process_hint:
+            procs.add(entry.process_hint.lower())
+    if not procs and q:
+        procs.add(q.replace(" ", ""))
+    return {p for p in procs if p}
 
 
 def launch(entry: AppEntry):

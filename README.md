@@ -51,26 +51,37 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
 
 | Area | Status |
 |---|---|
-| Wake word "Hey SAINT" | ✅ Local ONNX model on the CPU (~3 ms per 80 ms frame). Background speech without the wake word is never transcribed. See [known limitations](#known-limitations). |
+| Wake word "Hey SAINT" and "SAINT" | ✅ Two stages: the local ONNX model (CPU, ~1 ms per 80 ms frame) plus a transcript check for short utterances the model misses (it barely scores a bare "SAINT"). On synthetic speech from 4 voices, clean and with music at −8 dB, 64/64 wake decisions were correct, with no false wakes on "paint", "She is a saint" or plain commands. Background speech is never acted on or shown. |
+| Conversation mode (no wake word for follow-ups) | ✅ After SAINT answers, follow-ups such as "skip that" or "turn it down" work for 15 s (configurable), counted from when SAINT stops talking. |
 | Wake → command → STT → agent → tool → TTS → back to wake listening | ✅ |
 | Interrupting SAINT while it talks (barge-in) | ✅ Your speech interrupts it and SAINT's own voice doesn't. The interrupting request is then processed. |
 | Memory ("my favorite language is Python" → later "what language do I like?") | ✅ Persists across restarts. You can view, edit and delete memories. |
 | Reminders, timers, recurring reminders, scheduled commands | ✅ Persist across restarts, run in the background and can be cancelled. Reminders missed while SAINT was closed are delivered on start-up. |
-| Desktop control: open/close/switch apps, move windows between monitors, type, press keys, mouse, click UI elements | ✅ All through validated tools. Closing apps asks for confirmation. |
+| Desktop control: open/reuse/close apps, move/resize/snap windows across monitors, type, keys, click/double/right-click/hover UI elements, scroll | ✅ All through validated tools. Verified live on two monitors (see [the manual test checklist](docs/MANUAL_TESTING.md)). Existing windows are reused, and SAINT asks which one if several match. |
+| Multi-step requests ("open my browser, search YouTube for X, click the first video and pause") | ✅ Planned, then executed step by step with observe → act → verify, one retry and a clarifying question when needed. Verified live. |
 | LLM function calling for requests the command router doesn't recognise | ✅ With tool-capable Ollama models (`llama3.1`, `llama3.2`). |
 | Spotify: search, play track/artist/album/playlist/genre, pause/resume/skip/back, volume, queue, add to playlist, listening memory, recommendations | ✅ Covered by tests against a simulated Spotify API. ⚠️ Not yet run against a live account on this machine (see [Spotify](#spotify)). |
-| Image-level screen understanding | ⚠️ Needs a vision-capable Ollama model (none is bundled). Window and UI-element awareness through Windows UI Automation works without one. |
+| Screen understanding ("what's on my second screen?", "what am I looking at?", "what is this error?") | ✅ From Windows APIs + UI Automation: monitors, windows per monitor, focus, buttons, links, fields, tabs, visible text. Image-level description additionally needs a vision-capable Ollama model (none is bundled). |
 
 ### Known limitations
 
-- **Bare "SAINT" vs "Hey SAINT".** The bundled `hey_saint.onnx` reliably detects **"Hey SAINT"** (scores
-  0.72–0.95 on synthetic voices). It does **not** detect the bare word "SAINT" (scores ≤ 0.02). Say
-  "Hey SAINT", or retrain with more bare-word samples (see [Retraining](#retraining)).
-- **Wake-word accuracy on real voices** is untested beyond synthetic speech; tune the sensitivity in
-  Settings → Wake Word.
+- **Bare "SAINT" relies on the transcript check.** The bundled `hey_saint.onnx` detects **"Hey SAINT"**
+  well but barely scores a bare "SAINT" (≤ 0.02). A short utterance the model misses is transcribed
+  once and accepted only if it *starts* with "SAINT" / "Hey SAINT". This costs one quick STT pass per
+  short passive utterance, and none for speech longer than 7 s. Retraining with more bare-word
+  samples would make the first stage catch it too (see [Retraining](#retraining)).
+- **Wake-word accuracy on real voices** was measured on synthetic voices and background speech in
+  the room. Tune it in Settings → Wake Word.
 - **Barge-in is energy based, not full acoustic echo cancellation.** With headphones it's excellent.
   With loud speakers right next to the microphone, raise *Echo margin* (Settings → Voice) if SAINT
   interrupts itself, or lower it if interrupting is too hard.
+- **Smart Shuffle** isn't in Spotify's Web API. SAINT toggles it through the Spotify desktop app's own
+  button (UI Automation) and falls back to regular shuffle when the app isn't open. **Removing songs
+  from the queue** isn't possible through the API at all, and SAINT says so.
+- **Spotify genre data** is no longer returned to new apps, so "something like X" uses the artist,
+  their collaborators and your own listening history.
+- **Web pages** are read through the browser's accessibility tree. Pages that don't expose their
+  content (canvas apps, some games) can't be clicked by name; use coordinates or a vision model.
 
 ---
 
@@ -79,27 +90,34 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
 ```
 MICROPHONE (sounddevice, 30 ms frames)
    │
-   ├─ VAD (RMS, hysteresis) ── tentative speech buffer (never transcribed on its own)
-   └─ Wake-word detector (onnxruntime, CPU): melspectrogram → embeddings → hey_saint.onnx
-          │  "Hey SAINT" (score ≥ threshold for N frames, outside the cooldown)
+   ├─ VAD: Silero (speech vs. music/TV, from faster-whisper) with an RMS fallback
+   ├─ Wake word, stage 1: onnxruntime (CPU) melspectrogram → embeddings → hey_saint.onnx
+   │      fires when N of the last W frames clear the threshold (or one frame is very confident)
+   └─ Wake word, stage 2: a short utterance the model missed is transcribed once and accepted
+          only if it *starts* with "SAINT" / "Hey SAINT" (otherwise dropped; nothing is shown or logged)
           ▼
-   WAKE_DETECTED → COMMAND_LISTENING  (the utterance that contained the wake word is kept,
-          │                            so "Hey SAINT, play jazz" and "Hey SAINT … play jazz" both work)
+   WAKE_DETECTED → COMMAND_LISTENING   ("Hey SAINT, play jazz" and "SAINT … play jazz" both work)
           ▼
    STT: faster-whisper (GPU) → transcript with the wake phrase stripped
           ▼
+   CONVERSATION MANAGER ──► after SAINT answers: conversation window (no wake word needed)
+          ▼
    AGENT
-     1. pending confirmation?  ("yes" / "no")
-     2. deterministic intent router  (Spotify, memory, reminders, desktop, screen, clock)
-     3. otherwise the LLM (Ollama) with relevant memories, the real clock and, for
-        action-like requests, function calling over explicit tools
+     1. pending question?  (yes/no confirmations, "which window?" choices)
+     2. reminders / memory
+     3. multi-step plan  → OBSERVE → ACT → VERIFY → (retry once / ask) → next step
+     4. single intents: system · Spotify · desktop/screen/browser (desktop_intents) · legacy desktop
+     5. otherwise the LLM (Ollama) with memories, the real clock and tool calling
           ▼
-   TOOL REGISTRY  (typed parameters, validation, permission policy, confirmation, events)
-     spotify.* · memory.* · automation.* · desktop.* · screen.*
+   TOOL REGISTRY  (typed parameters, validation, permission policy, confirmation, events, logs)
+     spotify.* · memory.* · automation.* · desktop.* · screen.* · browser (open_url / web_search)
           ▼
-   RESPONSE (built from the tool's real result or real error) → TTS (Kokoro, GPU)
+   RESULT + VERIFICATION (window moved? page changed? track changed?)
           ▼
-   back to WAKE_LISTENING
+   OUTPUT GUARD (modules/agent/output.py): no JSON, tool names, schemas, code or unbacked
+   "I did X" claims ever reach the chat or TTS
+          ▼
+   RESPONSE → TTS (Kokoro, GPU) → conversation window → back to WAKE_LISTENING
 ```
 
 Key ideas:
@@ -173,15 +191,26 @@ run.bat --background    & rem start hidden in the system tray
 
 ## Talking to SAINT
 
-Say **"Hey SAINT"**, then your request, in one breath or after a short pause. After the wake word
-SAINT plays a soft chime and waits up to 6 seconds for the command. You can also type into the
+Say **"Hey SAINT"** or **"SAINT"**, then your request, in one breath or after a short pause. After
+the wake word SAINT plays a soft chime and waits up to 6 seconds for the command. **After it answers,
+just keep talking**: for 15 seconds (Settings → Wake Word → *Conversation window*) follow-ups like
+"skip that", "turn it down" or "now put it on the left" need no wake word. You can also type into the
 dashboard; typed text goes through exactly the same agent.
+
+References carry over: "it", "that", "that window", "there" and "the first one" mean the thing SAINT
+just worked with, unless you've switched to another window since. "Turn it down" means Spotify after
+a music command and the computer volume after a video. With several matching windows SAINT asks
+("I found 3 browser windows: 1, … Which one?"). Answer "the second one", "the YouTube one" or "the one
+on my second screen".
 
 | You say | What happens |
 |---|---|
 | "Hey SAINT, play Blinding Lights by The Weeknd" | Resolves the actual track on Spotify and plays it |
 | "…play Daft Punk" / "…play the album Discovery" / "…play my gym playlist" / "…play some jazz" | Artist / album / your playlist / genre playlist |
 | "…pause" · "resume" · "skip" · "go back" · "turn it up" · "set the volume to 30" | Playback control |
+| "…play something else" · "play a different song" · "change the song" · "I'm not feeling this one" | Skips (the last also records a dislike). Never treated as a song title. |
+| "…play something like DAMN by Kendrick Lamar" · "play something by Kendrick Lamar" | Picks similar music from that album/track/artist · plays that artist |
+| "…turn on Smart Shuffle" · "replay this song" · "skip ahead 30 seconds" · "who is this?" | Smart Shuffle (via the Spotify app), restart, seek, current artist |
 | "…what am I listening to?" · "what have I listened to today?" | Live playback state · SAINT's listening memory |
 | "…play something I'd like" · "play something similar" · "recommend something similar" | Personalised picks from your real listening history |
 | "…add this to my chill playlist" · "queue Harder Better Faster Stronger" | Real playlist/queue changes |
@@ -195,8 +224,12 @@ dashboard; typed text goes through exactly the same agent.
 | "…open Discord" · "switch to Spotify" · "close Notepad" (asks first) | Apps and windows |
 | "…move this window to my second monitor" · "snap Chrome to the left" · "maximize this window" | Window placement |
 | "…type hello world into the search box" · "press ctrl+t" · "click the send button" | Keyboard and UI elements |
-| "…open Chrome and search for cats" | Multi-step: both steps run in order |
-| "…what's on my screen?" · "take a screenshot" | Active window and controls (UI Automation) · capture |
+| "…open my browser" · "open YouTube" · "search YouTube for Kendrick Lamar" | Reuses your browser window (asks if several) · site search |
+| "…click the first video" · "in that window, click the first result" · "click the button in the bottom right" | Finds visible results/elements (UI Automation) and verifies the page changed |
+| "…scroll down" · "go back" · "refresh" · "copy that" · "put it in fullscreen" · "double click the recycle bin" | Scrolling, navigation, editing keys, element actions |
+| "…move the browser to my second monitor" · "make it bigger" · "put it on the left" · "put this window next to Spotify" · "close all the browser windows" | Window management (closing asks first) |
+| "…open my browser, search YouTube for Kendrick Lamar, click the first video, and turn the volume down" | Multi-step plan, each step verified |
+| "…what's on my second screen?" · "what am I looking at?" · "what's currently open?" · "what is this error?" | Screen understanding per monitor. "Error" answers only from text actually on screen. |
 | "…stop" (while SAINT is talking) | Stops speaking |
 
 Anything else goes to the language model, which can also call the same tools.
@@ -212,17 +245,28 @@ Anything else goes to the language model, which can also call the same tools.
   openWakeWord implementation to within 0.0003. SAINT does not import the `openwakeword` package,
   because it pulls in scikit-learn, which Windows Application Control blocked on the development
   machine.
-- Detection requires the score to stay ≥ *threshold* (default 0.50) for *confirmation frames*
-  (default 2 × 80 ms), outside a *cooldown* (default 2 s). The two-frame rule removed the false
-  triggers on "saved" seen in testing without losing any real "Hey SAINT".
+- **Stage 1 (model):** fires when *confirmation frames* (default 1) of the last *detection window*
+  frames (default 4 × 80 ms) score ≥ *threshold* (default 0.50), or one frame is very confident, outside
+  a *cooldown* (default 2 s). Strictly consecutive frames (the old rule) missed clear "Hey SAINT"s that
+  peaked for a single frame. On 50 synthetic near-miss phrases ("paint", "sent", "Hey Sam", "She is a
+  saint", …) nothing fired at thresholds down to 0.2.
+- **Stage 2 (transcript check):** a short passive utterance (≤ 7 s) the model didn't fire on is
+  transcribed once. It's accepted only if it starts with "SAINT" / "Hey SAINT". "SAINT, <pause> skip
+  this" is judged as one utterance, and very short clips are padded so Whisper doesn't hallucinate on
+  them. Bystander speech is never shown, acted on or logged.
+- **Music:** the Silero VAD separates speech from music (0 % of loud synthetic music counted as speech,
+  vs 62 % with the old energy VAD), so commands end cleanly while music plays. Utterances are capped
+  at 15 s.
 - While SAINT itself is speaking, wake detections are ignored so it can't wake itself. Interrupting is
-  handled by barge-in (below).
+  handled by barge-in (below), and the conversation window only starts counting once SAINT stops
+  talking.
 - If the model file is missing or invalid, the dashboard and Settings show the exact error. SAINT
   then falls back to transcript-gated listening; nothing is faked.
 
-Settings → **Wake Word**: enable/disable, model file, sensitivity, confirmation frames, cooldown,
-command timeout, follow-up window (listen for a follow-up without the wake word), chime, score
-logging, and a live score meter.
+Settings → **Wake Word**: enable/disable, model file, sensitivity, confirmation frames, detection
+window, transcript check (and its length limit), cooldown, command timeout, conversation window,
+follow-up confidence, chime, score logging, and a live score meter. Settings → **Voice**: speech
+detector (Silero/RMS), longest utterance.
 
 ### Retraining
 
@@ -367,13 +411,20 @@ Every desktop action is an explicit tool with validated inputs:
 
 | Tool | Notes |
 |---|---|
-| `desktop.open_app` | Resolved only against what's installed: built-in Windows apps, Start-menu shortcuts, Store apps (`Get-StartApps`), the App Paths registry and your own aliases. Launched without a shell. |
-| `desktop.close_app` | Graceful `WM_CLOSE`. **Asks for confirmation** by default. Reports honestly if the app stays open (e.g. a save prompt). |
+| `desktop.open_app` | **Reuses a running app's window** instead of launching a duplicate. With several windows it picks the one the request, your focus or the conversation points at, else asks. "Browser" means the running or default browser; "a new window" really opens one. Resolved only against what's installed. Launched without a shell. |
+| `desktop.close_app` / `desktop.close_windows` | Graceful `WM_CLOSE`, then the title-bar close command. **Asks for confirmation** by default (always for "close all …"). Reports honestly if the app stays open (e.g. a save prompt). |
+| `desktop.scale_window`, `desktop.place_beside` | "Make it bigger", "put this next to Spotify". Results are measured afterwards. |
+| `desktop.open_url`, `desktop.web_search` | Navigate / search sites (YouTube, Google, Amazon, …) in your existing browser window. Verified by the page title changing. |
 | `desktop.focus_window`, `desktop.move_window`, `desktop.arrange_window`, `desktop.resize_window` | Switch, move to monitor N/next/left/right, maximise/minimise/snap/centre. |
 | `desktop.type_text` | Unicode typing via SendInput, optionally into a named field ("search box") found through UI Automation. Length-limited. |
 | `desktop.press_keys` | Key names are validated; Alt+F4, Win+L, Ctrl+Alt+Del, Win+R and Win+X are refused. |
-| `desktop.click_element` / `desktop.list_ui_elements` | Real UI elements from the Windows accessibility tree. |
-| `desktop.mouse_move` / `desktop.mouse_click` / `desktop.scroll` | Coordinates checked against the virtual screen. |
+| `desktop.click_element` / `desktop.list_ui_elements` | Real UI elements from the Windows accessibility tree, by label, position ("button in the bottom right") or order ("first video": visible results only, sidebar and off-screen carousel items skipped). Click, double, right, middle and hover. Reports whether the UI changed. |
+| `desktop.mouse_move` / `desktop.mouse_click` / `desktop.drag` / `desktop.scroll` | Coordinates checked against the virtual screen. Scrolling moves the pointer over the intended window first. |
+
+Commands act on the window SAINT is working with, unless you've switched to another window since.
+They never act on SAINT's own window when you typed into it. Keyboard input only goes to a window
+that was verified to be in front. The process is per-monitor DPI aware, so coordinates stay exact
+with mixed display scaling.
 
 Safety:
 
@@ -396,8 +447,13 @@ Safety:
 | Visual analysis of the image | ⚠️ Only with a vision-capable Ollama model (Settings → Advanced → Vision, e.g. `llama3.2-vision`). Otherwise SAINT says it's not configured. |
 | Action planning → mouse/keyboard | ✅ Through the desktop tools. The LLM can combine `screen.context` with `desktop.*`. |
 
-"What's on my screen?" answers from the active window, its visible controls and other open windows,
-and adds image analysis when a vision model is configured.
+`screen.context` covers every monitor: which is the main one, where each sits, resolution and
+scaling, and the windows on it, front-most first. For the window you're looking at, or the front
+window of the monitor you asked about, it lists buttons, links, fields, menus, tabs and visible
+text. It runs on demand only; nothing is captured in the background. "What's on my screen?", "What's
+on my second screen?" and "What's currently open?" answer from this. Image analysis is added when a
+vision model is configured, and is told to say when it can't tell rather than guess. Settings →
+Vision → *Screen reading* turns it off.
 
 ---
 
@@ -458,10 +514,14 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word), `ai.*`, `age
 .venv\Scripts\python -m pytest
 ```
 
-181 automated tests cover:
+291 automated tests cover:
 
-- wake-word model loading, silence and noise rejection, confirmation frames and cooldown
-- the listening state machine (no STT without the wake word, wake → command, timeouts)
+- wake-word model loading, silence and noise rejection, the windowed trigger and cooldown
+- the listening state machine (transcript wake for bare "SAINT", passive speech never acted on,
+  wake → command, the conversation window that waits while SAINT talks, timeouts)
+- natural-language intent understanding: many phrasings per action, action phrases never becoming
+  song titles, context-dependent meaning ("turn it down", "go back", "pause") and multi-step plans
+- which window a command acts on, and answering "which one?" questions
 - the echo gate, plus interruption handling in the conversation controller
 - intent routing for Spotify, memory, reminder and desktop phrasing
 - memory store, recall, update and delete, including persistence across a restart
@@ -471,6 +531,9 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word), `ai.*`, `age
 
 Tests use a temporary data directory and mock STT, TTS and LLM backends, so they never touch your
 settings, microphone, Spotify account or desktop. `tools/dev/` holds manual diagnostic scripts.
+
+Before a release, run through the **[manual testing checklist](docs/MANUAL_TESTING.md)** (voice,
+Spotify, screen, mouse/keyboard, windows, browser, multi-step, natural answers).
 
 ---
 

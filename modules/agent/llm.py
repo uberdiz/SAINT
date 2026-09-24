@@ -23,6 +23,7 @@ import requests
 from core.config import config
 from core.events import event_bus, EventType
 from modules.agent.confirm import confirmations, PendingAction
+from modules.agent.output import ReplyGuard, clean_reply, extract_tool_calls, pseudo_answer, honest
 from modules.automation.tools import get_tool_registry, llm_name
 
 log = logging.getLogger("saint.agent.llm")
@@ -37,10 +38,13 @@ _ACTION_HINT = re.compile(
     r"app|chrome|discord|browser|desktop|what'?s on)\b", re.I)
 
 _TOOL_SYSTEM = (
-    "You can act on the user's PC through the provided tools. Call a tool only when the "
-    "user asks for an action or for information a tool provides. Never claim you did "
-    "something unless a tool result says it succeeded; if a tool fails, say so plainly. "
-    "Keep answers short — they are spoken aloud."
+    "You can act on the user's PC through the provided tools. Call a tool ONLY through the "
+    "structured tool-call mechanism — never write JSON, function names, XML, or code in your "
+    "reply. After a tool runs, reply with ONE short sentence — a plain confirmation like "
+    "'Skipped it.' or 'Spotify is open.', or the direct answer. Never repeat the user's "
+    "request. Never narrate what you're doing. Never mention tool names, function names, "
+    "parameters, or internal reasoning. Never claim an action happened unless a tool result "
+    "confirms it; if a tool fails, say so plainly in one short sentence."
 )
 
 _capability_cache: Dict[str, bool] = {}
@@ -79,14 +83,18 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
     else:
         msgs.insert(0, {"role": "system", "content": _TOOL_SYSTEM})
 
+    user_text = next((m.get("content", "") for m in reversed(msgs) if m.get("role") == "user"), "")
     url = base_url.replace("localhost", "127.0.0.1").rstrip("/") + "/api/chat"
     max_steps = int(config.get("ai.max_tool_steps", 4))
     spoken: List[str] = []
     info = {"tool_calls": [], "expects_reply": False}
 
+    max_tokens = int(config.get("ai.max_tokens", 0) or 0)
     for step in range(max_steps + 1):
-        body = {"model": model, "messages": msgs, "stream": True, "keep_alive": -1,
-                "options": {"temperature": temperature}}
+        opts = {"temperature": temperature}
+        if max_tokens > 0:
+            opts["num_predict"] = max_tokens
+        body = {"model": model, "messages": msgs, "stream": True, "keep_alive": -1, "options": opts}
         if step < max_steps and schemas:
             body["tools"] = schemas
         try:
@@ -99,6 +107,12 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
             raise ProviderError(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
         content, calls = [], []
+
+        def emit(tok):
+            spoken.append(tok)
+            on_token(tok)
+
+        guard = ReplyGuard(emit)
         with resp:
             for line in resp.iter_lines():
                 if cancel_flag is not None and cancel_flag.is_set():
@@ -113,13 +127,37 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
                 tok = msg.get("content") or ""
                 if tok:
                     content.append(tok)
-                    spoken.append(tok)
-                    on_token(tok)
+                    guard.feed(tok)
                 calls.extend(msg.get("tool_calls") or [])
                 if chunk.get("done"):
                     break
+        held = guard.finish()
+
+        if not calls and held.strip():
+            # The model wrote its tool call (or a wrapped answer) as text.
+            for name, args in extract_tool_calls(held):
+                tool = registry.by_llm_name(name)
+                if tool is not None and tool.llm_exposed:
+                    calls.append({"function": {"name": llm_name(tool.name), "arguments": args}})
+                elif not calls:
+                    ans = pseudo_answer(name, args)
+                    if ans:
+                        emit(honest(clean_reply(ans), _any_ok(info)))
+                        return "".join(spoken), info
+            if calls:
+                log.info("llm.textual_tool_calls %s", [c["function"]["name"] for c in calls])
+            else:
+                leftover = honest(clean_reply(held, user_text), _any_ok(info))
+                if leftover:
+                    if leftover != held.strip():
+                        log.info("llm.reply_rewritten held=%r", held[:80])
+                    emit(leftover)
 
         if not calls:
+            final = "".join(spoken).strip()
+            if not final:
+                final = "Sorry, I couldn't work that out."
+                emit(final)
             return "".join(spoken), info
 
         msgs.append({"role": "assistant", "content": "".join(content), "tool_calls": calls})
@@ -137,7 +175,9 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
                 result = {"success": False, "error": f"No such tool: {name}"}
             else:
                 event_bus.emit_event(EventType.AGENT_INTENT, {"intent": f"llm:{tool.name}", "source": "llm"})
+                log.info("llm.tool_call tool=%s args=%s", tool.name, _log_args(args))
                 res = registry.execute(tool.name, **args)
+                log.info("llm.tool_result tool=%s ok=%s error=%s", tool.name, res.success, (res.error or "")[:120])
                 info["tool_calls"].append({"tool": tool.name, "success": res.success, "error": res.error})
                 if res.error_code == "CONFIRM_REQUIRED":
                     tname, targs = tool.name, dict(res.args or args)
@@ -160,6 +200,18 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
     return "".join(spoken), info
 
 
+def _any_ok(info: Dict) -> bool:
+    return any(c.get("success") for c in info.get("tool_calls", []))
+
+
+def _log_args(args: Dict) -> str:
+    """Tool arguments for the log, with long/free text shortened."""
+    out = {}
+    for k, v in (args or {}).items():
+        out[k] = (v[:40] + "…") if isinstance(v, str) and len(v) > 40 else v
+    return json.dumps(out, default=str)[:200]
+
+
 def _compact(value, depth=0):
     """Trim big tool results (e.g. window lists) before sending them to the model."""
     if depth > 3:
@@ -172,3 +224,28 @@ def _compact(value, depth=0):
     if isinstance(value, str) and len(value) > 300:
         return value[:300] + "..."
     return value
+
+
+def complete(prompt: str, system: str = "", timeout: float = 45.0) -> str:
+    """One-shot, non-streaming answer from the configured local model (used
+    for small agent sub-tasks such as explaining an error on screen).
+    Returns '' on failure; the output is cleaned of any internal markup."""
+    from modules.ai.module import AIModule
+    base = config.get("ai.base_url", "http://localhost:11434")
+    try:
+        model, _ = AIModule._resolve_model(None, "ollama", base, config.get("ai.model", ""))
+        opts = {"temperature": 0.3}
+        cap = int(config.get("ai.max_tokens", 0) or 0)
+        if cap > 0:
+            opts["num_predict"] = cap
+        r = requests.post(base.replace("localhost", "127.0.0.1").rstrip("/") + "/api/chat", timeout=timeout,
+                          json={"model": model, "stream": False, "keep_alive": -1, "options": opts,
+                                "messages": ([{"role": "system", "content": system}] if system else []) +
+                                            [{"role": "user", "content": prompt}]})
+        if r.status_code != 200:
+            log.warning("llm.complete HTTP %s", r.status_code)
+            return ""
+        return clean_reply((r.json().get("message") or {}).get("content", ""), prompt)
+    except Exception as e:
+        log.warning("llm.complete_failed %s", e)
+        return ""

@@ -128,7 +128,7 @@ class StateOrb(QWidget):
                 pulse = 0.05 * math.sin(t * 5.0) + 0.25 * self._level
             elif self._state == "speaking":
                 pulse = 0.08 * abs(math.sin(t * 7.0))
-            elif self._state in ("processing", "executing"):
+            elif self._state in ("processing", "executing", "observing"):
                 pulse = 0.03 * math.sin(t * 3.0)
         r = base_r * (1.0 + pulse)
 
@@ -152,7 +152,7 @@ class StateOrb(QWidget):
         painter.drawEllipse(QRectF(cx - r, cy - r, 2 * r, 2 * r))
 
         # spinning arc while processing / executing
-        if anim and self._state in ("processing", "executing"):
+        if anim and self._state in ("processing", "executing", "observing"):
             pen = QPen(color.lighter(130), 3)
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
@@ -277,24 +277,27 @@ class ChatView(QTextBrowser):
         rows = []
         for role, text, meta in self._messages:
             safe = html.escape(text).replace("\n", "<br>")
+            # Qt rich text ignores div padding/radius, so bubbles are padded table cells.
+            meta_html = (f'<p style="color:{p.faint}; font-size:11px; margin-top:3px;" align="{{a}}">'
+                         f'{html.escape(meta)}</p>') if meta else ""
             if role == "user":
                 rows.append(
-                    f'<table width="100%" cellspacing="0" cellpadding="0"><tr><td width="22%"></td>'
-                    f'<td align="right"><div style="background:{p.accent_soft}; color:{p.text}; '
-                    f'padding:8px 12px; border-radius:12px;">{safe}</div>'
-                    f'<div style="color:{p.faint}; font-size:11px;">{html.escape(meta)}</div></td></tr></table>')
+                    f'<table width="100%" cellspacing="0" cellpadding="0"><tr><td width="22%"></td><td>'
+                    f'<table align="right" cellspacing="0" cellpadding="9" bgcolor="{p.accent_soft}">'
+                    f'<tr><td style="color:{p.text};">{safe}</td></tr></table>'
+                    f'{meta_html.replace("{a}", "right")}</td></tr></table>')
             elif role == "system":
-                rows.append(f'<div style="color:{p.faint}; font-size:11px; margin:4px 0;" align="center">'
-                            f'{safe}</div>')
+                rows.append(f'<p style="color:{p.faint}; font-size:11px;" align="center">{safe}</p>')
             else:
                 color = p.danger if meta.startswith("error") else p.text
                 rows.append(
-                    f'<table width="100%" cellspacing="0" cellpadding="0"><tr>'
-                    f'<td><div style="background:{p.surface2}; color:{color}; padding:8px 12px; '
-                    f'border-radius:12px;"><b style="color:{p.accent};">SAINT</b><br>{safe or "…"}</div>'
-                    f'<div style="color:{p.faint}; font-size:11px;">{html.escape(meta)}</div></td>'
-                    f'<td width="22%"></td></tr></table>')
-        self.setHtml(f'<body style="background:{p.surface};">' + "<br>".join(rows) + "</body>")
+                    f'<table width="100%" cellspacing="0" cellpadding="0"><tr><td>'
+                    f'<p style="color:{p.accent}; font-size:11px; font-weight:700; margin-bottom:3px;">SAINT</p>'
+                    f'<table cellspacing="0" cellpadding="9" bgcolor="{p.surface2}">'
+                    f'<tr><td style="color:{color};">{safe or "…"}</td></tr></table>'
+                    f'{meta_html.replace("{a}", "left")}</td><td width="22%"></td></tr></table>')
+        self.setHtml(f'<body style="background:{p.surface};">' + '<p style="font-size:6px;">&nbsp;</p>'.join(rows)
+                     + "</body>")
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
 
 

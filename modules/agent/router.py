@@ -92,8 +92,20 @@ def _lower(text: str) -> str:
 # ====================================================================== #
 # System (clock, capabilities)
 # ====================================================================== #
+_DISMISS = re.compile(r"^(?:never ?mind|nevermind|cancel(?: that| it)?|stop(?: that| it)?|forget (?:it|that|about it)|"
+                      r"no(?:pe)?|nah|no thanks|not now|that'?s all|that'?s it|nothing|i'?m good|all good|"
+                      r"thanks|thank you|thank you saint|ok(?:ay)?|cool|great|got it)$")
+
+
 def parse_system(text: str) -> Optional[Intent]:
     t = _lower(text)
+    if _DISMISS.match(t.strip(" .!?,")):
+        def run_dismiss():
+            from modules.agent.confirm import choices
+            confirmations.clear("dismissed")
+            choices.clear()
+            return Reply("You're welcome." if t.startswith("thank") else "Okay.")
+        return Intent("dismiss", run_dismiss, "system")
     if re.search(r"^(what(?:'s| is)? the time|what time is it|tell me the time|time)\??$", t):
         return Intent("time", lambda: Reply(f"It's {datetime.now().strftime('%I:%M %p').lstrip('0')}."), "system")
     if re.search(r"^(what(?:'s| is)? (?:the |today'?s )?(?:date|day)(?: today)?|what day is (?:it|today)|"
@@ -137,6 +149,8 @@ def parse_memory(text: str) -> Optional[Intent]:
 
     # --- forget -----------------------------------------------------------
     m = re.match(r"^(?:forget|delete|erase|remove)\s+(?:that\s+|about\s+|the fact that\s+)?(.+)$", t)
+    if m and m.group(1).strip() in ("it", "that", "this", "about it"):
+        m = None                       # "forget it" is a dismissal, not a memory deletion
     if m and not re.search(r"\b(reminder|timer|alarm|automation|song|track|playlist|window|app)\b", t):
         target = m.group(1).strip()
         if re.fullmatch(r"(everything|all (of )?(it|that|my memories|your memories)|all memories|everything about me)",
@@ -305,14 +319,119 @@ class SpotifyIntent:
     kwargs: dict
 
 
+# ---- music concepts (phrasing-independent) -------------------------------------------
+# "Change what's playing": a request to move on from the current track, however
+# it is phrased. Never a song title.
+_CHANGE_TRACK = re.compile(
+    r"^(?:(?:play|put on|give me|find|throw on|queue up|switch to|change to|try|go to|start)\s+(?:me\s+)?"
+    r"(?:a\s+|an\s+|some\s+)?(?:different|another|other|new|the next|next)(?:\s+(?:song|track|tune|one|thing|music|songs|tracks))?"
+    r"|(?:play|put on|give me|find|throw on|try)\s+(?:me\s+)?(?:something|anything|some(?:thing)?)\s+(?:else|different|new)"
+    r"|(?:change|switch|swap|mix)\s+(?:up\s+)?(?:the\s+|this\s+|that\s+)?(?:song|track|tune|music|songs|tracks|it(?:\s+up)?|things up)"
+    r"|(?:skip|next)(?:\s+(?:it|this|that|this one|that one|the song|this song|that song|the track|this track|song|track|"
+    r"one|ahead|forward|to the next(?: one| song| track)?))?"
+    r"|(?:skip|move on from)\s+(?:this|that|it)\s+(?:song|track|one)"
+    r"|next\s+(?:song|track|one))$")
+# "...and I don't like it": change the track AND learn from it.
+_REJECT_TRACK = re.compile(
+    r"^(?:i'?m\s+|i am\s+)?not\s+(?:really\s+|really\s+)?(?:feeling|vibing with|into|liking|loving)\s+"
+    r"(?:this|it|this one|that|that one|this song|this track|the song)"
+    r"|^(?:i\s+)?(?:don'?t|do not)\s+(?:want|wanna)\s+(?:to\s+)?(?:hear|listen to)\s+(?:this|it|that)(?:\s+(?:one|song|track))?"
+    r"|^(?:this|that)\s+(?:song|track|one)\s+(?:is\s+)?(?:boring|bad|trash|annoying|not it)"
+    r"|^(?:ugh|nah|no),?\s+(?:skip|next|change)(?:\s+(?:it|this|this one))?$")
+_SIMILAR_TO = re.compile(
+    r"^(?:(?:play|put on|give me|find|queue up|recommend|suggest|i want|i'd like|how about)\s+(?:me\s+)?)?"
+    r"(?:something|anything|some\s+(?:songs|music|tracks|stuff)|songs|music|tracks|stuff|more)\s+"
+    r"(?:like|similar to|in the style of|that sounds like|along the lines of)\s+(.+)$")
+_BY_ARTIST = re.compile(
+    r"^(?:play|put on|give me|find|queue up|i want)\s+(?:me\s+)?(?:something|anything|a song|some(?:thing)?|"
+    r"some\s+songs?|some\s+music|a track|songs|music)\s+(?:by|from)\s+(.+)$")
+_DESKTOP_CONTEXT = re.compile(r"\b(video|youtube|tab|window|screen|monitor|display|browser|page|website|netflix|"
+                              r"twitch|desktop|app|mouse|cursor)\b")
+
+
+def _stt_music_fix(lower: str) -> str:
+    """Common speech-to-text slips at the start of music commands
+    ("Place something like DAMN" -> "play ...")."""
+    if not _DESKTOP_CONTEXT.search(lower):
+        lower = re.sub(r"^(?:place|plays|played|blay|pay|lay)\s+(?=(?:something|some|me|a |the |my |music|songs?|"
+                       r"anything|[a-z]))", "play ", lower)
+    return lower
+
+
 def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     """Map a music utterance to a Spotify tool. Works without the word 'spotify'."""
     lower = _lower(text)
-    lower = re.sub(r"\s+on spotify$", "", lower)
+    lower = re.sub(r"\s+(?:on|in|with) spotify$", "", lower)
+    lower = _stt_music_fix(lower)
     wc = len(lower.split())
 
     def has(p):
         return re.search(p, lower) is not None
+
+    # Commands about a video, a tab, a window... belong to the desktop, not Spotify.
+    if _DESKTOP_CONTEXT.search(lower) and not re.search(r"(?:\b(?:on|in|with) spotify|^(?:saint,? )?spotify\b)[.!?]*$",
+                                                        text.lower().strip()):
+        return None
+    from modules.agent.context import desktop_context
+    watching = desktop_context.domain() == "browser"
+
+    # --- change the track (a request, never a title) ------------------------
+    if _REJECT_TRACK.search(lower):
+        return SpotifyIntent("next_reject", "spotify.next", {})
+    if _CHANGE_TRACK.match(lower):
+        return SpotifyIntent("next", "spotify.next", {})
+
+    # --- "something like X" / "something by X" ------------------------------
+    m = _SIMILAR_TO.match(lower)
+    if m:
+        seed = m.group(1).strip()
+        if re.fullmatch(r"(this|that|it|this one|this song|this track|what's playing|what is playing|"
+                        r"the current song|what i'm listening to)", seed):
+            return SpotifyIntent("similar", "spotify.play_recommended", {"similar_to_current": True})
+        raw_m = _SIMILAR_TO.match(_stt_music_fix(_clean(text)))
+        seed_orig = raw_m.group(1).strip() if raw_m else seed
+        return SpotifyIntent("similar_seed", "spotify.play_recommended", {"seed": seed_orig})
+    m = _BY_ARTIST.match(lower)
+    if m:
+        return SpotifyIntent("play_artist", "spotify.play_query", {"query": m.group(1).strip(), "kind": "artist"})
+
+    # --- replay / seek ------------------------------------------------------------
+    if has(r"^(?:replay|restart|start over)(?: (?:this|the|that))?(?: (?:song|track|one))?$|"
+           r"^(?:play|start) (?:this|that|it|the song|this song) (?:again|over|from the (?:start|beginning))$|"
+           r"^(?:go back to|back to) the (?:start|beginning)(?: of the song)?$|^from the top$"):
+        return SpotifyIntent("replay", "spotify.replay", {})
+    m = re.search(r"^(?:skip|fast forward|jump|go)\s+(ahead|forward|back|backward|backwards)\s+(\d+)\s*(seconds?|secs?|minutes?|mins?)$",
+                  lower) or re.search(r"^(rewind)\s+(\d+)\s*(seconds?|secs?|minutes?|mins?)$", lower)
+    if m:
+        n = int(m.group(2)) * (60 if m.group(3).startswith("min") else 1)
+        sign = -1 if m.group(1) in ("back", "backward", "backwards", "rewind") else 1
+        return SpotifyIntent("seek_rel", "spotify.seek", {"seconds": sign * n, "relative": True})
+    m = re.search(r"^(?:go|skip|jump|seek) to (\d+)(?::(\d{2})| minutes?(?: and (\d+) seconds?)?)$", lower)
+    if m:
+        secs = int(m.group(1)) * 60 + int(m.group(2) or m.group(3) or 0)
+        return SpotifyIntent("seek", "spotify.seek", {"seconds": secs})
+
+    # --- smart shuffle ------------------------------------------------------------------
+    if has(r"\bsmart ?shuffle\b"):
+        return SpotifyIntent("smart_shuffle", "spotify.smart_shuffle",
+                             {"state": not has(r"\b(off|stop|disable|no)\b")})
+
+    # --- current artist / album -----------------------------------------------------
+    if has(r"^(?:who(?:'s| is)? (?:this|singing|playing|the artist)|who sings this|what artist is this|"
+           r"who(?:'s| is) this by|who made this)"):
+        return SpotifyIntent("current_artist", "spotify.current", {})
+    if has(r"^what album is (?:this|that|it)(?: from| on)?|^which album|^what(?:'s| is) the album"):
+        return SpotifyIntent("current_album", "spotify.current", {})
+
+    # --- search (without playing) ------------------------------------------------------
+    m = re.match(r"^(?:search|look up|find)\s+(?:on\s+)?spotify\s+for\s+(.+)$", _lower(text)) or \
+        re.match(r"^search\s+(?:for\s+)?(.+?)\s+on\s+spotify$", _lower(text))
+    if m:
+        return SpotifyIntent("search", "spotify.search", {"query": m.group(1).strip(), "types": "track,artist,album,playlist"})
+
+    # --- queue removal isn't possible through Spotify's API -------------------------------
+    if has(r"^(?:remove|delete|take)\b.*\b(?:from|off|out of) (?:the |my )?queue$|^clear (?:the |my )?queue$"):
+        return SpotifyIntent("queue_remove", "", {})
 
     # --- what's playing (before "play") ---------------------------------
     if has(r"what(?:'?s| is| am i)\b.*\b(playing|listening to|song|track)\b") and not has(r"\b(today|lately|yesterday|this week|been)\b") \
@@ -338,6 +457,9 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
 
     # --- add current to playlist ------------------------------------------------
     m = re.search(r"^(?:add|save|put) (?:this|this song|this track|it|the current song|what's playing) (?:to|in|into|on) (?:my |the )?(.+?)(?: playlist)?$", lower)
+    if m and re.fullmatch(r"(?:the )?(?:left|right|top|bottom|middle|center|full ?screen|other side|side|front|back)"
+                          r"(?: side| half| corner)?", m.group(1).strip()):
+        m = None          # "put it on the left" / "put it in fullscreen" are window commands
     if m:
         return SpotifyIntent("add_to_playlist", "spotify.add_current_to_playlist", {"playlist": m.group(1).strip()})
 
@@ -348,7 +470,8 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         return SpotifyIntent("queue", "spotify.queue", {"query": m.group(1).strip()})
 
     # --- previous / back --------------------------------------------------------
-    if has(r"\b(previous|last) (song|track|one)\b") or has(r"^go back\b") or has(r"\bplay (the )?(previous|last) (song|track|one)\b") \
+    if has(r"\b(previous|last) (song|track|one)\b") or (has(r"^go back\b") and (
+            desktop_context.music_is_context() or has(r"\b(song|track)\b"))) or has(r"\bplay (the )?(previous|last) (song|track|one)\b") \
             or (has(r"\bprevious\b") and wc <= 4) or has(r"\bback a (song|track)\b") or has(r"^(rewind|replay that)$"):
         return SpotifyIntent("previous", "spotify.previous", {})
 
@@ -357,6 +480,8 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         return SpotifyIntent("next", "spotify.next", {})
 
     # --- pause ----------------------------------------------------------------------
+    if watching and lower in ("pause", "resume", "play", "unpause", "pause it", "play it", "resume it"):
+        return None
     if has(r"^pause\b") or has(r"\bpause (the |my )?(music|song|spotify|playback|it)\b") \
             or has(r"\bstop (the |my )?(music|song|spotify|playback|playing)\b") or has(r"\b(music|spotify) (off|stop)\b"):
         return SpotifyIntent("pause", "spotify.pause", {})
@@ -366,9 +491,10 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         or re.search(r"\bturn (?:it|the music|spotify|the volume) (?:up |down )?to (\d{1,3})", lower)
     if vol:
         return SpotifyIntent("volume_set", "spotify.volume", {"percent": max(0, min(100, int(vol.group(1))))})
-    if has(r"\b(volume up|louder|turn (it|the music|spotify|the volume) up|turn up (the )?(music|volume)|crank it)\b"):
+    musical = has(r"\b(music|song|spotify|track|tune)\b") or desktop_context.music_is_context()
+    if musical and has(r"\b(volume up|louder|turn (it|the music|spotify|the volume|the song) up|turn up (the )?(music|volume|song)|crank it)\b"):
         return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up"})
-    if has(r"\b(volume down|quieter|softer|turn (it|the music|spotify|the volume) down|turn down (the )?(music|volume)|lower the volume)\b"):
+    if musical and has(r"\b(volume down|quieter|softer|turn (it|the music|spotify|the volume|the song) down|turn down (the )?(music|volume|song)|lower the volume)\b"):
         return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down"})
 
     # --- shuffle / repeat -------------------------------------------------------
@@ -446,7 +572,33 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
     if k == "resume":
         return "Resuming."
     if k == "next":
-        return "Skipped."
+        return "Skipped." if not r.get("track") else f"Skipped. Now playing {r['track']}."
+    if k == "next_reject":
+        return "Got it, skipping that one — I'll play less like it."
+    if k == "current_artist":
+        return f"That's {r['artists']}." if r.get("track") else "Spotify isn't playing anything right now."
+    if k == "current_album":
+        return (f"{r['track']} is from {r['album']}." if r.get("album") else f"That's {r['track']}.") \
+            if r.get("track") else "Spotify isn't playing anything right now."
+    if k == "replay":
+        return f"Starting {r['track']} again." if r.get("track") else "Starting it again."
+    if k in ("seek", "seek_rel"):
+        mm, ss = divmod(int(r.get("position_s", 0)), 60)
+        return f"Jumped to {mm}:{ss:02d}."
+    if k == "smart_shuffle":
+        if r.get("fallback"):
+            return ("Smart Shuffle is only available in the Spotify app, which isn't open, so I turned on "
+                    "regular shuffle instead." if r.get("shuffle") else "Shuffle off.")
+        if not r.get("verified", True):
+            return "I tried to switch Smart Shuffle, but Spotify didn't confirm the change."
+        return "Smart Shuffle is on." if r.get("smart") else "Smart Shuffle is off."
+    if k == "search":
+        tracks = (r.get("tracks") or {}).get("items") or []
+        tracks = [x for x in tracks if x]
+        if not tracks:
+            return "I didn't find anything for that on Spotify."
+        top = ", ".join(f"{x['name']} by {', '.join(a['name'] for a in x.get('artists', [])[:1])}" for x in tracks[:3])
+        return f"On Spotify I found {top}."
     if k == "previous":
         return "Going back."
     if k in ("volume_set", "volume_up", "volume_down"):
@@ -465,6 +617,8 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
         return f"Queued {r['name']}" + (f" by {r['artist']}." if r.get("artist") else ".")
     if k == "liked":
         return f"Playing your liked songs ({r['count']} tracks, shuffled)."
+    if k == "similar_seed":
+        return f"Playing {r['name']} by {r['artist']}, then {r['count'] - 1} more — {r.get('basis', '')}."
     if k in ("play_for_me", "similar"):
         basis = f" Picked from {r['basis']}." if r.get("basis") else ""
         return f"Playing {r['name']} by {r['artist']}, then {r['count'] - 1} more.{basis}"
@@ -521,12 +675,49 @@ def parse_spotify(text: str) -> Optional[Intent]:
         ok, reason = sp.availability()
         if not ok:
             return Reply(reason, ok=False)
+        from modules.agent.context import desktop_context
+        desktop_context.note_domain("spotify")
+        if si.kind == "queue_remove":
+            return Reply("Spotify doesn't let apps remove songs from the queue — you can do that in the "
+                         "Spotify app. I can skip the current song or queue something else.", ok=False)
+        if si.kind == "next_reject":
+            call("spotify.feedback", signal=-0.7, reason="user rejected the track")
         res = call(si.tool, **si.kwargs)
+        if not res.success and si.kind in ("next", "next_reject") and res.error_code in (
+                "NO_PLAYBACK", "NO_ACTIVE_DEVICE", "NO_DEVICE"):
+            # Nothing to skip: "play something different" means play something.
+            res = call("spotify.play_recommended")
+            if res.success:
+                return Reply(f"Nothing was playing, so I put on {res.result['name']} by {res.result['artist']}.")
+        if si.kind in ("next", "next_reject") and res.success:
+            time.sleep(0.8)                    # verify: what's playing now?
+            cur = call("spotify.current")
+            if cur.success and cur.result.get("track"):
+                res.result = dict(res.result or {}, track=f"{cur.result['track']} by {cur.result['artists']}")
         if not res.success:
             if res.error_code == "CONFIRM_REQUIRED":
                 return run_tool(si.tool, si.kind.replace("_", " "), lambda r: _spotify_reply(si, r), **si.kwargs)
+            if si.kind in ("pause", "resume"):
+                # Spotify rejects pausing what's already paused (and vice versa):
+                # say what the state actually is.
+                cur = call("spotify.current")
+                if cur.success and si.kind == "pause" and not cur.result.get("is_playing"):
+                    return Reply("Spotify is already paused.")
+                if cur.success and si.kind == "resume" and cur.result.get("is_playing"):
+                    return Reply("It's already playing.")
             return Reply(res.error, ok=False)
         reply = Reply(_spotify_reply(si, res.result))
+        if si.kind == "search":
+            items = [x for x in ((res.result.get("tracks") or {}).get("items") or []) if x]
+            if items:
+                first = items[0]
+
+                def play_found():
+                    r2 = call("spotify.play", uri=first["uri"])
+                    return f"Playing {first['name']}." if r2.success else r2.error
+                confirmations.ask(PendingAction(f"play {first['name']}", play_found, tool="spotify.play"))
+                reply.text += " Want me to play the first one?"
+                reply.expects_reply = True
         if si.kind == "recommend" and res.result["recommendations"]:
             uris = [x["uri"] for x in res.result["recommendations"]]
             first = res.result["recommendations"][0]
@@ -559,6 +750,15 @@ def parse_desktop(text: str) -> Optional[Intent]:
     if re.search(r"^(what(?:'s| is) on (my|the) screen|what am i looking at|what(?:'s| is) this window|"
                  r"describe (my|the) screen|what do you see)", t):
         return Intent("screen.context", _describe_screen, "desktop")
+    if re.search(r"^(read (out )?(what(?:'s| is) on )?(my|the|this) (screen|window|page)|read (it|this) (to|for) me|"
+                 r"what does (it|the screen|this|this page) say)", t):
+        return Intent("screen.read", _read_screen, "desktop")
+    m = re.match(r"^where(?:'s| is| are)\s+(?:the\s+)?(.+?)(?:\s+on (?:my|the) screen)?$", t)
+    if m and re.search(r"\b(box|bar|button|field|link|tab|menu|icon|search|input|toggle|checkbox)\b", m.group(1)):
+        what = m.group(1)
+        return Intent("screen.locate", lambda: _locate_on_screen(what), "desktop")
+    if re.search(r"^(what|which) (button|thing|option|link) (should|do) i (click|press|choose|pick)|^what should i click", t):
+        return Intent("screen.buttons", _suggest_buttons, "desktop")
     if re.search(r"^(what|which) (windows|apps|applications|programs) (are|do i have) open", t):
         def run_list():
             res = call("desktop.list_windows")
@@ -588,6 +788,10 @@ def parse_desktop(text: str) -> Optional[Intent]:
 
         def run_open():
             def ok(r):
+                if r.get("reused"):
+                    t = re.sub(r"^\(\d+\)\s*", "", r.get("window") or "")
+                    return f"Switched to {t.split(' - ')[-1] or r['app']}" + (
+                        f" (you have {r['count']} of its windows open)." if r.get("count", 1) > 1 else ".")
                 if r.get("window"):
                     return f"Opened {r['app']}."
                 return f"Launched {r['app']}; its window hasn't appeared yet."
@@ -607,6 +811,28 @@ def parse_desktop(text: str) -> Optional[Intent]:
                 return f"I asked {label} to close, but it's still open — {r.get('note', '')}".strip()
             return run_tool("desktop.close_app", f"close {label}", ok, name=name)
         return Intent("desktop.close_app", run_close, "desktop")
+
+    # go to a website ("go to YouTube", "navigate to github.com")
+    m = re.match(r"^(?:go to|navigate to|visit|browse to)\s+(?:the\s+)?(?:website\s+)?(.+?)(?:\s+(?:website|site|page))?"
+                 r"(?:\s+in (?:my|the) browser)?$", t)
+    if m:
+        url = _site_url(m.group(1))
+        if url:
+            return Intent("desktop.open_site", lambda: _open_site(url), "desktop")
+
+    # snap to a side ("move the window to the left side of the screen")
+    m = re.match(r"^(?:move|snap|put|push|drag|send)\s+(?:the\s+|this\s+|my\s+)?(.*?)\s*(?:window\s+)?(?:to|over to|on)\s+the\s+"
+                 r"(left|right)(?:\s+(?:side|half))?(?:\s+of\s+(?:the|my)\s+(?:screen|monitor|display))?$", t)
+    if m:
+        window = m.group(1).strip() or "this"
+        window = "this" if window in ("this", "it", "that", "window", "this window", "the window") else window
+        side = m.group(2)
+
+        def run_snap():
+            return run_tool("desktop.arrange_window", f"snap {window} {side}",
+                            lambda r: f"Moved {r['title'].split(' - ')[-1] or 'it'} to the {side} side.",
+                            window=window, action=f"snap_{side}")
+        return Intent("desktop.arrange_window", run_snap, "desktop")
 
     # move to monitor
     m = re.match(r"^(?:move|send|put|throw)\s+(?:the\s+|my\s+)?(.+?)\s+(?:window\s+)?(?:to|onto|on)\s+(?:the\s+|my\s+)?"
@@ -694,40 +920,96 @@ def parse_desktop(text: str) -> Optional[Intent]:
 
 
 def _describe_screen() -> Reply:
+    """'What's on my screen?' / 'What am I looking at?' — the window the user is
+    looking at, what else is open, and its controls/text (desktop_intents)."""
+    from modules.agent.desktop_intents import _describe
+    return _describe()
+
+
+def _site_url(name: str) -> Optional[str]:
+    # Delegate to the canonical site table in modules.desktop.browser so aliases
+    # (youtube, google, etc.) stay defined in one place.
+    from modules.desktop.browser import site_url
+    return site_url(name)
+
+
+def _browser_target():
+    """The browser window the user is using (never SAINT's own), brought to the front."""
+    try:
+        from modules.desktop.controller import desktop
+        w = desktop.target_window()
+        if w and any(b in w.process.lower() for b in _BROWSERS):
+            return desktop.target_window(activate=True)
+    except Exception:
+        pass
+    return None
+
+
+def _open_site(url: str) -> Reply:
+    import os
+    reg = get_tool_registry()
+    site = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
+    if _browser_target():
+        r1 = reg.execute("desktop.press_keys", keys="ctrl+l")
+        if r1.success:
+            time.sleep(0.1)
+            r2 = reg.execute("desktop.type_text", text=url, press_enter=True)
+            if r2.success:
+                return Reply(f"Opening {site}.")
+            return Reply(r2.error, ok=False)
+        return Reply(r1.error, ok=False)
+    try:
+        os.startfile(url)  # type: ignore[attr-defined]
+    except Exception as e:
+        return Reply(f"I couldn't open your browser: {e}", ok=False)
+    event_bus.emit_event(EventType.DESKTOP_ACTION, {"action": "open_site", "url": url})
+    return Reply(f"Opening {site}.")
+
+
+def _read_screen() -> Reply:
+    res = call("screen.read")
+    if not res.success:
+        return Reply(res.error, ok=False)
+    r = res.result
+    lines = r.get("text") or []
+    name = (r.get("window") or "that window").split(" - ")[-1]
+    if not lines:
+        return Reply(f"I can't read any text in {name}: it doesn't expose its text to Windows, "
+                     "and no vision model is set up to read the pixels.", ok=False)
+    return Reply(f"In {name}: " + ". ".join(lines[:12]) + ".")
+
+
+def _locate_on_screen(what: str) -> Reply:
+    res = call("screen.locate", name=what)
+    if not res.success:
+        return Reply(res.error, ok=False)
+    r = res.result
+    return Reply(f"The {r['name'] or what} is at the {r['where']} of {r['window'].split(' - ')[-1]}, "
+                 f"around x {r['x']}, y {r['y']}.")
+
+
+def _suggest_buttons() -> Reply:
     res = call("screen.context")
     if not res.success:
         return Reply(res.error, ok=False)
     ctx = res.result
-    aw = ctx.get("active_window")
-    if not aw:
-        return Reply("I can't tell which window is active right now.", ok=False)
-    title = aw["title"]
-    parts = [f"The active window is {title}"]
-    els = [e for e in ctx.get("active_window_elements", []) if e.get("name")]
-    if els:
-        names = []
-        for e in els:
-            if e["name"] not in names:
-                names.append(e["name"])
-        parts.append("I can see controls like " + ", ".join(names[:6]))
-    others = [w["title"].split(" - ")[-1] for w in ctx.get("open_windows", []) if w["title"] != title and not w["minimized"]]
-    if others:
-        parts.append("also open: " + ", ".join(others[:4]))
-    analyzed = call("screen.analyze", question="Briefly describe what the user is looking at.")
-    if analyzed.success and analyzed.result.get("answer"):
-        parts.append(analyzed.result["answer"])
-    return Reply(". ".join(parts) + ".")
+    aw = ((ctx.get("active_window") or {}).get("title") or "that window").split(" - ")[-1]
+    btns = []
+    for e in ctx.get("active_window_elements", []):
+        if e.get("type") in ("Button", "SplitButton", "Hyperlink", "MenuItem", "TabItem") and e.get("name") \
+                and e["name"] not in btns:
+            btns.append(e["name"])
+    if not btns:
+        return Reply(f"I can't see any labelled buttons in {aw}.", ok=False)
+    return Reply(f"In {aw} I can see: " + ", ".join(btns[:10]) +
+                 ". Tell me what you're trying to do and I'll say which one, or ask me to click it.",
+                 expects_reply=True)
 
 
 def _web_search(query: str) -> Reply:
     import urllib.parse
     reg = get_tool_registry()
-    try:
-        from modules.desktop.controller import desktop
-        fg = next((w for w in desktop.list_windows() if w.foreground), None)
-    except Exception:
-        fg = None
-    if fg and any(b in fg.process.lower() for b in _BROWSERS):
+    if _browser_target():
         r1 = reg.execute("desktop.press_keys", keys="ctrl+l")
         if r1.success:
             r2 = reg.execute("desktop.type_text", text=query, press_enter=True)
@@ -748,7 +1030,65 @@ def _web_search(query: str) -> Reply:
 # ====================================================================== #
 # Routing
 # ====================================================================== #
-_SINGLE_PARSERS = [parse_system, parse_spotify, parse_desktop]
+def parse_desktop_nl(text: str) -> Optional[Intent]:
+    """Generalised desktop / screen / browser understanding (desktop_intents)."""
+    from modules.agent.desktop_intents import parse
+    return parse(text)
+
+
+# --- Current-information / web questions -------------------------------------
+# "What's happening in the news?" is a factual question, not a browser command.
+# When no web provider is configured SAINT answers honestly instead of opening
+# a browser tab the user didn't ask for. "Search Google for X" / "Open YouTube"
+# still fall through to the desktop parser, which does automate the browser.
+_CURRENT_INFO = re.compile(
+    r"^(?:whats?(?:'s| is| are)?\s+(?:the\s+)?(?:latest|newest|current|recent|today'?s?)\s+"
+    r"(?:news|headlines|updates?|happening|going on)"
+    r"|whats?(?:'s| is)?\s+happening\s+(?:in the world|today|right now|now)"
+    r"|what\s+happened\s+(?:today|yesterday|this week|with|to)\b"
+    r"|(?:what|who|when|where)\s+(?:is|are|was|were)\s+the\s+(?:latest|current|newest)\b"
+    r"|(?:latest|any)\s+news\s+(?:about|on|for|regarding)\b"
+    r"|whats?(?:'s| is)?\s+the\s+(?:weather|forecast|temperature)\b"
+    r"|who\s+won\s+(?:the\s+)?\b"
+    r"|(?:what|any)\s+(?:updates?|news)\s+on\b)")
+
+
+def parse_web(text: str) -> Optional[Intent]:
+    t = _lower(text)
+    if "search" in t or "google" in t or "youtube" in t or "on my browser" in t or "in my browser" in t:
+        return None                       # explicit browser action — desktop parser handles it
+    if not _CURRENT_INFO.search(t):
+        return None
+    query = _clean(text)
+
+    def run_web():
+        provider = (config.get("web.provider", "duckduckgo_browser") or "duckduckgo_browser").lower()
+        # Default: open DuckDuckGo in the user's existing browser. Cheap,
+        # keyless, and the user can read/skim the results themselves.
+        if provider in ("duckduckgo_browser", "browser"):
+            import urllib.parse
+            url = "https://duckduckgo.com/?q=" + urllib.parse.quote_plus(query)
+            reply = _open_site(url)
+            if reply.ok:
+                reply.text = f"Looking up '{query}' on DuckDuckGo."
+            return reply
+        if provider == "none":
+            return Reply("Web search is turned off in Settings > Web.", ok=False)
+        # API-backed providers (duckduckgo instant-answer API, tavily, serpapi).
+        try:
+            from modules.web.search import answer_current
+        except Exception as e:
+            return Reply(f"Web search isn't wired up yet ({e}).", ok=False)
+        try:
+            answer = answer_current(query)
+        except Exception as e:
+            log.warning("web.search_failed %s", e)
+            return Reply("I couldn't reach the web just now.", ok=False)
+        return Reply(answer or "I couldn't find anything current on that.")
+    return Intent("web.current", run_web, "web")
+
+
+_SINGLE_PARSERS = [parse_system, parse_web, parse_spotify, parse_desktop_nl, parse_desktop]
 
 
 def route_single(text: str) -> Optional[Intent]:
@@ -764,7 +1104,9 @@ def route_single(text: str) -> Optional[Intent]:
 
 
 def route(text: str) -> Optional[Intent]:
-    for parser in (parse_automation, parse_memory):
+    # parse_web runs before parse_automation so "what's the weather tomorrow" is
+    # answered, not scheduled.
+    for parser in (parse_web, parse_automation, parse_memory):
         try:
             intent = parser(text)
         except Exception:
@@ -778,30 +1120,93 @@ def route(text: str) -> Optional[Intent]:
     return route_single(text)
 
 
+_RETRYABLE = ("can't see", "isn't visible", "hasn't loaded", "hasn't changed", "nothing visibly changed",
+              "didn't let me", "not found", "couldn't find")
+
+
+def _observe(label: str) -> str:
+    """Cheap observation of the desktop between steps (window + title), logged
+    so a failed plan can be diagnosed."""
+    try:
+        from modules.desktop.controller import desktop
+        w = desktop.target_window()
+        obs = f"{w.process}:{w.title[:60]}" if w else "no window"
+    except Exception as e:
+        obs = f"unavailable ({e})"
+    log.info("agent.observe %s -> %s", label, obs)
+    event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "observe", "step": label, "observation": obs})
+    return obs
+
+
+def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]] = None) -> Reply:
+    """Execute a multi-step plan: OBSERVE -> ACT -> VERIFY -> (retry) -> next.
+
+    Each step's tool verifies its own effect (window focused/moved, page
+    title changed after navigation or a click, playback changed). A failed
+    step is re-observed and retried once after the UI has had time to settle
+    (pages loading, windows appearing); a second failure stops the plan and
+    says exactly where. If a step needs the user to choose (e.g. which
+    browser window), the rest of the plan continues after the answer.
+    """
+    from modules.agent.confirm import choices
+    replies = replies if replies is not None else []
+    for i in range(start, len(intents)):
+        it = intents[i]
+        before = _observe(f"before {it.name}") if it.domain in ("desktop", "browser") else ""
+        t0 = time.perf_counter()
+        r = it.run()
+        log.info("agent.step %d/%d %s ok=%s ms=%.0f", i + 1, len(intents), it.name, r.ok,
+                 (time.perf_counter() - t0) * 1000)
+        if not r.ok and it.domain in ("desktop", "browser") and any(k in r.text.lower() for k in _RETRYABLE):
+            # Reassess instead of blindly repeating: wait for the UI, look again, retry once.
+            time.sleep(1.2)
+            after = _observe(f"retry {it.name}")
+            log.info("agent.retry %s (screen %s)", it.name, "changed" if after != before else "unchanged")
+            r = it.run()
+        if r.expects_reply and choices.pending is not None and i < len(intents) - 1:
+            # Park the rest of the plan behind the user's answer.
+            pending = choices.pending
+            original = pending.run
+
+            def resume(value, original=original, nxt=i + 1):
+                first = original(value)
+                rest = run_plan(intents, nxt, [])
+                return (first + " " + rest.text).strip()
+            pending.run = resume
+            return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
+        replies.append(r.text)
+        if not r.ok:
+            if i < len(intents) - 1:
+                replies.append("I stopped there.")
+            return Reply(" ".join(replies), ok=False)
+        if r.expects_reply:
+            return Reply(" ".join(replies), ok=True, expects_reply=True)
+        if it.domain in ("desktop", "browser") and i < len(intents) - 1:
+            time.sleep(0.4)          # let the UI settle before observing again
+    return Reply(" ".join(replies))
+
+
 def _route_composite(text: str) -> Optional[Intent]:
-    """'open Chrome and search for cats' -> two sequential intents."""
+    """'open my browser, search YouTube for X and click the first video' ->
+    a plan of intents executed by run_plan (observe / act / verify)."""
     cleaned = _clean(text)
     parts = [p.strip() for p in re.split(r",?\s+(?:and then|then|and also|after that|and)\s+|,\s+", cleaned, flags=re.I)
              if p.strip()]
-    if len(parts) < 2 or len(parts) > 4:
+    if len(parts) < 2 or len(parts) > 8:
         return None
+    # Parse each step in the context the earlier steps will create: after
+    # "search YouTube for X", "pause" / "turn it down" mean the video.
+    from modules.agent.context import desktop_context
+    saved = desktop_context.domain()
     intents: List[Intent] = []
     for p in parts:
         it = route_single(p)
         if it is None:
+            desktop_context.note_domain(saved)
             return None
         intents.append(it)
-
-    def run_all():
-        replies = []
-        for i, it in enumerate(intents):
-            r = it.run()
-            replies.append(r.text)
-            if not r.ok or r.expects_reply:
-                if i < len(intents) - 1 and not r.ok:
-                    replies.append("I stopped there.")
-                return Reply(" ".join(replies), ok=r.ok, expects_reply=r.expects_reply)
-            if it.domain == "desktop" and i < len(intents) - 1:
-                time.sleep(0.6)   # let the UI settle between desktop steps
-        return Reply(" ".join(replies))
-    return Intent("composite:" + "+".join(i.name for i in intents), run_all, "composite")
+        if it.domain in ("browser", "spotify"):
+            desktop_context.note_domain(it.domain)
+    desktop_context.note_domain(saved)
+    log.info("agent.plan %s", [i.name for i in intents])
+    return Intent("composite:" + "+".join(i.name for i in intents), lambda: run_plan(intents), "composite")

@@ -44,11 +44,34 @@ class Agent:
             return None
         t0 = time.perf_counter()
 
+        # Dictation mode: while active, every utterance is *content*, not a
+        # command. Say "done" to finish, "cancel" to throw it away.
+        from modules.agent.dictate import dictation
+        if dictation.active:
+            reply = dictation.feed(text)
+            log.info("agent.intent dictation reply=%r active=%s", (reply or "")[:60], dictation.active)
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "dictation.capture",
+                                                          "active": dictation.active})
+            return AgentResult(reply or "Got it.", "dictation.capture")
+        greeting = dictation.maybe_start(text)
+        if greeting is not None:
+            log.info("agent.intent dictation.start")
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "dictation.start"})
+            return AgentResult(greeting, "dictation.start", expects_reply=True)
+
         answer = confirmations.resolve(text)
         if answer is not None:
             log.info("agent.intent confirmation_reply")
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "confirmation", "text": text[:80]})
             return AgentResult(answer, "confirmation")
+
+        from modules.agent.confirm import choices
+        with self._lock:
+            chosen = choices.resolve(text)
+        if chosen is not None:
+            log.info("agent.intent choice_reply")
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "choice", "text": text[:80]})
+            return AgentResult(chosen, "choice", expects_reply=choices.pending is not None)
 
         intent = route(text)
         if intent is None:
@@ -65,6 +88,11 @@ class Agent:
             except Exception:
                 log.exception("agent.intent_failed %s", intent.name)
                 reply = Reply("Something went wrong while doing that, so I stopped.", ok=False)
+        if intent.domain in ("spotify", "browser", "desktop"):
+            from modules.agent.context import desktop_context
+            if not (intent.domain == "desktop" and desktop_context.domain() == "browser"):
+                desktop_context.note_domain(intent.domain)
+        log.info("agent.result %s ok=%s reply=%r", intent.name, reply.ok, reply.text[:120])
         event_bus.emit_event(EventType.LATENCY_INTENT, {
             "ms": round((time.perf_counter() - t0) * 1000, 1), "intent": intent.name})
         return AgentResult(reply.text, intent.name, ok=reply.ok, expects_reply=reply.expects_reply)

@@ -250,6 +250,8 @@ class AIModule(BaseModule):
                     on_done("")
                 return
             self.expects_reply = result.expects_reply
+            from modules.agent.output import clean_reply
+            result.text = clean_reply(result.text, prompt) or result.text
             on_token(result.text)
             event_bus.emit_event(EventType.AI_STREAM_TOKEN, {
                 "token": result.text, "turn_id": turn_id, "stream_id": stream_id, "request_id": request_id})
@@ -292,6 +294,21 @@ class AIModule(BaseModule):
         from datetime import datetime
         grounding = [{"role": "system", "content": datetime.now().strftime(
             "Current local date and time: %A, %B %d, %Y, %I:%M %p. Never guess the time; use this.")}]
+        # Compact capability summary + domain hint. Never authoritative — the
+        # model still chooses. This replaces dumping the full tool schema list
+        # into prompts for chat-like requests.
+        try:
+            from modules.agent.capabilities import capability_summary, top_domain, score_domains
+            hint = top_domain(prompt)
+            scores = score_domains(prompt)
+            summary = capability_summary()
+            grounding.append({"role": "system", "content": (
+                summary + (f"\n\nThis request looks like it's about: {hint}." if hint != "general" else "")
+                + (f" (signals: {', '.join(f'{k}={v}' for k, v in sorted(scores.items(), key=lambda kv: -kv[1]))})"
+                   if scores else "")
+            )})
+        except Exception:
+            pass
         grounding += self._memory_messages(prompt)
         memory_msgs = grounding[1:]
         insert_at = 1 if messages and messages[0]["role"] == "system" else 0
@@ -325,10 +342,42 @@ class AIModule(BaseModule):
                                                  _safe_on_token, self._cancel_flag)
                 self.expects_reply = bool(info.get("expects_reply"))
             else:
-                full_text = provider.stream_send(
+                # Plain chat: stream prose, but hold back anything that looks
+                # like a tool call / JSON / code so it never reaches chat or TTS.
+                from modules.agent.output import ReplyGuard, clean_reply, extract_tool_calls, pseudo_answer
+                shown: List[str] = []
+
+                def _emit(tok):
+                    shown.append(tok)
+                    _safe_on_token(tok)
+
+                guard = ReplyGuard(_emit)
+                provider.stream_send(
                     messages=messages, model=model, api_key=api_key, base_url=base_url,
-                    temperature=temperature, timeout=timeout, on_token=_safe_on_token,
+                    temperature=temperature, timeout=timeout, on_token=guard.feed,
                     cancel_flag=self._cancel_flag)
+                held = guard.finish()
+                if held.strip() and not self._cancel_flag.is_set():
+                    calls = extract_tool_calls(held)
+                    answer = next((a for a in (pseudo_answer(n, a) for n, a in calls) if a), None)
+                    if calls and answer is None and provider_name == "ollama":
+                        # It tried to use a tool on the plain path: redo the turn with tools.
+                        from modules.agent.llm import run_with_tools, model_supports_tools
+                        if model_supports_tools(model, base_url):
+                            _ai_log.info("ai.retry_with_tools (model wrote a tool call as text)")
+                            run_with_tools(messages, model, base_url, temperature, timeout,
+                                           _emit, self._cancel_flag)
+                            answer = ""
+                    if answer is None:
+                        from modules.agent.output import honest
+                        # The plain path runs no tools: an action claim here is false
+                        # ("Closed the browser." when nothing was closed).
+                        answer = honest(clean_reply(held, prompt), False)
+                    if answer:
+                        _emit(answer)
+                    if not "".join(shown).strip():
+                        _emit("Sorry, I couldn't work that out.")
+                full_text = "".join(shown)
         except ProviderError as e:
             # A real provider failure must never become a fabricated reply.
             _ai_log.error("AI provider '%s' (model=%s) failed: %s", provider_name, model, e)

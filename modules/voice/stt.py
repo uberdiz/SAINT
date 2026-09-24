@@ -106,6 +106,11 @@ class FasterWhisperSTT(STTEngine):
         # int16 arrays from sounddevice range from -32768 to 32767. Whisper needs [-1.0, 1.0].
         # Unconditionally normalise here to prevent distorted audio from reaching the model.
         audio_f32 = audio_f32 / 32768.0
+        # Whisper hallucinates on very short clips (a lone "SAINT" became
+        # "Whoa! Hmmm!"); a little silence on both sides fixes that.
+        if len(audio_f32) < sample_rate * 1.5:
+            pad = np.zeros(int(sample_rate * 0.4), dtype=np.float32)
+            audio_f32 = np.concatenate((pad, audio_f32, pad))
 
         t0 = time.perf_counter()
         try:

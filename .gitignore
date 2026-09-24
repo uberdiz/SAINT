@@ -38,6 +38,11 @@ data/tts/
 *.wav
 data/screens/
 
+# Session log dumps (large, personal, not source of truth)
+docs/Recent output.txt
+docs/*_output.txt
+*.log
+
 # Editor / agent tooling
 .vscode/
 .idea/

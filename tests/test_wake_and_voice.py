@@ -37,14 +37,24 @@ def test_missing_model_reports_error(tmp_path):
     assert det.feed(np.zeros(1280, dtype=np.int16)) is None
 
 
-def test_trigger_frames_and_refractory():
-    det = OnnxWakeWordDetector(threshold=0.5, trigger_frames=2, refractory_sec=2.0)
-    scores = iter([0.9, 0.1, 0.9, 0.9, 0.9, 0.9])
+def test_trigger_window_and_refractory():
+    # 2 hits within a 4-frame window fire even with a dip in between
+    # (a short "Hey SAINT" often peaks, dips, peaks); a lone mid spike does not.
+    det = OnnxWakeWordDetector(threshold=0.5, trigger_frames=2, window_frames=4,
+                               strong_threshold=0.95, refractory_sec=2.0)
+    scores = iter([0.6, 0.1, 0.1, 0.1, 0.1, 0.6, 0.2, 0.7, 0.9, 0.9])
     det._process_frame = lambda frame: next(scores)
     frame = np.zeros(1280, dtype=np.int16)
-    out = [det.feed(frame) for _ in range(6)]
-    # single spike ignored; two in a row fire once; cooldown suppresses repeats
-    assert out[:3] == [None, None, None] and out[3] == 0.9 and out[4:] == [None, None]
+    out = [det.feed(frame) for _ in range(10)]
+    assert out[:7] == [None] * 7 and out[7] == 0.7 and out[8:] == [None, None]   # cooldown
+
+
+def test_strong_single_frame_fires():
+    det = OnnxWakeWordDetector(threshold=0.5, trigger_frames=2, window_frames=4, strong_threshold=0.8)
+    scores = iter([0.1, 0.85, 0.1])
+    det._process_frame = lambda frame: next(scores)
+    frame = np.zeros(1280, dtype=np.int16)
+    assert [det.feed(frame) for _ in range(3)] == [None, 0.85, None]
 
 
 # --------------------------------------------------------------------- echo gate
@@ -131,11 +141,90 @@ def _silence(n):
     return [np.zeros(480, dtype=np.int16) for _ in range(n)]
 
 
-def test_background_speech_without_wake_word_is_never_transcribed():
+def _finals():
+    from core.events import event_bus, EventType
+    finals = []
+    handler = lambda ev: finals.append(ev.payload) if ev.type == EventType.VOICE_STT_FINAL else None
+    event_bus.subscribe(handler)
+    return finals, lambda: event_bus.unsubscribe(handler)
+
+
+def _wait(cond, t=3.0):
+    deadline = time.time() + t
+    while not cond() and time.time() < deadline:
+        time.sleep(0.02)
+
+
+def test_background_speech_without_wake_word_is_never_acted_on():
+    finals, done = _finals()
+    try:
+        config.set("voice.wake_word_chime", False, persist=False)
+        v = _voice("some background talk")
+        _run(v, _speech(40) + _silence(40))
+        _wait(lambda: v._stt.calls >= 1, 1.0)
+        time.sleep(0.2)
+        assert not finals and v.phase == ListenPhase.WAKE
+    finally:
+        done()
+
+
+def test_long_background_speech_is_not_even_transcribed():
     config.set("voice.wake_word_chime", False, persist=False)
-    v = _voice("some background talk")
-    _run(v, _speech(40) + _silence(40))
+    v = _voice("a long conversation")
+    _run(v, _speech(300) + _silence(40))           # 9 s > transcript_max_sec
     assert v._stt.calls == 0 and v.phase == ListenPhase.WAKE
+
+
+def test_transcript_wake_catches_bare_saint_command():
+    """The ONNX model barely scores a bare "SAINT"; the transcript stage must."""
+    finals, done = _finals()
+    try:
+        config.set("voice.wake_word_chime", False, persist=False)
+        v = _voice("Saint, skip this song.")          # wake model never fires
+        _run(v, _speech(40) + _silence(40))
+        _wait(lambda: bool(finals))
+        assert finals and finals[-1]["text"] == "skip this song." and finals[-1]["wake"] is True
+    finally:
+        done()
+
+
+def test_transcript_wake_bare_saint_opens_command_window():
+    finals, done = _finals()
+    try:
+        config.set("voice.wake_word_chime", False, persist=False)
+        v = _voice("Saint.")
+        _run(v, _speech(20) + _silence(40))
+        _wait(lambda: v.phase == ListenPhase.COMMAND)
+        assert v.phase == ListenPhase.COMMAND and not finals
+    finally:
+        done()
+
+
+def test_conversation_window_after_turn_end_and_while_speaking():
+    from core.events import Event, EventType
+    config.set("voice.wake_word_followup_sec", 0.3, persist=False)
+    try:
+        v = _voice("")
+        v._on_bus_event(Event(EventType.CONVERSATION_TURN_END, {"expects_reply": False}))
+        assert v.phase == ListenPhase.COMMAND
+        v._speaking = True                    # window must not run out while SAINT talks
+        time.sleep(0.4)
+        v._check_command_timeout(False)
+        assert v.phase == ListenPhase.COMMAND
+        v._speaking = False
+        time.sleep(0.4)
+        v._check_command_timeout(False)
+        assert v.phase == ListenPhase.WAKE
+    finally:
+        config.set("voice.wake_word_followup_sec", 15.0, persist=False)
+
+
+def test_starts_with_wake():
+    v = VoiceModule.__new__(VoiceModule)
+    for t in ("Saint.", "Hey Saint, open Spotify", "Okay, Saint play jazz", "Hey, St. what time is it"):
+        assert v._starts_with_wake(t), t
+    for t in ("She is a saint.", "I need to paint the fence", "St. Louis weather", "saintly behaviour"):
+        assert not v._starts_with_wake(t), t
 
 
 def test_wake_then_command_is_transcribed_and_returns_to_wake():

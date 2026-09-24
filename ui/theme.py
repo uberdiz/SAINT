@@ -53,9 +53,9 @@ def system_is_dark() -> bool:
         return True
 
 
-def palette_for(theme: str = "Dark", accent: str = "#2563eb") -> Palette:
+def palette_for(theme: str = "Dark", accent: str = "#feaa34") -> Palette:
     dark = theme == "Dark" or (theme == "System" and system_is_dark())
-    accent = QColor(accent).name() if QColor(accent).isValid() else "#2563eb"
+    accent = QColor(accent).name() if QColor(accent).isValid() else "#feaa34"
     if dark:
         bg, surface = "#14161a", "#1c1f24"
         return Palette(
@@ -84,12 +84,13 @@ def state_color(state: str, p: Palette) -> str:
         "listening": p.success,
         "processing": p.info,
         "executing": p.warning,
+        "observing": p.info,
         "speaking": "#fb923c" if p.dark else "#c2410c",
         "error": p.danger,
     }.get(state, p.muted)
 
 
-def build_stylesheet(theme="Dark", accent="#2563eb", font_family="Segoe UI", font_size=13,
+def build_stylesheet(theme="Dark", accent="#feaa34", font_family="Segoe UI", font_size=13,
                      compact=False) -> str:
     p = palette_for(theme, accent)
     pad = 4 if compact else 6
@@ -243,7 +244,7 @@ def stylesheet_for(theme_name: str) -> str:
     try:
         from core.config import config
         a = config.get("appearance", {}) or {}
-        return build_stylesheet(theme_name, a.get("accent", "#2563eb"), a.get("font_family", "Segoe UI"),
+        return build_stylesheet(theme_name, a.get("accent", "#feaa34"), a.get("font_family", "Segoe UI"),
                                 a.get("font_size", 13), a.get("compact", False))
     except Exception:
         return build_stylesheet(theme_name)
@@ -252,4 +253,4 @@ def stylesheet_for(theme_name: str) -> str:
 def current_palette() -> Palette:
     from core.config import config
     a = config.get("appearance", {}) or {}
-    return palette_for(a.get("theme", config.get("theme", "Dark")), a.get("accent", "#2563eb"))
+    return palette_for(a.get("theme", config.get("theme", "Dark")), a.get("accent", "#feaa34"))

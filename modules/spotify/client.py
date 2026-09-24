@@ -161,8 +161,9 @@ class SpotifyClient:
     def devices(self):
         return self.request("GET", "/me/player/devices")[0]
 
-    def playlists(self, limit=50):
-        return self.request("GET", "/me/playlists", params={"limit": max(1, min(50, int(limit)))})[0]
+    def playlists(self, limit=50, offset=0):
+        return self.request("GET", "/me/playlists", params={"limit": max(1, min(50, int(limit))),
+                                                            "offset": max(0, int(offset))})[0]
 
     def recently_played(self, limit=50):
         return self.request("GET", "/me/player/recently-played",
@@ -222,11 +223,21 @@ class SpotifyClient:
             params["device_id"] = device_id
         self.request("PUT", "/me/player/repeat", params=params)
 
+    def seek(self, position_ms: int, device_id=None):
+        params = {"position_ms": max(0, int(position_ms))}
+        if device_id:
+            params["device_id"] = device_id
+        return self.request("PUT", "/me/player/seek", params=params)[0]
+
     def queue(self, uri, device_id=None):
         params = {"uri": uri}
         if device_id:
             params["device_id"] = device_id
         self.request("POST", "/me/player/queue", params=params)
+
+    def get_queue(self):
+        data, _ = self.request("GET", "/me/player/queue")
+        return data or {}
 
     def add_to_playlist(self, playlist_id, uris):
         self.request("POST", f"/playlists/{playlist_id}/items", json={"uris": uris})

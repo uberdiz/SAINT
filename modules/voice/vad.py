@@ -151,9 +151,80 @@ class SileroVAD:
         return self._rms_fallback.get_level(chunk)
 
 
-def make_vad(threshold: float = 0.015, noise_suppression: bool = True) -> RmsVAD:
-    """Factory — returns best available VAD with hysteresis thresholds from config."""
+class SileroOnnxVAD:
+    """Streaming Silero VAD (v6 ONNX, bundled with faster-whisper).
+
+    Unlike an energy threshold it tells *speech* from music, TV and fans, so
+    with music playing an utterance still ends when the user stops talking.
+    Runs on the CPU in ~0.1 ms per 32 ms window. The RMS VAD is kept as the
+    source of the level meter and as a floor so near-silent frames never count.
+    Same interface as RmsVAD: feed(chunk) -> bool, get_level(), reset().
+    """
+
+    WINDOW = 512       # samples per inference at 16 kHz
+    CONTEXT = 64
+
+    def __init__(self, start_prob: float = 0.5, end_prob: float = 0.35, min_rms: float = 0.004,
+                 model_path: Optional[str] = None):
+        import onnxruntime as ort
+        if model_path is None:
+            import faster_whisper
+            import os
+            model_path = os.path.join(os.path.dirname(faster_whisper.__file__), "assets", "silero_vad_v6.onnx")
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        opts.log_severity_level = 4
+        self._sess = ort.InferenceSession(model_path, sess_options=opts, providers=["CPUExecutionProvider"])
+        self.start_prob = float(start_prob)
+        self.end_prob = float(end_prob)
+        self.min_rms = float(min_rms)
+        self.threshold = self.min_rms           # compatibility with RmsVAD users
+        self._rms = RmsVAD(threshold=min_rms)
+        self.reset()
+
+    def reset(self):
+        self._h = np.zeros((1, 1, 128), dtype=np.float32)
+        self._c = np.zeros((1, 1, 128), dtype=np.float32)
+        self._ctx = np.zeros(self.CONTEXT, dtype=np.float32)
+        self._buf = np.zeros(0, dtype=np.float32)
+        self._in_speech = False
+        self.prob = 0.0
+
+    def feed(self, chunk: np.ndarray) -> bool:
+        if chunk.dtype == np.int16:
+            chunk = chunk.astype(np.float32) / 32768.0
+        rms = RmsVAD._rms(chunk)
+        self._buf = np.concatenate((self._buf, chunk.astype(np.float32)))
+        while len(self._buf) >= self.WINDOW:
+            win, self._buf = self._buf[:self.WINDOW], self._buf[self.WINDOW:]
+            x = np.concatenate((self._ctx, win))[None, :]
+            self._ctx = win[-self.CONTEXT:]
+            out, self._h, self._c = self._sess.run(None, {"input": x, "h": self._h, "c": self._c})
+            self.prob = float(np.asarray(out).reshape(-1)[-1])
+        if self._in_speech:
+            self._in_speech = self.prob >= self.end_prob and rms >= self.min_rms * 0.5
+        else:
+            self._in_speech = self.prob >= self.start_prob and rms >= self.min_rms
+        return self._in_speech
+
+    def get_level(self, chunk: np.ndarray) -> float:
+        return self._rms.get_level(chunk)
+
+
+def make_vad(threshold: float = 0.015, noise_suppression: bool = True):
+    """Factory — Silero (speech-vs-noise model) when available, else RMS."""
     from core.config import config
+    import logging
+    if config.get("voice.vad_backend", "silero") == "silero":
+        try:
+            vad = SileroOnnxVAD(start_prob=config.get("voice.vad_speech_prob", 0.5),
+                                end_prob=config.get("voice.vad_speech_prob", 0.5) * 0.7,
+                                min_rms=min(threshold, 0.006))
+            logging.getLogger("saint.voice").info("voice.vad backend=silero")
+            return vad
+        except Exception as e:
+            logging.getLogger("saint.voice").warning("voice.vad silero unavailable (%s) - using RMS", e)
     start_threshold = config.get("voice.vad_start_threshold", threshold)
     end_threshold = config.get("voice.vad_end_threshold", threshold * 0.5)
     return RmsVAD(

@@ -380,6 +380,11 @@ class KokoroTTS(TTSEngine):
                 "Out-of-dictionary words may fail to synthesize; install "
                 "'espeakng_loader' to fix.", e,
             )
+            # Last resort: skip unknown words instead of letting misaki hand
+            # Kokoro None phonemes (the "NoneType + str" crash).
+            g2p = getattr(self._pipeline, "g2p", None)
+            if g2p is not None and getattr(g2p, "fallback", None) is None:
+                g2p.fallback = lambda _tok: ("", None)
 
     @property
     def device_info(self) -> dict:

@@ -28,7 +28,7 @@ from core.permissions import permission_manager
 from ui.theme import current_palette
 from ui.widgets import LevelMeter, run_async
 
-ACCENTS = ["#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#64748b"]
+ACCENTS = ["#feaa34", "#f97316", "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#64748b"]
 
 
 class SettingsUI(QWidget):
@@ -219,6 +219,11 @@ class SettingsUI(QWidget):
                   "Raise it if background noise starts utterances; lower it if quiet speech is missed.")
         self._row(f, "End-of-speech silence", self._spin("voice.silence_duration_ms", 200, 3000, 50, 0, " ms"))
         self._row(f, "Noise suppression", self._check("voice.noise_suppression", "Subtract the rolling noise floor"))
+        self._row(f, "Speech detector", self._combo("voice.vad_backend", ["Silero (speech vs. music/noise)", "Energy (RMS)"],
+                                                    data=["silero", "rms"]),
+                  "Silero tells speech from music and TV, so commands end cleanly while music plays.")
+        self._row(f, "Longest utterance", self._spin("voice.max_utterance_sec", 5.0, 60.0, 1.0, 0, " s"),
+                  "Cut an utterance that never pauses (music vocals, TV) and process what was heard.")
         lay.addWidget(box)
 
         box, f = self._section("Interruptions (barge-in)",
@@ -330,11 +335,45 @@ class SettingsUI(QWidget):
         self._row(f, "Max tool steps", self._spin("ai.max_tool_steps", 1, 8))
         self._row(f, "Confirmation timeout", self._spin("agent.confirm_timeout_sec", 5, 120, 5, 0, " s"))
         self._row(f, "Context turns", self._spin("voice.max_context_turns", 1, 20))
+        self._row(f, "Max reply tokens", self._spin("ai.max_tokens", 0, 2048, 10, 0),
+                  "Hard cap on generated tokens. 0 = no cap. Keep low (120–200) for a voice assistant.")
         self.system_prompt = QPlainTextEdit()
-        self.system_prompt.setMaximumHeight(90)
+        self.system_prompt.setMaximumHeight(120)
         self._bind("voice.system_prompt", lambda: self.system_prompt.toPlainText().strip(),
                    lambda v: self.system_prompt.setPlainText(v or ""))
         self._row(f, "Personality / system prompt", self.system_prompt)
+        lay.addWidget(box)
+
+        box, f = self._section("Vision",
+                               "SAINT can look at your screen with a local vision model. Windows still "
+                               "provides the reliable structured window/UI info; vision fills in what "
+                               "isn't exposed to accessibility APIs.")
+        self._row(f, "Backend",
+                  self._combo("vision.analyzer", ["none", "ollama", "flux"]),
+                  "'flux' = FLUX.2 Klein 4B (local). 'ollama' = any vision-capable Ollama model.")
+        self._row(f, "Ollama vision model", self._line("vision.model", "e.g. llama3.2-vision"))
+        self._row(f, "FLUX model id", self._line("vision.flux_model_id", "black-forest-labs/FLUX.2-Klein-4B"))
+        self._row(f, "FLUX weights dir", self._line("vision.flux_model_dir", "data/vision/flux2-klein-4b"),
+                  "Download once: hf download black-forest-labs/FLUX.2-Klein-4B --local-dir <this dir>")
+        self._row(f, "FLUX device", self._combo("vision.flux_device", ["auto", "cuda", "cpu"]))
+        self._row(f, "FLUX dtype", self._combo("vision.flux_dtype", ["float16", "bfloat16", "float32"]))
+        self._row(f, "Max image side", self._spin("vision.flux_max_image_side", 256, 2048, 64, 0, " px"))
+        self._row(f, "Max reply tokens (vision)", self._spin("vision.flux_max_new_tokens", 32, 512, 16))
+        self._row(f, "Allow screen context",
+                  self._check("vision.allow_screen_context", "Read windows/controls/text via Windows accessibility APIs"))
+        self._row(f, "Keep screenshots", self._spin("vision.keep_screenshots", 0, 200))
+        lay.addWidget(box)
+
+        box, f = self._section("Web / current information",
+                               "Only used when the user asks about current facts or news. Explicit "
+                               "'search Google for X' commands still use browser automation.")
+        self._row(f, "Provider", self._combo(
+            "web.provider", ["duckduckgo_browser", "duckduckgo", "tavily", "serpapi", "none"]),
+                  "'duckduckgo_browser' opens DuckDuckGo in your browser (no key). The others "
+                  "return a spoken summary via API.")
+        self._row(f, "API key", self._line("web.api_key", "for tavily / serpapi", password=True))
+        self._row(f, "Max results", self._spin("web.max_results", 1, 10))
+        self._row(f, "Answer style", self._combo("web.answer_style", ["concise", "detailed"]))
         lay.addWidget(box)
         self._add_page(w, lay)
 
@@ -400,12 +439,23 @@ class SettingsUI(QWidget):
                    lambda v: self.sens.setValue(int(round(100 - float(v or 0.5) * 100))))
         self._row(f, "Sensitivity", sw, "Higher sensitivity triggers more easily (and more falsely).")
         self._row(f, "Confirmation frames", self._spin("voice.wake_word_trigger_frames", 1, 6),
-                  "Consecutive 80 ms frames above threshold. 2 rejects one-frame spikes such as “saved”.")
+                  "Frames above the threshold needed within the detection window (1 = most responsive).")
+        self._row(f, "Detection window", self._spin("voice.wake_word_window_frames", 1, 12, 1, 0, " × 80 ms"),
+                  "Scores are judged over this window, so a short “Hey SAINT” with a dip still counts.")
+        self._row(f, "Transcript check", self._check("voice.wake_word_transcript_check",
+                                                      "Also recognise “SAINT” from speech-to-text"),
+                  "The wake model is strongest on “Hey SAINT”. With this on, a short utterance it missed is "
+                  "transcribed once and accepted only if it starts with “SAINT” / “Hey SAINT”.")
+        self._row(f, "Transcript check limit", self._spin("voice.wake_word_transcript_max_sec", 2.0, 15.0, 0.5, 1, " s"),
+                  "Longer background speech is never transcribed.")
         self._row(f, "Cooldown", self._spin("voice.wake_word_refractory_sec", 0.5, 10.0, 0.5, 1, " s"))
         self._row(f, "Command timeout", self._spin("voice.wake_word_command_timeout_sec", 2.0, 20.0, 0.5, 1, " s"),
                   "How long SAINT waits for a command after hearing its name.")
-        self._row(f, "Follow-up window", self._spin("voice.wake_word_followup_sec", 0.0, 15.0, 0.5, 1, " s"),
-                  "Listen for a follow-up without the wake word after SAINT answers (0 = off).")
+        self._row(f, "Conversation window", self._spin("voice.wake_word_followup_sec", 0.0, 120.0, 1.0, 0, " s"),
+                  "After SAINT answers, keep listening this long for follow-ups (“skip that”, “turn it "
+                  "down”) without the wake word. Counted from when SAINT stops talking. 0 = off.")
+        self._row(f, "Follow-up confidence", self._spin("voice.followup_min_confidence", 0.0, 1.0, 0.05, 2),
+                  "Minimum speech-recognition confidence for follow-ups (short commands score low).")
         self._row(f, "Chime", self._check("voice.wake_word_chime", "Play a short tone when SAINT hears its name"))
         self._row(f, "Debug", self._check("voice.wake_word_debug_scores", "Log every score above 0.1"))
         lay.addWidget(box)
@@ -593,6 +643,9 @@ class SettingsUI(QWidget):
         self._row(f, "Keyboard", self._check("desktop.allow_keyboard", "Allowed"))
         self._row(f, "Mouse & clicking", self._check("desktop.allow_mouse", "Allowed"))
         self._row(f, "Closing apps", self._check("desktop.confirm_close_apps", "Ask before closing an app"))
+        self._row(f, "Several matching windows", self._combo(
+            "desktop.multi_window_policy", ["Ask which one", "Use the most recent"], data=["ask", "recent"]),
+                  "e.g. three browser windows are open and none is clearly meant.")
         self._row(f, "Max typed text", self._spin("desktop.max_type_length", 20, 5000, 20, 0, " chars"))
         lay.addWidget(box)
 
@@ -681,7 +734,7 @@ class SettingsUI(QWidget):
         w, lay = self._new_page("Appearance")
         box, f = self._section("Theme")
         self._row(f, "Mode", self._combo("appearance.theme", ["Dark", "Light", "System"]))
-        self.accent = "#2563eb"
+        self.accent = "#feaa34"
         sw = QHBoxLayout()
         self._swatches = []
         for c in ACCENTS:
@@ -727,8 +780,8 @@ class SettingsUI(QWidget):
         self._add_page(w, lay)
 
     def _set_accent(self, color):
-        c = QColor(color or "#2563eb")
-        self.accent = c.name() if c.isValid() else "#2563eb"
+        c = QColor(color or "#feaa34")
+        self.accent = c.name() if c.isValid() else "#feaa34"
         for col, b in self._swatches:
             border = "#ffffff" if col.lower() == self.accent.lower() else "transparent"
             b.setStyleSheet(f"background:{col}; border:2px solid {border};")
@@ -765,6 +818,9 @@ class SettingsUI(QWidget):
         self._row(f, "Visual analyzer", self._combo("vision.analyzer", ["none", "ollama"]))
         self._row(f, "Vision model", self._line("vision.model", "e.g. llama3.2-vision"))
         self._row(f, "Keep screenshots", self._spin("vision.keep_screenshots", 0, 200))
+        self._row(f, "Screen reading", self._check("vision.allow_screen_context",
+                                                    "Let SAINT read windows, buttons and text on screen"),
+                  "Uses Windows accessibility info on demand only — nothing is captured in the background.")
         lay.addWidget(box)
 
         box, f = self._section("Files")

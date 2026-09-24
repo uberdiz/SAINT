@@ -5,10 +5,16 @@ VoiceModule — microphone capture, wake word, VAD, STT and barge-in.
 
 Listening phases (independent of the UI):
 
-    WAKE      only the local wake-word model runs. Speech is buffered
-              tentatively (cheap RMS VAD) but never transcribed.
-    COMMAND   "Hey SAINT" was heard (or SAINT was interrupted / a follow-up
-              window is open): the next utterance is captured and sent to STT.
+    WAKE      the local wake-word model runs on every frame. Speech is
+              buffered tentatively. A short utterance the model did not fire
+              on is transcribed once and accepted only if it *starts* with
+              "SAINT" / "Hey SAINT" (second-stage wake: the ONNX model is
+              trained mostly on "Hey SAINT" and barely scores a bare "SAINT").
+    COMMAND   "Hey SAINT" was heard (or SAINT was interrupted / the
+              conversation window is open): the next utterance is captured and
+              sent to STT. The conversation window
+              (voice.wake_word_followup_sec) starts when SAINT stops talking,
+              so follow-ups like "skip that" need no wake word.
               The utterance that contained the wake phrase is included, so
               "Hey SAINT, play Daft Punk" and "Hey SAINT ... play Daft Punk"
               both work. Times out back to WAKE if nothing is said.
@@ -56,6 +62,7 @@ CHUNK_MS = 30           # milliseconds per VAD frame
 CHUNK_FRAMES = int(SAMPLE_RATE * CHUNK_MS / 1000)
 PREROLL_MS = 1500       # audio kept before speech onset / barge-in
 MAX_TENTATIVE_MS = 12000
+DEFAULT_CONVERSATION_SEC = 15.0
 
 # STT session states (kept for diagnostics)
 STT_STATE_TRANSCRIBING = "TRANSCRIBING"
@@ -113,6 +120,9 @@ class VoiceModule(BaseModule):
         self._phase_lock = threading.RLock()
         self._command_deadline = 0.0
         self._command_reason = ""
+        self._command_window = 0.0
+        self._prev_passive = None          # (audio_clock_end, frames) of the last passive utterance
+        self._audio_clock = 0.0            # seconds of microphone audio processed
         self._awaiting_stt = False
         self._last_wake_time = 0.0
 
@@ -338,7 +348,11 @@ class VoiceModule(BaseModule):
     def _saint_is_talking(self) -> bool:
         return self._speaking or self.is_tts_playback_active()
 
+    _music_playing = False              # updated from spotify.playback.changed events
+
     def _on_bus_event(self, ev):
+        if ev.type == EventType.SPOTIFY_PLAYBACK_CHANGED:
+            self._music_playing = bool((ev.payload or {}).get("is_playing"))
         if ev.type == EventType.CONVERSATION_TURN_END:
             if not (self._listening and self.wake_mode):
                 return
@@ -347,9 +361,19 @@ class VoiceModule(BaseModule):
                 # answer without requiring the wake word again.
                 self._enter_command(8.0, reason="awaiting reply", chime=True)
                 return
-            follow = float(config.get("voice.wake_word_followup_sec", 0.0) or 0.0)
-            if follow > 0:
-                self._enter_command(follow, reason="follow-up", chime=False)
+            base = float(config.get("voice.wake_word_followup_sec", DEFAULT_CONVERSATION_SEC) or 0.0)
+            if base <= 0:
+                self._return_to_rest_phase("turn end")
+                return
+            # Adaptive: an action reply ("Playing music.", "Opened Chrome.") means
+            # a follow-up ("skip", "louder", "close it") is likely, so we extend
+            # the window. A bare Q&A collapses to the base timeout. Capped so
+            # SAINT still returns to wake-word listening if the user walks away.
+            extra = float(config.get("voice.wake_word_followup_action_bonus_sec", 15.0) or 0.0)
+            follow = base + extra if ev.payload.get("was_action") else base
+            follow = min(follow, float(config.get("voice.wake_word_followup_max_sec", 45.0) or follow))
+            reason = "follow-up (action)" if ev.payload.get("was_action") else "follow-up"
+            self._enter_command(follow, reason=reason, chime=False)
 
     # ------------------------------------------------------------------ #
     # Sounddevice stream
@@ -407,9 +431,12 @@ class VoiceModule(BaseModule):
         with self._phase_lock:
             self._phase = ListenPhase.COMMAND
             self._command_deadline = time.monotonic() + timeout_sec
+            self._command_window = timeout_sec
             self._command_reason = reason
             self._awaiting_stt = False
-        assistant_state.set(AssistantState.COMMAND_LISTENING, reason)
+        log.info("voice.phase.command reason=%s window=%.1fs", reason, timeout_sec)
+        detail = "Conversation active — no wake word needed" if reason == "follow-up" else reason
+        assistant_state.set(AssistantState.COMMAND_LISTENING, detail)
         if chime and config.get("voice.wake_word_chime", True):
             _play_chime()
 
@@ -426,12 +453,13 @@ class VoiceModule(BaseModule):
                                      AssistantState.ERROR):
             assistant_state.return_to_rest()
 
-    def _on_wake_word(self, score: float):
+    def _on_wake_word(self, score: float, source: str = "model"):
         self._last_wake_time = time.monotonic()
-        log.info("voice.wake_word.detected score=%.3f", score)
+        log.info("voice.wake_word.detected score=%.3f source=%s", score, source)
         event_bus.emit_event(EventType.VOICE_WAKE_WORD, {
             "keyword": config.get("voice.wake_word", "saint"),
             "score": round(float(score), 3),
+            "source": source,
         })
         assistant_state.set(AssistantState.WAKE_DETECTED, f"score {score:.2f}")
         self._enter_command(float(config.get("voice.wake_word_command_timeout_sec", 6.0)),
@@ -449,6 +477,9 @@ class VoiceModule(BaseModule):
         debug_scores = config.get("voice.wake_word_debug_scores", False)
         preroll = collections.deque(maxlen=int(PREROLL_MS / CHUNK_MS))
         max_tentative = int(MAX_TENTATIVE_MS / CHUNK_MS)
+        # Hard cap for an addressed utterance (e.g. TV or music vocals that
+        # never pause): cut it and transcribe what we have.
+        max_utterance = int(float(config.get("voice.max_utterance_sec", 15.0)) * 1000 / CHUNK_MS)
 
         seg: list = []
         in_speech = False
@@ -478,6 +509,7 @@ class VoiceModule(BaseModule):
             self._last_audio_time = time.monotonic()
 
             chunk16 = self._to_16k(chunk)
+            self._audio_clock += len(chunk16) / SAMPLE_RATE
             chunk_f = chunk16.astype(np.float32) / 32768.0
             mic_rms = _rms(chunk_f)
             preroll.append(chunk16)
@@ -539,7 +571,9 @@ class VoiceModule(BaseModule):
                     with self._speech_id_lock:
                         self._speech_session_id += 1
                         sid = self._speech_session_id
-                    seg = list(preroll)[-10:]  # 300 ms pre-roll
+                    # 600 ms pre-roll: VAD onset can lag a soft first word
+                    # ("Saint" under music) and clipping it loses the wake word.
+                    seg = list(preroll)[-20:]
                     if self.phase != ListenPhase.WAKE:
                         event_bus.emit_event(EventType.VOICE_SPEECH_START, {"session_id": sid})
                 else:
@@ -548,6 +582,14 @@ class VoiceModule(BaseModule):
                 silence_count = 0
                 if len(seg) > max_tentative and self.phase == ListenPhase.WAKE:
                     seg = seg[-max_tentative:]
+                elif len(seg) > max_utterance and self.phase != ListenPhase.WAKE:
+                    log.info("voice.utterance.cap frames=%d", len(seg))
+                    in_speech = False
+                    was_barge = barge_capture
+                    barge_capture = False
+                    self._end_segment(seg, speech_count, sid, min_speech_frames,
+                                      min_speech_rms, was_barge)
+                    seg, speech_count, silence_count = [], 0, 0
             elif in_speech:
                 silence_count += 1
                 seg.append(chunk16)
@@ -599,6 +641,12 @@ class VoiceModule(BaseModule):
             log.debug("wake.score peak=%.3f threshold=%.2f", peak, self._wake.threshold)
 
     def _check_command_timeout(self, in_speech: bool):
+        if self._saint_is_talking():
+            # The conversation window counts from the end of SAINT's reply.
+            with self._phase_lock:
+                if self._phase == ListenPhase.COMMAND:
+                    self._command_deadline = time.monotonic() + self._command_window
+            return
         with self._phase_lock:
             if (self._phase != ListenPhase.COMMAND or in_speech or self._awaiting_stt
                     or time.monotonic() < self._command_deadline):
@@ -615,19 +663,41 @@ class VoiceModule(BaseModule):
                      was_barge: bool):
         phase = self.phase
         if phase == ListenPhase.WAKE:
-            # Tentative speech that never contained the wake word — dropped
-            # without transcription (this is what keeps SAINT from reacting
-            # to background conversation).
+            # Speech the wake model did not fire on. Short utterances get one
+            # transcript check ("SAINT, skip this" — the model barely scores a
+            # bare "SAINT"); they are acted on only if the transcript *starts*
+            # with the wake word. Everything else is dropped untranscribed.
+            dur = len(frames) * CHUNK_MS / 1000.0
+            if (config.get("voice.wake_word_transcript_check", True) and self._stt is not None
+                    and 0.3 <= dur <= float(config.get("voice.wake_word_transcript_max_sec", 7.0))
+                    and self._validate_speech_session(frames, speech_count, min_speech_frames, min_speech_rms)):
+                peak = getattr(self._wake, "recent_peak", lambda _s: 0.0)(dur + 1.0)
+                now = self._audio_clock
+                check = frames
+                prev = self._prev_passive
+                # "SAINT, <pause> skip this song" is often split at the pause:
+                # judge the two pieces together so the wake word and the
+                # command stay one utterance.
+                if prev and now - dur - prev[0] <= 1.5:
+                    gap = [np.zeros(CHUNK_FRAMES, dtype=np.int16)] * 10
+                    check = prev[1] + gap + frames
+                self._prev_passive = (now, frames)
+                log.debug("voice.wake.transcript_check dur=%.1fs joined=%s model_peak=%.3f",
+                          dur, check is not frames, peak)
+                self._transcribe(check, sid, wake_initiated=False, wake_check=True)
             return
         if not self._validate_speech_session(frames, speech_count, min_speech_frames, min_speech_rms):
             self._emit_vad_reject(sid, speech_count, len(frames), frames)
             return
         wake_initiated = phase == ListenPhase.COMMAND
+        with self._phase_lock:
+            follow_up = wake_initiated and self._command_reason == "follow-up"
         if wake_initiated:
             with self._phase_lock:
                 self._awaiting_stt = True
             assistant_state.set(AssistantState.PROCESSING, "transcribing")
-        self._transcribe(frames, sid, wake_initiated=wake_initiated, allow_during_tts=was_barge)
+        self._transcribe(frames, sid, wake_initiated=wake_initiated, allow_during_tts=was_barge,
+                         follow_up=follow_up)
 
     def _validate_speech_session(self, frames: list, speech_frame_count: int,
                                  min_speech_frames: int, min_speech_rms: float) -> bool:
@@ -667,7 +737,7 @@ class VoiceModule(BaseModule):
     # STT
     # ------------------------------------------------------------------ #
     def _transcribe(self, frames, session_id: int = 0, wake_initiated: bool = False,
-                    allow_during_tts: bool = False):
+                    allow_during_tts: bool = False, wake_check: bool = False, follow_up: bool = False):
         if not frames or self._stt is None:
             self._emit_stt_error(session_id, "empty_audio_buffer")
             self._stt_done(session_id, wake_initiated, "")
@@ -678,12 +748,14 @@ class VoiceModule(BaseModule):
             text = ""
             try:
                 text = self._stt_worker_func(frames, session_id, t0_total,
-                                             wake_initiated, allow_during_tts) or ""
+                                             wake_initiated, allow_during_tts,
+                                             wake_check=wake_check, follow_up=follow_up) or ""
             except Exception as e:
                 log.exception("stt.worker_failed")
                 self._emit_stt_error(session_id, f"STT failed: {e}")
             finally:
-                self._stt_done(session_id, wake_initiated, text)
+                self._stt_done(session_id, wake_initiated or (wake_check and self.phase == ListenPhase.COMMAND),
+                               text)
 
         self._stt_worker = threading.Thread(target=_run, daemon=True, name=f"stt-{session_id}")
         self._stt_worker.start()
@@ -711,7 +783,8 @@ class VoiceModule(BaseModule):
             assistant_state.set(AssistantState.COMMAND_LISTENING, self._command_reason)
 
     def _stt_worker_func(self, frames: list, session_id: int, t0_total: float,
-                         wake_initiated: bool = False, allow_during_tts: bool = False) -> str:
+                         wake_initiated: bool = False, allow_during_tts: bool = False,
+                         wake_check: bool = False, follow_up: bool = False) -> str:
         """Background STT worker. Returns the accepted transcript ('' if rejected)."""
         if self.is_tts_playback_active() and not allow_during_tts and not wake_initiated:
             self._emit_stt_error(session_id, "tts_playback_active_during_stt")
@@ -750,7 +823,25 @@ class VoiceModule(BaseModule):
             return ""
         raw_text = (getattr(result, "text", "") or "").strip()
         confidence = float(getattr(result, "confidence", 0.0) or 0.0)
-        text = self._strip_wake_prefix(raw_text) if (wake_initiated or self.wake_mode) else raw_text
+        if wake_check:
+            # Second-stage wake: only a transcript that starts with the wake
+            # word counts. Nothing else from passive listening is kept or shown.
+            if not self._starts_with_wake(raw_text) and not self._head_says_wake(audio):
+                # Never log what bystanders said — only that it wasn't addressed to SAINT.
+                log.debug("voice.wake.transcript_rejected session=%s words=%d", session_id, len(raw_text.split()))
+                return ""
+            text = self._strip_wake_prefix(raw_text)
+            bare = not text.strip() or self._is_punctuation_only(text.strip())
+            if self.phase == ListenPhase.WAKE or not bare:
+                self._on_wake_word(0.0, source="transcript")
+            wake_initiated = True
+            if bare:
+                return ""          # bare "SAINT" — the command window is now open
+            with self._phase_lock:
+                self._awaiting_stt = True
+            wake_check = False
+        else:
+            text = self._strip_wake_prefix(raw_text) if (wake_initiated or self.wake_mode) else raw_text
         log.info("stt.result session=%s conf=%.2f wake=%s ms=%.0f text=%r",
                  session_id, confidence, wake_initiated, inference_ms, raw_text)
         event_bus.emit_event(EventType.VOICE_SPEECH_END, {"session_id": session_id})
@@ -761,7 +852,9 @@ class VoiceModule(BaseModule):
                 "text": raw_text})
             return ""
 
-        ok, reason = self._passes_activation_gate(text, confidence, wake_initiated=wake_initiated)
+        ok, reason = self._passes_activation_gate(text, confidence,
+                                                  wake_initiated=wake_initiated and not follow_up,
+                                                  follow_up=follow_up)
         if not ok:
             log.info("voice.activation.rejected session=%s reason=%s conf=%.2f text=%r",
                      session_id, reason, confidence, text)
@@ -818,7 +911,45 @@ class VoiceModule(BaseModule):
             return text
         return stripped.strip()
 
-    def _passes_activation_gate(self, text: str, confidence: float, wake_initiated: bool = False):
+    _WAKE_START = re.compile(
+        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh)[\s,.!]+)?(?:(?:hey|hi|ok(?:ay)?|yo)[\s,.!]+)?"
+        r"(?:saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)", re.IGNORECASE)
+    _WAKE_START_ALT = re.compile(r"^\s*(?:hey|hi|ok(?:ay)?)[\s,.!]+st\.?(?=[\s,.!?]|$)", re.IGNORECASE)
+
+    def _head_says_wake(self, audio: np.ndarray) -> bool:
+        """Whisper sometimes drops a short leading "SAINT" from a longer
+        transcript. Re-check just the first ~1.4 s (pre-roll + first word)."""
+        head = audio[:int(SAMPLE_RATE * 1.4)]
+        if len(audio) < SAMPLE_RATE * 1.6 or self._stt is None:
+            return False
+        try:
+            r = self._stt.transcribe(head, sample_rate=SAMPLE_RATE)
+        except Exception:
+            return False
+        text = (getattr(r, "text", "") or "").strip()
+        ok = bool(re.match(r"^\W*(?:(?:hey|hi|ok(?:ay)?)\W+)?saint(?:s)?\b", text, re.I))
+        log.debug("voice.wake.head_check ok=%s", ok)
+        return ok
+
+    def _starts_with_wake(self, text: str) -> bool:
+        return bool(self._WAKE_START.match(text or "") or self._WAKE_START_ALT.match(text or ""))
+
+    # Short spoken commands SAINT accepts as a follow-up even while music is
+    # playing (music transcribed as random lyrics gets rejected instead of sent
+    # to the agent). Anything longer needs the wake word again.
+    _MUSIC_FOLLOWUP_OK = re.compile(
+        r"^(?:skip(?:\s+it|\s+this(?:\s+song)?)?|next(?:\s+song|\s+track)?|previous|back|"
+        r"pause(?:\s+it|\s+the\s+music)?|resume|play|stop|"
+        r"louder|quieter|volume\s+(?:up|down|to\s+\d+)|turn\s+(?:it\s+)?(?:up|down)|"
+        r"shuffle|smart\s+shuffle|repeat|"
+        r"what(?:'s| is)\s+(?:this|playing|the\s+song)|who(?:'s| is)\s+(?:this|singing)|"
+        r"like\s+this|love\s+this|i\s+like\s+this|i\s+love\s+this|"
+        r"i\s+don'?t\s+like\s+this|dislike\s+this|thumbs\s+(?:up|down)|"
+        r"add\s+this\s+to\s+.+|queue\s+.+|play\s+something\s+.+)"
+        r"[.!?]?$", re.IGNORECASE)
+
+    def _passes_activation_gate(self, text: str, confidence: float, wake_initiated: bool = False,
+                                follow_up: bool = False):
         """Transcript-level gate for speech that SAINT was not addressed with.
 
         Returns (ok, reason). Wake-initiated commands always pass: the user
@@ -838,8 +969,16 @@ class VoiceModule(BaseModule):
                           "yeah", "so", "uh", "um", "hmm", "the"}
         if lower.strip(".!?, ") in hallucinations and confidence < short_conf:
             return False, "likely_hallucination"
-        if len(words) <= 1 and confidence < short_conf:
+        if len(words) <= 1 and confidence < (0.45 if follow_up else short_conf):
             return False, "short_low_confidence"
+        # MUSIC GUARD: when Spotify is playing, follow-ups get bombarded with
+        # transcribed lyrics. Reject anything that isn't a short playback-style
+        # command; the user can still say "Hey SAINT, <anything>" to bypass.
+        if follow_up and self._music_playing and config.get("voice.music_strict_followup", True):
+            if not self._MUSIC_FOLLOWUP_OK.match(stripped.strip(".!? ")):
+                return False, "music_playing_needs_wake_word"
+        if follow_up:
+            min_conf = min(min_conf, float(config.get("voice.followup_min_confidence", 0.25)))
         if confidence > 0 and confidence < min_conf:
             return False, f"low_confidence_{confidence:.2f}"
         return True, ""

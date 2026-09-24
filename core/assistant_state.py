@@ -38,6 +38,7 @@ class AssistantState(str, Enum):
     LISTENING = "listening"
     PROCESSING = "processing"
     EXECUTING = "executing"
+    OBSERVING = "observing"          # looking at the screen
     SPEAKING = "speaking"
     ERROR = "error"
 
@@ -49,11 +50,29 @@ LABELS = {
     AssistantState.WAKE_DETECTED: "Wake word detected",
     AssistantState.COMMAND_LISTENING: "Listening",
     AssistantState.LISTENING: "Listening",
-    AssistantState.PROCESSING: "Processing",
-    AssistantState.EXECUTING: "Executing task",
+    AssistantState.PROCESSING: "Thinking",
+    AssistantState.EXECUTING: "Working on it",
+    AssistantState.OBSERVING: "Looking at the screen",
     AssistantState.SPEAKING: "Speaking",
     AssistantState.ERROR: "Error",
 }
+
+
+_TOOL_ACTIVITY = {
+    "screen": "Looking at the screen",
+    "desktop": "Controlling the desktop",
+    "browser": "Using the browser",
+    "spotify": "Working with Spotify",
+    "memory": "Checking memory",
+    "automation": "Scheduling",
+    "system": "Checking the system",
+}
+
+
+def tool_activity(tool: str) -> str:
+    """Human description of a running tool — never the internal tool id."""
+    group = (tool or "").split(".", 1)[0]
+    return _TOOL_ACTIVITY.get(group, "Working on it")
 
 
 class AssistantStateTracker:
@@ -118,7 +137,7 @@ class AssistantStateTracker:
         with self._lock:
             self._resting = state
             busy = self._state in (AssistantState.PROCESSING, AssistantState.EXECUTING,
-                                   AssistantState.SPEAKING)
+                                   AssistantState.OBSERVING, AssistantState.SPEAKING)
         if apply and not busy:
             self.set(state, detail)
 
@@ -144,12 +163,14 @@ class AssistantStateTracker:
         if ev.type == EventType.TOOL_STARTED:
             with self._lock:
                 self._active_tools += 1
-            self.set(AssistantState.EXECUTING, ev.payload.get("tool", ""))
+            tool = ev.payload.get("tool", "")
+            self.set(AssistantState.OBSERVING if tool.startswith("screen.") else AssistantState.EXECUTING,
+                     tool_activity(tool))
         elif ev.type in (EventType.TOOL_COMPLETED, EventType.TOOL_FAILED):
             with self._lock:
                 self._active_tools = max(0, self._active_tools - 1)
                 still_running = self._active_tools > 0
-                executing = self._state == AssistantState.EXECUTING
+                executing = self._state in (AssistantState.EXECUTING, AssistantState.OBSERVING)
                 in_turn = self._turn_active
             if executing and not still_running:
                 if in_turn:
