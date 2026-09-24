@@ -40,6 +40,8 @@ class MemoryModule(BaseModule):
         super().enable()
         self._db = get_memory_db()
         self._register_tools()
+        from modules.memory.learner import learner
+        learner.start()
 
     # ------------------------------------------------------------------ #
     # Tools (the agent and LLM use these; nothing else writes memory)

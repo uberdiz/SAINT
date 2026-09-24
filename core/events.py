@@ -97,6 +97,8 @@ class EventType:
     UI_UPDATED="ui.updated"; SETTINGS_CHANGED="settings.changed"
     SPOTIFY_CONNECTED="spotify.connected"; SPOTIFY_DISCONNECTED="spotify.disconnected"
     SPOTIFY_PLAYBACK_CHANGED="spotify.playback.changed"; SPOTIFY_ERROR="spotify.error"
+    # Whatever Windows says is playing (YouTube in a browser, VLC, ...; modules/desktop/media.py)
+    MEDIA_CHANGED="media.changed"
     TOOL_REQUESTED="tool.requested"; TOOL_PERMISSION_REQUIRED="tool.permission.required"
     TOOL_PERMISSION_GRANTED="tool.permission.granted"; TOOL_PERMISSION_DENIED="tool.permission.denied"
     TOOL_STARTED="tool.started"; TOOL_COMPLETED="tool.completed"; TOOL_FAILED="tool.failed"

@@ -25,8 +25,9 @@ from core.events import event_bus, EventType
 from core.module_manager import module_manager
 from core.paths import PROJECT_ROOT, data_dir, display_path, resolve_project_path
 from core.permissions import permission_manager
+from ui.reactive import ui_bus
 from ui.theme import current_palette
-from ui.widgets import LevelMeter, run_async
+from ui.widgets import LevelMeter, Switch, run_async
 
 ACCENTS = ["#feaa34", "#f97316", "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0891b2", "#64748b"]
 
@@ -39,6 +40,7 @@ class SettingsUI(QWidget):
         super().__init__()
         self.on_appearance_changed = on_appearance_changed or on_theme_changed
         self._bindings: List[Tuple[str, Callable, Callable]] = []
+        self._loading = False
         self._labels_by_page = {}
         self._page = None
         self._build()
@@ -51,10 +53,27 @@ class SettingsUI(QWidget):
     def _bind(self, key, getter, setter):
         self._bindings.append((key, getter, setter))
 
-    def _check(self, key, text):
-        w = QCheckBox(text)
+    def _check(self, key, text, live: str = ""):
+        """An on/off switch bound to ``key``. ``live``: applied the moment it's
+        flipped (no Save needed) and shown — ``live`` is what to say."""
+        w = Switch(text)
         self._bind(key, w.isChecked, lambda v: w.setChecked(bool(v)))
+        if live:
+            w.toggled.connect(lambda on, k=key, msg=live: self._apply_live(k, on, msg))
         return w
+
+    def _apply_live(self, key, value, message=""):
+        """Settings you want to *see* change (the Halo, action notices, the mini
+        player) take effect immediately, with a short preview."""
+        if self._loading:
+            return
+        config.set(key, value)
+        ui_bus.setting_changed.emit(key)
+        if message:
+            on = value not in (False, "off", None)
+            pal = current_palette()
+            self.status.setText(message.format(state="on" if on else "off"))
+            self.status.setStyleSheet(f"color:{pal.success if on else pal.muted};")
 
     def _combo(self, key, items, editable=False, data=None):
         w = QComboBox()
@@ -526,7 +545,9 @@ class SettingsUI(QWidget):
         self._row(f, "Hands-free", self._check("voice.music_hotwords",
                                                "While music plays, “skip”, “pause”, “louder”… need no wake word"),
                   "Only a short playback command on its own counts — lyrics and chatter are ignored.")
-        self._row(f, "Mini player", self._check("widgets.spotify", "Show the floating always-on-top player"))
+        self._row(f, "Mini player", self._check("widgets.spotify", "Show the floating always-on-top player",
+                                                live="Mini player {state}."),
+                  "Shows whatever is playing — Spotify, a YouTube video, or any app Windows knows about.")
         lay.addWidget(box)
 
         box, f = self._section("Music memory", "Used for “play something I'd like” and “what did I listen to today”.")
@@ -593,11 +614,20 @@ class SettingsUI(QWidget):
     def _build_memory(self):
         w, lay = self._new_page("Memory")
         box, f = self._section("Long-term memory",
-                               "SAINT remembers facts you tell it (“my favorite language is Python”) in a local "
-                               "database and answers only from what is stored. Manage entries on the Memory page.")
+                               "SAINT remembers what you tell it (“my favorite language is Python”) and learns "
+                               "from what you mention in passing (“I'm a nurse”, “I hate horror movies”), all in a "
+                               "local database. Learned facts that never come up again fade out; anything you "
+                               "confirm on the Memory page stays. Your profile is on the Memory page.")
         self._row(f, "Memory", self._check("memory.enabled", "Enabled"))
         self._row(f, "Learn from statements", self._check("memory.auto_extract",
                                                           "Store clear personal statements automatically"))
+        self._row(f, "Learn in passing", self._check("memory.learn_passive",
+                                                     "Pick up facts you mention while chatting"))
+        self._row(f, "Learn with the AI", self._check("memory.learn_with_ai",
+                                                      "Let the local model find lasting facts in what you say"),
+                  "Runs after SAINT has answered, on your PC — nothing is uploaded.")
+        self._row(f, "Forget unconfirmed after", self._spin("memory.learned_ttl_days", 7, 365, 1, 0, " days"),
+                  "Only for learned facts that never came up again. Mentioning one again keeps it longer.")
         self._row(f, "Use in answers", self._check("memory.inject_context",
                                                    "Give the language model relevant memories"))
         self._row(f, "Memories per answer", self._spin("memory.max_context_items", 1, 20))
@@ -784,9 +814,43 @@ class SettingsUI(QWidget):
                                "The Halo is a soft light that travels around your screen edge while SAINT works in "
                                "the background. Rest the cursor at the top-centre edge, or press the hotkey, to open "
                                "the overlay.")
-        self._row(f, "Halo", self._combo("overlay.halo", ["When SAINT is minimized", "Always", "Off"],
-                                         data=["minimized", "always", "off"]))
-        self._row(f, "Screens", self._check("overlay.halo_all_screens", "Show on every monitor"))
+        halo_row = QHBoxLayout()
+        halo_row.setContentsMargins(0, 0, 0, 0)
+        halo_row.setSpacing(14)
+        self.halo_switch = Switch("Glow around the screen edge")
+        self.halo_when = QComboBox()
+        self.halo_when.addItem("while SAINT is minimized", "minimized")
+        self.halo_when.addItem("always, even with SAINT open", "always")
+        halo_row.addWidget(self.halo_switch)
+        halo_row.addWidget(self.halo_when)
+        halo_row.addStretch()
+        hw = QWidget()
+        hw.setLayout(halo_row)
+
+        def halo_value():
+            return self.halo_when.currentData() if self.halo_switch.isChecked() else "off"
+
+        def halo_load(v):
+            self.halo_switch.setChecked((v or "minimized") != "off")
+            self.halo_when.setCurrentIndex(max(0, self.halo_when.findData(v if v in ("minimized", "always")
+                                                                          else "minimized")))
+            self.halo_when.setEnabled(self.halo_switch.isChecked())
+
+        def halo_changed(*_):
+            self.halo_when.setEnabled(self.halo_switch.isChecked())
+            self._apply_live("overlay.halo", halo_value(),
+                             "Halo {state} — it's glowing around your screen for a moment so you can see it."
+                             if self.halo_switch.isChecked() else "Halo off.")
+        self._bind("overlay.halo", halo_value, halo_load)
+        self.halo_switch.toggled.connect(halo_changed)
+        self.halo_when.currentIndexChanged.connect(halo_changed)
+        self._row(f, "Halo", hw, "Changes apply right away — the Halo shows for a few seconds as a preview.")
+        self._row(f, "Screens", self._check("overlay.halo_all_screens", "Show on every monitor",
+                                            live="Halo on every monitor: {state}."))
+        self._row(f, "Action notifications",
+                  self._check("notifications.actions", "Show a small notice at the bottom of the screen when SAINT "
+                                                       "does something",
+                              live="Action notifications {state}."))
         self._row(f, "Edge tab", self._check("overlay.edge_tab", "Reveal a SAINT tab at the top edge"))
         self._row(f, "Overlay hotkey", self._line("overlay.hotkey", "alt+`"),
                   "Works from anywhere. Combine ctrl / alt / shift / win with a key, e.g. alt+` or ctrl+alt+s.")
@@ -856,11 +920,15 @@ class SettingsUI(QWidget):
         return config.get(key)
 
     def load(self):
-        for key, _getter, setter in self._bindings:
-            try:
-                setter(config.get(key))
-            except Exception:
-                pass
+        self._loading = True
+        try:
+            for key, _getter, setter in self._bindings:
+                try:
+                    setter(config.get(key))
+                except Exception:
+                    pass
+        finally:
+            self._loading = False
         self._render_wake_status()
         self._refresh_spotify_status()
         self.status.setText("")

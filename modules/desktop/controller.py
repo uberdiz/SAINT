@@ -303,6 +303,9 @@ class DesktopController:
         # disambiguated by context, or ask which one.
         if q in ("browser", "web browser") or not any(q in w.title.lower() for w in wins):
             apps = self.app_windows(q)
+            if apps and (q in ("browser", "web browser") or all(self.is_browser(w) for w in apps)):
+                from modules.desktop import browser
+                return browser.choose(wins=apps)
             if apps:
                 chosen = self.pick_window(apps)
                 if chosen is None:
@@ -646,8 +649,20 @@ class DesktopController:
         candidates so the agent can ask which one.
         """
         _require("allow_app_launch", "Launching apps")
+        if re.search(r"\bnew tab\b", (name or "").lower()):          # "a new tab in my browser"
+            from modules.desktop import browser
+            res = browser.new_tab()
+            return {"app": "browser", "launched": False, "reused": True, "window": res.get("window", ""),
+                    "hwnd": res.get("hwnd"), "new_tab": True}
+        name, hint = _browser_request(name, hint)
         if not new_window and HAS_WIN32:
             existing = self.app_windows(name)
+            if existing and (_is_browser_name(name) or all(self.is_browser(w) for w in existing)):
+                from modules.desktop import browser
+                chosen = browser.choose(hint, wins=existing)
+                info = self._activate(chosen)
+                return {"app": name, "launched": False, "reused": True, "window": info.title,
+                        "hwnd": info.hwnd, "count": len(existing)}
             if existing:
                 chosen = self.pick_window(existing, hint)
                 if chosen is None:
@@ -822,19 +837,43 @@ class DesktopController:
 
 
 class AmbiguousWindow(ToolError):
-    """Several windows could be meant; ``candidates`` lets the agent ask."""
+    """Several windows could be meant; ``candidates`` lets the agent ask.
 
-    def __init__(self, what: str, candidates: List["WindowInfo"]):
-        super().__init__(f"I found {len(candidates)} {what} windows. Which one should I use?", "AMBIGUOUS_WINDOW")
+    ``remember``: the answer becomes the default for later requests (browsers).
+    ``offscreen``: none of the candidates is on screen (all minimized)."""
+
+    def __init__(self, what: str, candidates: List["WindowInfo"], remember: bool = False, offscreen: bool = False):
+        msg = (f"None of your {what} windows are on screen." if offscreen
+               else f"I found {len(candidates)} {what} windows.") + " Which one should I use?"
+        super().__init__(msg, "AMBIGUOUS_WINDOW")
         self.what = what
         self.candidates = candidates
         # The tool registry only passes the message on; the agent reads the
         # candidates from here to ask a proper question.
         global last_ambiguity
-        last_ambiguity = (what, list(candidates), time.time())
+        last_ambiguity = (what, list(candidates), time.time(), {"remember": remember, "offscreen": offscreen})
 
 
 last_ambiguity = None
+
+
+_GENERIC_BROWSER = ("browser", "my browser", "web browser", "the browser", "internet", "browsers")
+
+
+def _is_browser_name(name: str) -> bool:
+    return (name or "").strip().lower() in _GENERIC_BROWSER
+
+
+def _browser_request(name: str, hint: str = ""):
+    """'monkeytype browser' / 'my youtube browser window' → ('browser', 'monkeytype').
+    The model sometimes folds the window's name into the app name."""
+    n = re.sub(r"\s+", " ", (name or "").strip().lower())
+    m = re.match(r"^(?:the |my )?(.+?)\s+(?:web\s+)?browser(?:\s+(?:window|tab))?$", n)
+    if m and m.group(1) not in ("web", "the", "my", "default"):
+        from modules.desktop.apps import app_catalog
+        if app_catalog.resolve(n) is None:
+            return "browser", (hint or m.group(1))
+    return name, hint
 
 
 _PROGID_BROWSER = {"chrome": "chrome", "msedge": "edge", "opera": "opera", "firefox": "firefox",

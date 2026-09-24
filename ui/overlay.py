@@ -4,14 +4,18 @@ ui/overlay.py
 The SAINT overlay — like the Steam overlay in a game. It opens over whatever
 you're doing (hotkey, the Halo's edge tab, or the tray) on a frosted copy of
 your screen: SAINT's state, an input, now playing, the conversation, what's
-next, scenes and quick toggles. Esc or a click on the background closes it.
+next, scenes and quick switches. Esc or a click on the background closes it.
+
+Every card can be moved (drag its title bar) and resized (drag an edge or the
+corner) anywhere on the screen; the arrangement is remembered in
+overlay.layout and "Reset layout" puts the cards back.
 """
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPixmap, QRadialGradient
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QCursor, QGuiApplication, QPainter, QPen, QPixmap, QRadialGradient
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
 from core.config import config
 from core.events import EventType
@@ -19,7 +23,22 @@ from ui import actions, icons, motion
 from ui.pages.music import NowPlaying
 from ui.reactive import ui_bus
 from ui.theme import current_palette, state_color, state_word
-from ui.widgets import ChatView, ElidedLabel, IconButton, Orb, chip, clear_layout, kbd, run_async, set_chip, with_alpha
+from ui.widgets import (ChatView, ElidedLabel, IconButton, Orb, Switch, chip, clear_layout, kbd, run_async, set_chip,
+                        with_alpha)
+
+BAND = 1240           # width of the centred column the cards start in
+GRID = 8              # cards snap to an 8 px grid
+EDGE = 8              # grab zone for resizing, px
+MIN_W, MIN_H = 240, 130
+GAP = 16
+
+# Starting arrangement inside the centred band: x, y, w, h as fractions
+DEFAULT_LAYOUT = {
+    "now_playing": (0.0, 0.0, 5 / 14, 0.47),
+    "live": (0.0, 0.47, 5 / 14, 0.53),
+    "chat": (5 / 14, 0.0, 5 / 14, 1.0),
+    "next": (10 / 14, 0.0, 4 / 14, 1.0),
+}
 
 
 def frost(shot: QPixmap, size) -> QPixmap:
@@ -33,17 +52,217 @@ def frost(shot: QPixmap, size) -> QPixmap:
     return small.scaled(size, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
 
-def _card(title: str = "") -> tuple:
-    f = QFrame()
-    f.setObjectName("OverlayCard")
-    lay = QVBoxLayout(f)
-    lay.setContentsMargins(20, 16, 20, 18)
-    lay.setSpacing(10)
-    if title:
-        t = QLabel(title.upper())
-        t.setObjectName("CardTitle")
-        lay.addWidget(t)
-    return f, lay
+def _snap(v: int) -> int:
+    return int(round(v / GRID) * GRID)
+
+
+class FloatingCard(QFrame):
+    """An overlay card you can move by its title bar and resize from any edge."""
+    changed = Signal()            # moved or resized by the user
+
+    def __init__(self, key: str, title: str, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.setObjectName("OverlayCard")
+        self.setMouseTracking(True)
+        self.setMinimumSize(MIN_W, MIN_H)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 12, 20, 18)
+        outer.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        self.title = QLabel(title.upper())
+        self.title.setObjectName("CardTitle")
+        head.addWidget(self.title)
+        head.addStretch()
+        self.grip = QLabel()
+        head.addWidget(self.grip)
+        outer.addLayout(head)
+        self.body = QVBoxLayout()
+        self.body.setSpacing(10)
+        outer.addLayout(self.body, 1)
+        self.setToolTip("")
+        for w in (self.title, self.grip):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._mode = None          # "move", or the edges being dragged: "r", "b", "br", "tl", ...
+        self._press = QPoint()
+        self._start = QRect()
+        self._hover = False
+
+    def apply_theme(self):
+        p = current_palette()
+        self.grip.setPixmap(icons.pixmap("grip", p.faint, 14))
+        # A little more solid than the stylesheet's card so moved cards stay readable when they overlap.
+        c = QColor(p.surface)
+        edge = "255,255,255" if p.dark else "0,0,0"
+        self.setStyleSheet(f"QFrame#OverlayCard {{ background: rgba({c.red()},{c.green()},{c.blue()},248); "
+                           f"border: 1px solid rgba({edge},22); border-radius: 16px; }}")
+
+    # -- where the mouse is -------------------------------------------------- #
+    def _zone(self, pos: QPoint):
+        r = self.rect()
+        v = "t" if pos.y() <= EDGE else "b" if pos.y() >= r.height() - EDGE else ""
+        h = "l" if pos.x() <= EDGE else "r" if pos.x() >= r.width() - EDGE else ""
+        if v or h:
+            return v + h
+        if pos.x() >= r.width() - 18 and pos.y() >= r.height() - 18:
+            return "br"
+        return "move" if pos.y() <= 40 else None
+
+    @staticmethod
+    def _cursor(zone):
+        return {"move": Qt.OpenHandCursor, "t": Qt.SizeVerCursor, "b": Qt.SizeVerCursor,
+                "l": Qt.SizeHorCursor, "r": Qt.SizeHorCursor, "tl": Qt.SizeFDiagCursor,
+                "br": Qt.SizeFDiagCursor, "tr": Qt.SizeBDiagCursor, "bl": Qt.SizeBDiagCursor}.get(zone, Qt.ArrowCursor)
+
+    # -- dragging -------------------------------------------------------------- #
+    def mousePressEvent(self, e):
+        zone = self._zone(e.position().toPoint())
+        if e.button() == Qt.LeftButton and zone:
+            self._mode = zone
+            self._press = e.globalPosition().toPoint()
+            self._start = self.geometry()
+            self.raise_()
+            if zone == "move":
+                self.setCursor(Qt.ClosedHandCursor)
+            self.update()
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        if self._mode is None:
+            self.setCursor(self._cursor(self._zone(e.position().toPoint())))
+            super().mouseMoveEvent(e)
+            return
+        d = e.globalPosition().toPoint() - self._press
+        area = self.parentWidget().rect()
+        s = self._start
+        if self._mode == "move":
+            x = max(0, min(_snap(s.x() + d.x()), area.width() - s.width()))
+            y = max(0, min(_snap(s.y() + d.y()), area.height() - s.height()))
+            self.move(x, y)
+            return
+        left, top, right, bottom = s.left(), s.top(), s.left() + s.width(), s.top() + s.height()
+        if "r" in self._mode:
+            right = min(area.width(), max(left + MIN_W, _snap(right + d.x())))
+        if "b" in self._mode:
+            bottom = min(area.height(), max(top + MIN_H, _snap(bottom + d.y())))
+        if "l" in self._mode:
+            left = max(0, min(right - MIN_W, _snap(left + d.x())))
+        if "t" in self._mode:
+            top = max(0, min(bottom - MIN_H, _snap(top + d.y())))
+        self.setGeometry(left, top, right - left, bottom - top)
+
+    def mouseReleaseEvent(self, e):
+        if self._mode is not None:
+            self._mode = None
+            self.setCursor(self._cursor(self._zone(e.position().toPoint())))
+            self.update()
+            self.changed.emit()
+            return
+        super().mouseReleaseEvent(e)
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.unsetCursor()
+        self.update()
+        super().leaveEvent(e)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not (self._hover or self._mode):
+            return
+        p = current_palette()
+        g = QPainter(self)
+        g.setRenderHint(QPainter.Antialiasing)
+        g.setPen(QPen(with_alpha(p.accent, 170 if self._mode else 90), 1.4))
+        r = QRectF(self.rect())
+        for i in (7, 12):                                   # the resize corner
+            g.drawLine(int(r.right() - i), int(r.bottom() - 5), int(r.right() - 5), int(r.bottom() - i))
+        if self._mode:
+            g.setBrush(Qt.NoBrush)
+            g.drawRoundedRect(r.adjusted(1, 1, -1, -1), 16, 16)
+        g.end()
+
+
+class CardCanvas(QWidget):
+    """Holds the floating cards and remembers where they are (as fractions of
+    the screen area, so the layout survives resolution changes)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.cards = {}
+
+    def add(self, card: FloatingCard):
+        card.setParent(self)
+        card.changed.connect(self.save)
+        self.cards[card.key] = card
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.restore()
+
+    def default_rect(self, key: str) -> QRect:
+        W, H = self.width(), self.height()
+        band = min(W, BAND)
+        x0 = (W - band) // 2
+        fx, fy, fw, fh = DEFAULT_LAYOUT.get(key, (0, 0, 0.3, 0.3))
+        x, y = x0 + int(fx * band), int(fy * H)
+        w, h = int(fw * band), int(fh * H)
+        # gaps between neighbours
+        return QRect(x + (GAP // 2 if fx > 0 else 0), y + (GAP // 2 if fy > 0 else 0),
+                     w - (GAP // 2 if fx > 0 else 0) - (GAP // 2 if fx + fw < 0.999 else 0),
+                     h - (GAP // 2 if fy > 0 else 0) - (GAP // 2 if fy + fh < 0.999 else 0))
+
+    def rect_for(self, key: str) -> QRect:
+        saved = (config.get("overlay.layout") or {}).get(key)
+        W, H = max(1, self.width()), max(1, self.height())
+        if isinstance(saved, (list, tuple)) and len(saved) == 4:
+            x, y, w, h = saved
+            rect = QRect(int(x * W), int(y * H), max(MIN_W, int(w * W)), max(MIN_H, int(h * H)))
+        else:
+            rect = self.default_rect(key)
+        rect.setWidth(min(rect.width(), W))
+        rect.setHeight(min(rect.height(), H))
+        rect.moveLeft(max(0, min(rect.x(), W - rect.width())))
+        rect.moveTop(max(0, min(rect.y(), H - rect.height())))
+        return rect
+
+    def restore(self):
+        for key, card in self.cards.items():
+            card.setGeometry(self.rect_for(key))
+
+    def save(self):
+        W, H = max(1, self.width()), max(1, self.height())
+        config.set("overlay.layout", {k: [round(c.x() / W, 4), round(c.y() / H, 4), round(c.width() / W, 4),
+                                          round(c.height() / H, 4)] for k, c in self.cards.items()})
+
+    def reset(self):
+        config.set("overlay.layout", {})
+        for key, card in self.cards.items():
+            old, new = card.geometry(), self.rect_for(key)
+            if old != new:
+                motion.animate(card, b"geometry", old, new, motion.SLOW)
+
+
+def _centred(root, layout) -> QWidget:
+    """Add ``layout`` to ``root`` in a band as wide as the default card area, centred."""
+    band = QWidget()
+    band.setLayout(layout)
+    band.setMaximumWidth(BAND)
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addStretch(1)
+    row.addWidget(band, 1000)
+    row.addStretch(1)
+    root.addLayout(row)
+    return band
 
 
 class Overlay(QWidget):
@@ -53,17 +272,13 @@ class Overlay(QWidget):
         self.setWindowTitle("SAINT overlay")
         self._bg = QPixmap()
         self._closing = False
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self.content = QWidget()
-        self.content.setMaximumWidth(1240)
-        outer.addWidget(self.content, 1, Qt.AlignHCenter)
-        root = QVBoxLayout(self.content)
+        root = QVBoxLayout(self)
         root.setContentsMargins(40, 34, 40, 34)
         root.setSpacing(22)
 
         # ---- top bar ----------------------------------------------------------
         top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
         top.setSpacing(10)
         self.logo = QLabel()
         top.addWidget(self.logo)
@@ -87,10 +302,11 @@ class Overlay(QWidget):
         close = IconButton("x", "Close (Esc)", 18)
         close.clicked.connect(self.close_overlay)
         top.addWidget(close)
-        root.addLayout(top)
+        self.top_band = _centred(root, top)
 
         # ---- hero -------------------------------------------------------------
         hero = QHBoxLayout()
+        hero.setContentsMargins(0, 0, 0, 0)
         hero.setSpacing(24)
         hero.addStretch()
         self.orb = Orb(132)
@@ -117,13 +333,18 @@ class Overlay(QWidget):
         hc.addWidget(self.reply)
         hero.addLayout(hc)
         hero.addStretch()
-        root.addLayout(hero)
+        self.hero_band = _centred(root, hero)
 
-        # ---- grid -------------------------------------------------------------
-        grid = QGridLayout()
-        grid.setSpacing(16)
-        self.np_card, npl = _card("Now playing")
-        self.now_playing = NowPlaying(cover=132)
+        # ---- cards: drag a title bar to move, an edge or corner to resize -----
+        self.canvas = CardCanvas()
+
+        def card(key, title):
+            c = FloatingCard(key, title)
+            self.canvas.add(c)
+            return c, c.body
+
+        self.np_card, npl = card("now_playing", "Now playing")
+        self.now_playing = NowPlaying(cover=132, any_media=True)
         npl.addWidget(self.now_playing)
         qt = QLabel("NEXT IN QUEUE")
         qt.setObjectName("CardTitle")
@@ -132,8 +353,10 @@ class Overlay(QWidget):
         self.queue_list = QVBoxLayout()
         self.queue_list.setSpacing(4)
         npl.addLayout(self.queue_list)
+        npl.addStretch()
+        self._queue_title = qt
         self._queue_track = None
-        self.live_card, ll = _card("Live")
+        self.live_card, ll = card("live", "Live")
         self.live_list = QVBoxLayout()
         self.live_list.setSpacing(0)
         self.live_empty = QLabel("What SAINT does shows up here as it happens.")
@@ -143,12 +366,12 @@ class Overlay(QWidget):
         ll.addLayout(self.live_list)
         ll.addStretch()
         self._rows = []
-        self.chat_card, cl = _card("Conversation")
+        self.chat_card, cl = card("chat", "Conversation")
         self.chat = ChatView(max_messages=14)
-        self.chat.setMinimumHeight(220)
+        self.chat.setMinimumHeight(60)
         cl.addWidget(self.chat)
         actions.ChatBinder(self.chat, self)
-        self.next_card, nl = _card("Up next")
+        self.next_card, nl = card("next", "Up next")
         self.next_list = QVBoxLayout()
         self.next_list.setSpacing(6)
         nl.addLayout(self.next_list)
@@ -160,30 +383,32 @@ class Overlay(QWidget):
         self.scene_list.setSpacing(6)
         nl.addLayout(self.scene_list)
         nl.addStretch()
-        grid.addWidget(self.np_card, 0, 0)
-        grid.addWidget(self.live_card, 1, 0)
-        grid.addWidget(self.chat_card, 0, 1, 2, 1)
-        grid.addWidget(self.next_card, 0, 2, 2, 1)
-        grid.setColumnStretch(0, 5)
-        grid.setColumnStretch(1, 5)
-        grid.setColumnStretch(2, 4)
-        grid.setRowStretch(1, 1)
-        root.addLayout(grid, 1)
+        root.addWidget(self.canvas, 1)
 
-        # ---- toggles ---------------------------------------------------------
+        # ---- switches -----------------------------------------------------------
         bottom = QHBoxLayout()
-        bottom.setSpacing(8)
-        self.t_halo = QPushButton(" Halo")
-        self.t_widget = QPushButton(" Mini player")
-        self.t_demo = QPushButton(" Demo")
-        for b in (self.t_halo, self.t_widget):
-            b.setCheckable(True)
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(18)
+        self.t_halo = Switch("Halo")
+        self.t_halo.setToolTip("The glow around your screen edge — it lights up right away so you can see it")
+        self.t_widget = Switch("Mini player")
+        self.t_widget.setToolTip("Floating player for whatever is playing")
+        self.t_notices = Switch("Action notices")
+        self.t_notices.setToolTip("A small notice at the bottom of the screen when SAINT does something")
         self.t_halo.clicked.connect(lambda on: shell.set_halo_mode("minimized" if on else "off"))
         self.t_widget.clicked.connect(lambda on: shell.set_widget(on))
-        self.t_demo.clicked.connect(lambda: (self.close_overlay(), QTimer.singleShot(250, shell.start_demo)))
-        for b in (self.t_halo, self.t_widget, self.t_demo):
+        self.t_notices.clicked.connect(lambda on: shell.set_action_notices(on))
+        for b in (self.t_halo, self.t_widget, self.t_notices):
             bottom.addWidget(b)
+        self.t_demo = QPushButton(" Demo")
+        self.t_demo.clicked.connect(lambda: (self.close_overlay(), QTimer.singleShot(250, shell.start_demo)))
+        bottom.addWidget(self.t_demo)
         bottom.addStretch()
+        self.reset_layout = QPushButton(" Reset layout")
+        self.reset_layout.setToolTip("Put the cards back where they started")
+        self.reset_layout.clicked.connect(self.canvas.reset)
+        bottom.addWidget(self.reset_layout)
+        bottom.addSpacing(8)
         hint = QLabel(f"Toggle with {config.get('overlay.hotkey', '')}")
         hint.setObjectName("Faint")
         self.hotkey_hint = hint
@@ -193,7 +418,7 @@ class Overlay(QWidget):
         self.open_app.setObjectName("Primary")
         self.open_app.clicked.connect(self._open_app)
         bottom.addWidget(self.open_app)
-        root.addLayout(bottom)
+        self.bottom_band = _centred(root, bottom)
 
         self._cards = [self.np_card, self.live_card, self.chat_card, self.next_card]
         ui_bus.event.connect(self._on_event)
@@ -206,8 +431,10 @@ class Overlay(QWidget):
         p = current_palette()
         from ui.main_window import logo_pixmap
         self.logo.setPixmap(logo_pixmap(26))
-        for b, name in ((self.t_halo, "halo"), (self.t_widget, "widget"), (self.t_demo, "demo")):
-            b.setIcon(icons.icon(name, p.text, 16))
+        self.t_demo.setIcon(icons.icon("demo", p.text, 16))
+        self.reset_layout.setIcon(icons.icon("layout", p.text, 16))
+        for c in self.canvas.cards.values():
+            c.apply_theme()
         hk = config.get("overlay.hotkey", "")
         self.hotkey_hint.setText(f"Toggle with {hk}")
         self.hotkey_hint.setVisible(bool(hk))
@@ -238,6 +465,7 @@ class Overlay(QWidget):
         self.activateWindow()
         self.input.setFocus()
         motion.animate(self, b"windowOpacity", 0.0, 1.0, motion.BASE)
+        self.canvas.restore()
         QTimer.singleShot(0, lambda: motion.stagger(self._cards, motion.SLOW, 50, dy=14))
 
     def close_overlay(self):
@@ -276,7 +504,8 @@ class Overlay(QWidget):
             super().keyPressEvent(e)
 
     def mousePressEvent(self, e):
-        if self.childAt(e.position().toPoint()) in (None, self.content):     # empty background
+        if self.childAt(e.position().toPoint()) in (None, self.canvas, self.top_band, self.hero_band,
+                                                    self.bottom_band):     # empty background
             self.close_overlay()
 
     # ------------------------------------------------------------------ #
@@ -296,8 +525,11 @@ class Overlay(QWidget):
     def _sync_toggles(self):
         self.mic.setChecked(actions.listening())
         self.mic.set_icon("mic" if actions.listening() else "mic-off")
-        self.t_halo.setChecked(config.get("overlay.halo", "minimized") != "off")
-        self.t_widget.setChecked(bool(config.get("widgets.spotify", False)))
+        for sw, on in ((self.t_halo, config.get("overlay.halo", "minimized") != "off"),
+                       (self.t_widget, bool(config.get("widgets.spotify", False))),
+                       (self.t_notices, bool(config.get("notifications.actions", True)))):
+            if sw.isChecked() != on:
+                sw.setChecked(on)
 
     def _send(self):
         text = self.input.text().strip()
@@ -335,11 +567,26 @@ class Overlay(QWidget):
             self._refresh_next()
         elif t == EventType.SPOTIFY_PLAYBACK_CHANGED and p.get("id") != self._queue_track:
             QTimer.singleShot(600, self._refresh_queue)      # the queue moved on with the track
+        elif t == EventType.MEDIA_CHANGED:
+            self._show_queue(ui_bus.now_playing().get("source", "spotify") == "spotify")
 
     def _demo_changed(self, on):
         if not on:
             from ui.pages.home import drop_demo_rows
             drop_demo_rows(self._rows, self.live_empty)
+
+    def _show_queue(self, on: bool):
+        """The Spotify queue only means something while Spotify is what's shown."""
+        self._queue_title.setVisible(on)
+        for i in range(self.queue_list.count()):
+            w = self.queue_list.itemAt(i).widget()
+            if w is not None:
+                w.setVisible(on)
+            elif self.queue_list.itemAt(i).layout() is not None:
+                lay = self.queue_list.itemAt(i).layout()
+                for j in range(lay.count()):
+                    if lay.itemAt(j).widget():
+                        lay.itemAt(j).widget().setVisible(on)
 
     def _refresh_queue(self):
         if ui_bus.demo:
@@ -353,15 +600,16 @@ class Overlay(QWidget):
                 lab.setObjectName("Faint")
                 lab.setWordWrap(True)
                 self.queue_list.addWidget(lab)
-                return
-            for name, artists in items:
-                row = QHBoxLayout()
-                row.setSpacing(8)
-                row.addWidget(ElidedLabel(name), 3)
-                by = ElidedLabel(artists)
-                by.setObjectName("Faint")
-                row.addWidget(by, 2)
-                self.queue_list.addLayout(row)
+            else:
+                for name, artists in items:
+                    row = QHBoxLayout()
+                    row.setSpacing(8)
+                    row.addWidget(ElidedLabel(name), 3)
+                    by = ElidedLabel(artists)
+                    by.setObjectName("Faint")
+                    row.addWidget(by, 2)
+                    self.queue_list.addLayout(row)
+            self._show_queue(ui_bus.now_playing().get("source", "spotify") == "spotify")
 
         def load():
             try:

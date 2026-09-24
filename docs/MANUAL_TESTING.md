@@ -19,7 +19,7 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | Wake word / "stop" while SAINT is speaking | SAINT stops and listens; it never wakes on its own voice |
 | ✅ | Normal conversation near the mic without "SAINT" (≥ 2 min) | Never reacts |
 | ✅ | "Hey SAINT, open Spotify" → "play Kendrick Lamar" → "skip that" (no wake word after the first) | All three run |
-| 🔲 | Music playing: "Hey SAINT, find the settings button" → "click it" → "skip that" (no wake word after the first) | All three run; chatter in between ("that's amazing", "I think it's good") is ignored |
+| Y | Music playing: "Hey SAINT, find the settings button" → "click it" → "skip that" (no wake word after the first) | All three run; chatter in between ("that's amazing", "I think it's good") is ignored |
 | 🔲 | Music playing, in a conversation window: "pause" (one word) | Pauses — one-word commands no longer need "SAINT" in front |
 | 🔲 | Music playing, SAINT idle: say just "skip" (one word, no wake word) | Skips (hot-word). With no music playing it is ignored |
 | ✅ | Synthetic "SAINT"/"Hey SAINT"/near-misses, clean and with music (4 voices) | 64/64 correct wake decisions |
@@ -46,7 +46,7 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | "What's currently open?" | Windows grouped per monitor |
 | ✅ | "What is this error?" with no error visible | "I don't see an error…" (no invented error) |
 | 🔲 | "What is this error?" with a real error dialog open | Explains the dialog's text |
-| 🔲 | "Find the settings button" → "click it" · "find the settings button in my taskbar and click it" | Finds the taskbar Settings button (an exact name beats a partial one like "Dictation settings"), then clicks it |
+| Y | "Find the settings button" → "click it" · "find the settings button in my taskbar and click it" | Finds the taskbar Settings button (an exact name beats a partial one like "Dictation settings"), then clicks it |
 
 ## Mouse / keyboard
 
@@ -101,7 +101,7 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | Any request above | Never shows JSON, Python, tool names (`screen.context`, `composite:…`), schemas or agent traces |
 | ✅ | "Never mind" / "forget it" / "cancel" | "Okay." (no action, no memory deleted) |
 | ✅ | "Hide everything except Spotify" · "summarize this page" · an odd request the router doesn't know | Does it (Spotify stays up, everything else minimized / a 2–3 sentence summary of the page), or the LLM says plainly it can't; never claims an action that didn't happen |
-| 🔲 | "Make it louder" / "make it quieter" (no music playing) | Computer volume changes; never "Increased volume." without doing it |
+| ✅ | "Make it louder" / "make it quieter" (no music playing) | Computer volume changes; never "Increased volume." without doing it |
 | ✅ | "Skip this." · "Open Spotify." · "Pause Spotify." · "Turn on shuffle." | Each answer is ONE short sentence — no narration, no repetition |
 | ✅ | "What's 2+2?" · "What's the capital of France?" | Direct one-line answer, no filler |
 
@@ -134,7 +134,7 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | Rest the cursor at the top-centre screen edge (Halo visible) | SAINT tab slides down; clicking it opens the overlay; moving away hides it |
 | ✅ | Type in the overlay: "what time is it" | Reply appears under the input; the conversation card updates |
 | ✅ | Turn on the mini player, play music, drag it, restart SAINT | Real cover art; position remembered |
-| 🔲 | Music playing: say just "skip", "next", "pause", "louder" (no wake word) | Each runs; the mini player flashes "Heard “skip” ✓" (if not, `voice.hotword.rejected` in the log says why) |
+| Y | Music playing: say just "skip", "next", "pause", "louder" (no wake word) | Each runs; the mini player flashes "Heard “skip” ✓" (if not, `voice.hotword.rejected` in the log says why) |
 | ✅ | Music playing: talk normally / let lyrics play for 2 min | No hot-word fires |
 | ✅ | Create a scene "Focus mode" (play lofi beats · set volume to 35 · minimize all windows besides Claude), then say "Hey SAINT, focus mode" | All steps run; a toast confirms; History shows a Scene entry |
 | ✅ | History page after a few requests | Counts, 30-day chart, most-used tools and the timeline match what you did |

@@ -193,15 +193,17 @@ class AIModule(BaseModule):
             return []
         try:
             from modules.memory.service import memory_service
-            items = memory_service.context_for(prompt, limit=int(config.get("memory.max_context_items", 6)))
+            limit = int(config.get("memory.max_context_items", 6))
+            items = memory_service.context_for(prompt, limit=limit)
+            core = [c for c in memory_service.core_facts(limit=6) if c not in items]
         except Exception:
             return []
-        if not items:
+        if not items and not core:
             return []
-        lines = "\n".join(f"- {i}" for i in items)
+        lines = "\n".join(f"- {i}" for i in core + items)
         return [{"role": "system", "content": (
-            "Facts the user previously asked you to remember (use them only if relevant; do not "
-            "invent other personal facts):\n" + lines)}]
+            "What you know about the user, from things they told you (use it naturally when relevant — "
+            "don't recite it, and never invent other personal facts):\n" + lines)}]
 
     # ------------------------------------------------------------------ #
     # Streaming API

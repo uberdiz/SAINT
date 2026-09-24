@@ -1052,6 +1052,28 @@ def _web_search(query: str) -> Reply:
 # ====================================================================== #
 # Routing
 # ====================================================================== #
+def parse_youtube(text: str) -> Optional[Intent]:
+    """YouTube player control ("theater mode", "1.5x speed", "skip ahead 30
+    seconds", "captions on", "set quality to 1080p"). Bare commands ("faster",
+    "mute", "pause") only mean the video while a YouTube tab is in front."""
+    from modules.desktop import youtube
+    t = _clean(text).lower()
+    if not t or len(t.split()) > 12:
+        return None
+    parsed = youtube.parse(t)
+    if parsed is None and len(t.split()) <= 7 and youtube.is_watching():
+        parsed = youtube.parse(t, youtube_context=True)
+    if parsed is None:
+        return None
+    action, value = parsed
+
+    def run():
+        from modules.agent.desktop_intents import _tool
+        return _tool("browser.youtube", f"do that on YouTube", lambda r: r.get("said") or "Done.",
+                     retry=run, action=action, **({"value": str(value)} if value is not None else {}))
+    return Intent(f"youtube.{action}", run, "browser")
+
+
 def parse_desktop_nl(text: str) -> Optional[Intent]:
     """Generalised desktop / screen / browser understanding (desktop_intents)."""
     from modules.agent.desktop_intents import parse
@@ -1115,7 +1137,7 @@ def parse_web(text: str) -> Optional[Intent]:
     return Intent("web.current", run_web, "web")
 
 
-_SINGLE_PARSERS = [parse_system, parse_web, parse_spotify, parse_desktop_nl, parse_desktop]
+_SINGLE_PARSERS = [parse_system, parse_web, parse_youtube, parse_spotify, parse_desktop_nl, parse_desktop]
 
 
 def route_single(text: str) -> Optional[Intent]:
@@ -1200,6 +1222,17 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
                 rest = run_plan(intents, nxt, [])
                 return (first + " " + rest.text).strip()
             pending.run = resume
+            return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
+        if r.expects_reply and confirmations.pending is not None and i < len(intents) - 1:
+            # Same for a yes/no question ("You don't have a browser open. Should I open Opera?").
+            action = confirmations.pending
+            original_run = action.run
+
+            def resume_yes(original_run=original_run, nxt=i + 1):
+                first = original_run()
+                rest = run_plan(intents, nxt, [])
+                return (first + " " + rest.text).strip()
+            action.run = resume_yes
             return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
         if it.name == "screen.locate" and i + 1 < len(intents) and intents[i + 1].name == "desktop.click_last":
             r.text = re.sub(r'\s*Say "click it" if you want me to\.$', "", r.text)

@@ -16,6 +16,11 @@ def close_permission() -> PermissionLevel:
     return PermissionLevel.HIGH if config.get("desktop.confirm_close_apps", True) else PermissionLevel.MEDIUM
 
 
+def _youtube_actions():
+    from modules.desktop.youtube import ACTIONS
+    return ACTIONS
+
+
 def register_desktop_tools(registry: ToolRegistry):
     from modules.desktop.controller import desktop
     from modules.desktop import uia
@@ -61,6 +66,14 @@ def register_desktop_tools(registry: ToolRegistry):
     def new_tab():
         from modules.desktop import browser
         return browser.new_tab()
+
+    def youtube(action, value=None):
+        from modules.desktop import youtube as yt
+        if action == "speed" and value is not None:
+            value = float(value)
+        elif action in ("seek_seconds", "seek_percent") and value is not None:
+            value = float(value)
+        return yt.run(action, value)
 
     def minimize_others(keep):
         return desktop.minimize_others(keep)
@@ -146,6 +159,16 @@ def register_desktop_tools(registry: ToolRegistry):
              llm_exposed=True, category="browser"),
         Tool("desktop.new_tab", "Open a new tab in the user's browser", {}, PermissionLevel.MEDIUM, new_tab,
              parameters={}, llm_exposed=True, category="browser"),
+        Tool("browser.youtube", "Control the YouTube video in the user's browser with YouTube's own shortcuts "
+             "and menus: play/pause, full screen, theater mode, miniplayer, mute, captions, seek, playback "
+             "speed, next/previous video, chapters, quality, autoplay, loop, sleep timer, like, subscribe, "
+             "skip ad",
+             {"action": "string", "value": "string (optional)"}, PermissionLevel.MEDIUM, youtube,
+             parameters={"action": P("string", "what to do", enum=list(_youtube_actions())),
+                         "value": P("string", "speed (e.g. 1.5), seconds to seek (negative = back), percent "
+                                              "(0-90), quality (1080p, 720p, highest, auto), sleep-timer "
+                                              "minutes, or captions language", required=False)},
+             llm_exposed=True, category="browser"),
         Tool("desktop.minimize_others", "Hide (minimize) every window except the named app(s), "
              "e.g. 'hide everything except Spotify'",
              {"keep": "string"}, PermissionLevel.LOW, minimize_others,

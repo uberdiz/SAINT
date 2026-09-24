@@ -28,12 +28,16 @@ def _mmss(ms) -> str:
 
 
 class NowPlaying(QWidget):
-    """Cover + title + artist + progress + controls, live from ui_bus."""
+    """Cover + title + artist + progress + controls, live from ui_bus.
+
+    ``any_media``: show whatever is playing on the PC (a YouTube video, VLC,
+    ...), not only Spotify — the controls then follow that app."""
 
     def __init__(self, cover: int = 64, big: bool = False, show_hint: bool = True,
-                 hint: str = "Say “skip” — no wake word", parent=None):
+                 hint: str = "Say “skip” — no wake word", parent=None, any_media: bool = False):
         super().__init__(parent)
         self._big, self._show_hint, self._hint_text = big, show_hint, hint
+        self._any, self._sp_ok, self._source = any_media, False, "spotify"
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(28 if big else 14)
@@ -94,9 +98,12 @@ class NowPlaying(QWidget):
         self.vol_up = IconButton("volume", "Louder", size)
         self.shuffle.clicked.connect(lambda: actions.spotify("spotify.shuffle", self._err,
                                                              state=not ui_bus.spotify.get("shuffle")))
-        self.prev.clicked.connect(lambda: actions.spotify("spotify.previous", self._err))
-        self.play.clicked.connect(lambda: actions.play_pause(self._err))
-        self.next.clicked.connect(lambda: actions.spotify("spotify.next", self._err))
+        self.prev.clicked.connect(lambda: actions.transport("previous", self._err) if self._any
+                                  else actions.spotify("spotify.previous", self._err))
+        self.play.clicked.connect(lambda: actions.transport("play_pause", self._err) if self._any
+                                  else actions.play_pause(self._err))
+        self.next.clicked.connect(lambda: actions.transport("next", self._err) if self._any
+                                  else actions.spotify("spotify.next", self._err))
         self.like.clicked.connect(self._like)
         self.vol_down.clicked.connect(lambda: actions.spotify("spotify.volume_step", self._err, direction="down"))
         self.vol_up.clicked.connect(lambda: actions.spotify("spotify.volume_step", self._err, direction="up"))
@@ -148,6 +155,11 @@ class NowPlaying(QWidget):
 
     def _apply(self, ok, reason):
         ok = ok or ui_bus.demo
+        self._sp_ok = ok
+        if self._any:
+            self.setToolTip("" if ok else reason)
+            self.render_any()
+            return
         for b in self._controls:
             b.setEnabled(ok)
         if ok:
@@ -185,11 +197,50 @@ class NowPlaying(QWidget):
         self.hint.setVisible(self._show_hint and playing and actions.hotwords_on())
         self._tick()
 
+    def render_any(self):
+        """Any-media mode: the video / app / song Windows says is playing."""
+        np = ui_bus.now_playing()
+        if not np or (np["source"] == "spotify" and not self._sp_ok):
+            np = ui_bus._from_media(ui_bus.media) if ui_bus.media.get("title") else {}
+        self._source = np.get("source", "")
+        for b in self._controls:
+            b.setEnabled(bool(np))
+        if not np:
+            self.title.setText("Nothing playing")
+            self.artist.setText("Play something — Spotify, YouTube, anything")
+            self.album.setText("")
+            self.cover.set_url("")
+            self.play.set_icon("play")
+            set_chip(self.state_chip, "Idle")
+            self.hint.hide()
+            self._tick()
+            return
+        if np["source"] == "spotify":
+            self.render(ui_bus.spotify)
+            return
+        self.title.setText(np["title"])
+        by = np.get("artist") or ""
+        app = np.get("app") or ""
+        self.artist.setText(f"{by} · {app}" if by and app and by != app else (by or app))
+        self.album.setText(np.get("album", ""))
+        self.cover.set_url(np.get("cover", ""))
+        playing = np.get("is_playing")
+        self.play.set_icon("pause" if playing else "play")
+        self.prev.setEnabled(np.get("can_previous", False))
+        self.next.setEnabled(np.get("can_next", False))
+        set_chip(self.state_chip, ("Playing" if playing else "Paused") + (f" in {app}" if app else ""),
+                 "accent" if playing else "")
+        self.hint.hide()
+        self._tick()
+
     def _tick(self):
-        st = ui_bus.spotify
-        self.progress.set_value(ui_bus.progress())
-        dur = st.get("duration_ms") or 0
-        self.pos_label.setText(_mmss(ui_bus.progress() * dur))
+        if self._any and self._source == "media":
+            np = ui_bus.now_playing() or ui_bus._from_media(ui_bus.media)
+            frac, dur = ui_bus.progress_of(np), np.get("duration_ms") or 0
+        else:
+            frac, dur = ui_bus.progress(), ui_bus.spotify.get("duration_ms") or 0
+        self.progress.set_value(frac)
+        self.pos_label.setText(_mmss(frac * dur))
         self.dur_label.setText(_mmss(dur))
 
     def _err(self, msg):
@@ -203,7 +254,10 @@ class NowPlaying(QWidget):
         t, p = ev.type, ev.payload or {}
         if t == EventType.SPOTIFY_PLAYBACK_CHANGED:
             self._err("")
-            self.render(p)
+            self.render_any() if self._any else self.render(p)
+        elif t == EventType.MEDIA_CHANGED and self._any:
+            self._err("")
+            self.render_any()
         elif t == EventType.SPOTIFY_ERROR:
             self._err(p.get("error") or "Spotify error")
         elif t in (EventType.SPOTIFY_CONNECTED, EventType.SPOTIFY_DISCONNECTED, EventType.SETTINGS_CHANGED):
@@ -215,7 +269,7 @@ class NowPlaying(QWidget):
 
     def _reset_hint(self):
         set_chip(self.hint, self._hint_text, "accent")
-        self.render(ui_bus.spotify)
+        self.render_any() if self._any else self.render(ui_bus.spotify)
 
     def showEvent(self, e):
         super().showEvent(e)

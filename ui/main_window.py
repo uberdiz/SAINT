@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
         self.resize(1360, 860)
         self.setMinimumSize(1040, 680)
 
+        from ui.action_notice import ActionNotice
         from ui.demo import Demo
         from ui.halo import Halo
         from ui.overlay import Overlay
@@ -222,6 +223,11 @@ class MainWindow(QMainWindow):
         self.widget = SpotifyWidget(self)
         self.halo = Halo(self)
         self.halo.open_requested.connect(self.open_overlay)
+        self.halo.preview_ended.connect(self._update_halo)
+        self.action_notice = ActionNotice()
+        ui_bus.setting_changed.connect(self._live_setting)
+        from modules.desktop.media import media
+        media.start()                      # what's playing in any app, for the mini player
         self.hotkey = GlobalHotkey(self)
         self.hotkey.triggered.connect(self.toggle_overlay)
         self.hotkey.failed.connect(lambda msg: self.toast("Overlay hotkey", msg, "warn"))
@@ -280,6 +286,9 @@ class MainWindow(QMainWindow):
                     "halo", lambda: self.set_halo_mode("off" if halo != "off" else "minimized")),
             Command("Halo: always on", "Show the glow even with the window open", "halo",
                     lambda: self.set_halo_mode("always")),
+            Command("Turn action notices off" if config.get("notifications.actions", True)
+                    else "Turn action notices on", "A small notice at the bottom of the screen when SAINT acts",
+                    "bell", lambda: self.set_action_notices(not config.get("notifications.actions", True))),
             Command("Stop listening" if actions.listening() else "Start listening", "Microphone", "mic",
                     lambda: actions.toggle_listening(lambda _ok: self._sync_mic())),
             Command("Stop speaking", "Interrupt SAINT", "x", actions.interrupt),
@@ -322,10 +331,32 @@ class MainWindow(QMainWindow):
         self.music.apply_theme()
         self._tray_sync()
 
-    def set_halo_mode(self, mode: str):
+    def set_halo_mode(self, mode: str, preview: bool = True):
         config.set("overlay.halo", mode)
+        if preview and mode != "off":
+            self.halo.preview()            # show it now, even with SAINT in front
         self._update_halo()
         self._tray_sync()
+
+    def set_action_notices(self, on: bool):
+        config.set("notifications.actions", bool(on))
+        self._live_setting("notifications.actions")
+
+    def _live_setting(self, key: str):
+        """A switch flipped in Settings or the overlay: apply it and show it."""
+        if key.startswith("overlay.halo"):
+            self.halo.refresh()
+            if config.get("overlay.halo", "minimized") != "off":
+                self.halo.preview()
+            self._update_halo()
+            self._tray_sync()
+        elif key == "notifications.actions":
+            if config.get("notifications.actions", True):
+                self.action_notice.preview()
+            else:
+                self.action_notice.leave()
+        elif key == "widgets.spotify":
+            self.set_widget(bool(config.get("widgets.spotify", False)))
 
     def start_demo(self):
         self.demo.start()
@@ -406,7 +437,7 @@ class MainWindow(QMainWindow):
     def _update_halo(self):
         mode = config.get("overlay.halo", "minimized")
         away = not self.isVisible() or self.isMinimized()
-        self.halo.set_visible(mode == "always" or (mode == "minimized" and away))
+        self.halo.set_visible(self.halo.previewing or mode == "always" or (mode == "minimized" and away))
 
     def _build_tray(self):
         self.tray = None
@@ -509,8 +540,10 @@ class MainWindow(QMainWindow):
         self.demo.stop()
         self.hotkey.unregister()
         self.halo.shutdown()
-        for w in (self.overlay, self.widget):
+        for w in (self.overlay, self.widget, self.action_notice):
             w.close()
+        from modules.desktop.media import media
+        media.stop()
         if self.runtime:
             self.runtime.shutdown()
         if self.tray:

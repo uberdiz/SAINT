@@ -2,9 +2,10 @@
 ui/spotify_widget.py
 
 The floating mini player: always on top, drag it anywhere (the position is
-remembered). Album art, live progress and controls. While it's on screen,
-music hot-words ("skip", "pause", "louder") work without the wake word, and
-it flashes when it hears one.
+remembered). Shows whatever is playing on the PC — Spotify, a YouTube video,
+VLC, any app Windows knows about — with its art, live progress and controls.
+While music plays, hot-words ("skip", "pause", "louder") work without the
+wake word, and it flashes when it hears one.
 """
 
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer
@@ -36,7 +37,7 @@ class SpotifyWidget(QWidget):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(SHADOW + 14, SHADOW + 12, SHADOW + 10, SHADOW + 12)
         lay.setSpacing(6)
-        self.player = NowPlaying(cover=76, show_hint=True, hint="Say “skip”")
+        self.player = NowPlaying(cover=76, show_hint=True, hint="Say “skip”", any_media=True)
         lay.addWidget(self.player, 1)
         side = QVBoxLayout()
         side.setSpacing(2)
@@ -70,14 +71,14 @@ class SpotifyWidget(QWidget):
         if ev.type == EventType.VOICE_HOTWORD:
             self._flash = 1.0
             self._fade.start()
-        elif ev.type == EventType.SPOTIFY_PLAYBACK_CHANGED:
+        elif ev.type in (EventType.SPOTIFY_PLAYBACK_CHANGED, EventType.MEDIA_CHANGED):
             self._update_tint()
 
     def _update_tint(self):
-        url = ui_bus.spotify.get("image_large") or ui_bus.spotify.get("image") or ""
+        url = ui_bus.now_playing().get("cover", "")
         c = covers.color(url)
         if c is None and url:
-            covers.get(url, lambda _pm: self._update_tint())
+            covers.get(url, lambda pm: pm is not None and self._update_tint())
         self._tint = c
         self.update()
 
@@ -136,3 +137,5 @@ class SpotifyWidget(QWidget):
         self.show()
         motion.fade_in(self.player, motion.SLOW)
         actions.refresh_spotify()
+        from modules.desktop.media import media
+        media.start()

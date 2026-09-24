@@ -65,41 +65,85 @@ def _ask_which(retry: Callable[[], Reply]) -> Optional[Reply]:
     amb = controller.last_ambiguity
     if not amb or time.time() - amb[2] > 5:
         return None
-    what, cands, _ = amb
+    what, cands = amb[0], amb[1]
+    flags = amb[3] if len(amb) > 3 else {}
     controller.last_ambiguity = None
     from modules.vision.screen import app_name
     d = controller.desktop
-    mons = d.monitors()
+    try:
+        mons = d.monitors()
+    except Exception:
+        mons = []
     opts = []
     for i, w in enumerate(cands[:6]):
         title = re.sub(r"^\(\d+\)\s*", "", w.title)
         title = re.sub(r"\s*[-–]\s*(Opera|Google Chrome|Microsoft Edge|Mozilla Firefox|Brave)$", "", title)
-        where = ""
-        if len(mons) > 1:
+        where, m = "", None
+        if w.minimized:
+            where = ", minimized"
+        elif len(mons) > 1:
             m = next((x for x in mons if x.index == w.monitor), None)
-            where = f" on {d.monitor_label(m).replace('your ', 'your ')}" if m else ""
+            where = f" on {d.monitor_label(m)}" if m else ""
         opts.append(ChoiceOption(label=f"{title[:45]}{where}",
                                  keywords=f"{title} {app_name(w.process)} monitor {w.monitor} "
                                           f"{'main primary' if m and m.primary else 'second other'}",
                                  value=w.hwnd))
+    if what == "browser":
+        opts.append(ChoiceOption(label="a new window", keywords="new fresh another open a new window", value="new"))
     spoken = "; ".join(f"{i + 1}, {o.label}" for i, o in enumerate(opts))
-    question = f"I found {len(cands)} {what} windows: {spoken}. Which one should I use?"
+    if flags.get("offscreen"):
+        question = f"None of your {what} windows are on screen. Should I use {spoken}?"
+    else:
+        question = f"I found {len(cands)} {what} windows: {spoken}. Which one should I use?"
+    if flags.get("remember"):
+        question += " I'll keep using it after this."
 
     def chosen(hwnd):
+        from modules.desktop import browser
+        if hwnd == "new":
+            try:
+                res = browser.open_default_browser()
+                if res.get("hwnd") and flags.get("remember"):
+                    browser.remember(d._info(res["hwnd"]))
+            except Exception as e:
+                return f"I couldn't open a new browser window: {e}"
+            return retry().text
         try:
-            d._activate(d._info(hwnd))
+            info = d._activate(d._info(hwnd))
         except Exception as e:
             return f"I couldn't switch to that window: {e}"
+        if flags.get("remember"):
+            browser.remember(info)
         return retry().text
 
     choices.ask(PendingChoice(question, opts, chosen))
     return Reply(question, ok=True, expects_reply=True)
 
 
+def _offer_browser(retry: Callable[[], Reply]) -> Optional[Reply]:
+    """No browser is open: offer to start one, then carry on with the request."""
+    from modules.desktop import browser
+    if time.time() - browser.last_no_browser > 5:
+        return None
+    browser.last_no_browser = 0.0
+    from modules.agent.confirm import PendingAction, confirmations
+    from modules.desktop.controller import default_browser_name
+    name = (default_browser_name() or "your browser").title().replace("Your Browser", "your browser")
+
+    def run():
+        try:
+            browser.open_default_browser()
+        except Exception as e:
+            return f"I couldn't open {name}: {e}"
+        return retry().text
+    confirmations.ask(PendingAction(f"open {name}", run, tool="desktop.open_app"))
+    return Reply(f"You don't have a browser open. Should I open {name}?", ok=True, expects_reply=True)
+
+
 def _tool(tool: str, describe: str, on_ok, retry: Callable[[], Reply] = None, **kw) -> Reply:
     rep = run_tool(tool, describe, on_ok, **kw)
     if not rep.ok and retry is not None:
-        asked = _ask_which(retry)
+        asked = _ask_which(retry) or _offer_browser(retry)
         if asked:
             return asked
     return rep
@@ -324,8 +368,9 @@ def parse(text: str) -> Optional[Intent]:
                         r"(?:web\s+)?browser$", t):
         def run_new_tab():
             desktop_context.note_domain("browser")
-            return run_tool("desktop.new_tab", "open a new tab",
-                            lambda r: "Started your browser." if r.get("started") else "Opened a new tab.")
+            return _tool("desktop.new_tab", "open a new tab",
+                         lambda r: "Started your browser." if r.get("started") else "Opened a new tab.",
+                         retry=run_new_tab)
         return Intent("browser.new_tab", run_new_tab, "browser")
 
     # ---- act on the element SAINT just found ----------------------------------------------
@@ -532,6 +577,34 @@ def parse(text: str) -> Optional[Intent]:
 
     # ---- browser -------------------------------------------------------------------------
     from modules.desktop import browser
+    # Which browser window SAINT uses ("use this browser from now on", "use a different browser")
+    if re.match(r"^(?:use|pick|choose|switch to|change to)\s+(?:a\s+)?(?:different|another|other)\s+"
+                r"(?:web\s+)?browser(?:\s+window)?$|^(?:ask me|forget) which browser(?: window)?(?: to use)?$|"
+                r"^(?:stop using|don'?t use) (?:that|this) browser(?: window)?$", t):
+        def run_reset_browser():
+            browser.forget_preference()
+            desktop_context.note_domain("browser")
+            from modules.desktop.controller import desktop
+            wins = browser.on_screen(desktop.app_windows("browser"))
+            if len(wins) > 1:
+                from modules.desktop.controller import AmbiguousWindow
+                AmbiguousWindow("browser", wins, remember=True)          # records the candidates to ask about
+                asked = _ask_which(lambda: Reply("Okay, I'll use that one from now on."))
+                if asked:
+                    return asked
+            return Reply("Okay — I'll ask which browser window to use next time there's more than one.")
+        return Intent("browser.forget_choice", run_reset_browser, "browser")
+    if re.match(r"^(?:use|keep using|always use)\s+(?:this|that|my current|the current)\s+(?:web\s+)?browser"
+                r"(?:\s+window)?(?:\s+from now on|\s+for everything)?$", t):
+        def run_pick_browser():
+            from modules.desktop.controller import desktop
+            w = desktop.target_window()
+            if w is None or not desktop.is_browser(w):
+                return Reply("Bring the browser window you want to the front, then say that again.", ok=False)
+            browser.remember(w)
+            desktop_context.note_domain("browser")
+            return Reply(f"Okay — I'll use {_title({'title': w.title})} for browser requests.")
+        return Intent("browser.remember_choice", run_pick_browser, "browser")
     m = re.match(r"^(?:search|look up|find|google)\s+(?:on\s+)?(youtube|google|amazon|wikipedia|reddit|github|twitch|"
                  r"bing|duckduckgo|ebay|google maps|maps|images|the web)\s+(?:for\s+)?(.+)$", t) or \
         re.match(r"^(?:search|look up|find|search for)\s+(.+?)\s+on\s+(youtube|google|amazon|wikipedia|reddit|github|"
@@ -600,16 +673,18 @@ def parse(text: str) -> Optional[Intent]:
         def run_browser_with():
             desktop_context.note_domain("browser")
             from modules.desktop.browser import site_url
+            from modules.desktop.controller import desktop
+            new = not desktop.app_windows("browser")        # they asked to open it: no "should I?"
             url = site_url(target)
             if url:
                 return _tool("desktop.open_url", f"open {target}",
                              lambda r: f"Opened {r.get('site', target)}.",
-                             retry=run_browser_with, url=url)
+                             retry=run_browser_with, url=url, new_window=new)
             # Fall back to a search on the target text.
             import urllib.parse
             return _tool("desktop.open_url", f"search for {target}",
                          lambda r: f"Searched for {target}.",
-                         retry=run_browser_with,
+                         retry=run_browser_with, new_window=new,
                          url="https://duckduckgo.com/?q=" + urllib.parse.quote_plus(target))
         return Intent("browser.open_url", run_browser_with, "browser")
 

@@ -197,10 +197,12 @@ DEFAULT_CONFIG = {
         "halo_all_screens": False,
         "edge_tab": True,                 # rest the cursor at the top-centre edge to reveal the SAINT tab
         "hotkey": "alt+`",                # opens / closes the overlay from anywhere (the key left of 1)
+        "layout": {},                     # card -> [x, y, w, h] (fractions of the screen), set by dragging
     },
     "widgets": {
         "spotify": False,                 # floating always-on-top now-playing widget
         "spotify_pos": None,              # [x, y], remembered after dragging
+        "any_media": True,                # show any app's media (YouTube, VLC, ...), not only Spotify
     },
 
     # ------------------------------------------------------------------
@@ -246,6 +248,7 @@ DEFAULT_CONFIG = {
         # for "click X" / "scroll down" before the foreground window wins.
         "context_window_ttl_sec": 45.0,
         "multi_window_policy": "ask",     # several matching windows: "ask" which one | "recent" = use the latest
+        "preferred_browser": None,        # the browser window picked last time (kept until it closes)
         "max_type_length": 500,
         "apps": {},                       # custom "name": "path or URI" launch aliases
     },
@@ -293,6 +296,7 @@ DEFAULT_CONFIG = {
         "tray": True,                     # tray balloon notifications
         "close_to_tray": True,            # closing the window keeps SAINT running
         "start_minimized": False,
+        "actions": True,                  # small pill at the bottom of the screen when SAINT does something
     },
 
     # ------------------------------------------------------------------
@@ -315,6 +319,9 @@ DEFAULT_CONFIG = {
     "memory": {
         "enabled": True,
         "auto_extract": True,             # learn explicit facts ("my favorite X is Y")
+        "learn_passive": True,            # pick up plain statements ("I'm a nurse", "I hate horror movies")
+        "learn_with_ai": True,            # let the local model find lasting facts in what you say
+        "learned_ttl_days": 60,           # learned facts that never come up again fade after this
         "inject_context": True,           # give the LLM relevant stored memories
         "max_context_items": 6,
         "store_conversations": False,     # do not blindly store every turn

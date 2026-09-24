@@ -42,6 +42,35 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
+**Latest:**
+
+- **Rearrange the overlay.** Drag any card in the <kbd>Alt</kbd>+<kbd>`</kbd> overlay by its title bar to
+  move it, or drag an edge or corner to resize it. The layout is remembered; *Reset layout* puts it back.
+- **Action notices.** A small pill at the bottom of the screen shows what SAINT is doing ("YouTube · 1.5x
+  speed", "Search YouTube for lofi") and whether it worked. Click-through, never steals focus.
+- **Switches you can read.** Every on/off setting is now a switch with a plain *On* / *Off*. The Halo,
+  action notices and the mini player apply the moment you flip them — and show themselves (the Halo glows
+  for a few seconds, even over the overlay; a sample notice pops up), so you can tell without leaving
+  the menu. All three are also switches in the overlay.
+- **YouTube, the way you'd use it.** "Theater mode", "full screen", "1.5x speed", "normal speed",
+  "skip ahead 30 seconds", "captions on", "next video", "next chapter", "mute", "jump to 50 percent",
+  "set the quality to 1080p", "turn off autoplay", "loop this video", "sleep timer 30 minutes",
+  "skip the ad", "like this video"… SAINT uses YouTube's own keyboard shortcuts, and its player menus for
+  the settings that have none. While a YouTube tab is in front, bare commands ("pause", "faster",
+  "mute") mean the video.
+- **The mini player shows anything that's playing** — a YouTube video, VLC, a browser tab, not just
+  Spotify — with its artwork, progress and working controls (through Windows' media controls).
+- **No more "which browser?" every time.** One browser window on your screen: SAINT just uses it.
+  Several: it asks once and keeps using the one you picked until that window closes ("use a different
+  browser" to change it). None on screen: it offers the minimized ones or a new window; no browser at
+  all: it offers to open yours.
+- **Memory that learns, and a profile of you.** Besides what you tell it outright, SAINT now picks up
+  things you mention in passing ("I'm a nurse", "I hate horror movies", "my sister's name is Mia") and,
+  optionally, lets the local model find lasting facts in what you say. Learned facts are marked as such,
+  get stronger when they come up again and fade if they never do; a guess never overwrites something you
+  said. The Memory page opens with your profile: who you are, likes, dislikes, people, projects,
+  routines, music taste and usage habits, plus a short summary written from those facts.
+
 A ground-up rewrite of the interface:
 
 - New minimal design system: near-black surfaces, hairline borders, one accent, a monoline icon set,
@@ -292,6 +321,7 @@ on my second screen".
 | "…play something I'd like" · "play something similar" · "recommend something similar" | Personalised picks from your real listening history |
 | "…add this to my chill playlist" · "queue Harder Better Faster Stronger" | Real playlist/queue changes |
 | "…my favorite programming language is Python" | Stored in long-term memory |
+| "I'm a software engineer" · "I hate horror movies" · "my sister's name is Mia" (in passing) | Learned quietly for your profile (Settings → Memory) |
 | "…what programming language do I like?" | Answered from memory ("Your favorite programming language is Python.") |
 | "…forget my favorite programming language" · "what do you know about me?" | Delete / list memories |
 | "…remind me at 5 PM to work on AIDE" · "remind me in 30 minutes" · "set a timer for 10 minutes" | One-time reminders |
@@ -303,7 +333,9 @@ on my second screen".
 | "…open Discord" · "switch to Spotify" · "close Notepad" (asks first) | Apps and windows |
 | "…move this window to my second monitor" · "snap Chrome to the left" · "maximize this window" | Window placement |
 | "…type hello world into the search box" · "press ctrl+t" · "click the send button" | Keyboard and UI elements |
-| "…open my browser" · "open YouTube" · "search YouTube for Kendrick Lamar" | Reuses your browser window (asks if several) · site search |
+| "…open my browser" · "open YouTube" · "search YouTube for Kendrick Lamar" | Uses the browser on your screen (asks once if several, then remembers) · site search |
+| "…use a different browser" · "use this browser from now on" | Change which browser window SAINT uses |
+| "…theater mode" · "1.5x speed" · "skip ahead 30 seconds" · "captions on" · "next video" · "set the quality to 1080p" · "turn off autoplay" · "loop this video" · "skip the ad" | YouTube's own shortcuts and player menus |
 | "…click the first video" · "in that window, click the first result" · "click the button in the bottom right" | Finds visible results/elements (UI Automation) and verifies the page changed |
 | "…scroll down" · "go back" · "refresh" · "copy that" · "put it in fullscreen" · "double click the recycle bin" | Scrolling, navigation, editing keys, element actions |
 | "…move the browser to my second monitor" · "make it bigger" · "put it on the left" · "put this window next to Spotify" · "close all the browser windows" | Window management (closing asks first) |
@@ -459,13 +491,27 @@ live playback wasn't exercised. Connect your account in Settings to use it.
 | Scenes | `data/scenes.json` | Your scenes. |
 | History | `data/history.jsonl` | What you asked, how (voice, typed, hot-word, scene), SAINT's reply, tools used and timings. Powers the History page. Local only; turn it off or cap its size in Settings → Memory, clear or export it on the History page. |
 
-SAINT only stores clear personal statements ("my favorite X is Y", "call me Sam", "I live in…",
-"remember that…"). It does not store every conversation. Answers such as "Your favorite programming
-language is Python" come straight from the database. The LLM receives only the relevant stored
-memories and is told not to invent others.
+Memories come from two places:
 
-Inspect, add, edit and delete memories on the **Memory** page, or by voice ("what do you know about
-me?", "forget my …"). Settings → Memory controls extraction, context injection and wiping.
+- **Told** — clear statements ("my favorite X is Y", "call me Sam", "I live in…", "remember that…").
+  Kept until you delete them.
+- **Learned** — things you mention in passing ("I'm a nurse", "I'm learning Japanese", "I hate horror
+  movies"), and — with *Learn with the AI* on — lasting facts the local model finds in what you say
+  (it runs after SAINT has answered, on your PC). Learned memories carry a confidence, grow stronger
+  each time they come up again, and fade after *Forget unconfirmed after* (60 days by default) if they
+  never do. A learned guess never overwrites something you told SAINT. *Keep it* on the Memory page
+  makes one permanent.
+
+SAINT does not store every conversation. Answers such as "Your favorite programming language is Python"
+come straight from the database. The LLM gets the few core facts about you plus the memories relevant
+to the request, and is told not to invent others.
+
+The **Memory** page opens with your **profile**: name and what you do, likes, dislikes, people and pets,
+projects and goals, routines, music taste (from Spotify's listening memory) and habits (when and how you
+use SAINT, the sites and apps you ask for — from the local history), with a short summary the local
+model writes from exactly those facts (cached in `data/memory/profile.json`). Below it, every memory
+with how SAINT knows it; add, edit, delete, or confirm. By voice: "what do you know about me?", "forget
+my …". Settings → Memory controls learning, context injection and wiping.
 
 ---
 
@@ -558,7 +604,7 @@ doing.
 | **Music** | A cover-tinted now-playing hero (sharp album art, live progress, shuffle / previous / play / next / like / volume), the hands-free words, your queue and quick actions. |
 | **Automations** | **Scenes** (editor with templates, voice phrase, steps, optional schedule, run now) and **Scheduled** reminders and commands. |
 | **History** | Totals, today, last 7 days, how much you use SAINT hands-free, a 30-day chart, your most-used tools and a searchable, filterable timeline. Export or clear it. |
-| **Memory** | Long-term memories (search, filter, add, edit, delete) and your music memory. |
+| **Memory** | Your profile (who you are, likes, people, projects, routines, music and habits, with a written summary), then every memory — told or learned — to search, filter, add, edit, confirm or delete. |
 | **Activity** | Every event, live, with filters (voice, agent & tools, Spotify, problems) and pause. |
 | **System** | Health (status, CPU, memory, uptime, language model reachability, STT, voice, wake word), voice-pipeline latency against goals, and module status. |
 | **Settings** | General · Voice · AI · Wake Word · Spotify · Memory · Automation · Desktop Control · Appearance · Advanced, with search. |

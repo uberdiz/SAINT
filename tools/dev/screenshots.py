@@ -75,6 +75,8 @@ def main():
     app = QApplication(sys.argv)
     from core.module_manager import module_manager  # noqa: F401
     from core.events import EventType
+    from modules.desktop.media import media
+    media.start = lambda: None          # never show what's really playing on this PC
     from modules.automation.scheduler import scheduler
     from modules.automation.timeparse import parse_schedule
     for what, when in (("Stand up and stretch", "in 20 minutes"), ("Check the calendar", "every weekday at 8:30")):

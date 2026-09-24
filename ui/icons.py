@@ -70,6 +70,17 @@ PATHS = {
     "calendar": '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
     "arrow-up": '<path d="m6 15 6-6 6 6"/>',
     "arrow-down": '<path d="m6 9 6 6 6-6"/>',
+    "globe": '<circle cx="12" cy="12" r="9.5"/><path d="M2.5 12h19"/>'
+             '<path d="M12 2.5a14.5 14.5 0 0 1 0 19 14.5 14.5 0 0 1 0-19z"/>',
+    "cursor": '<path d="m4 4 7.07 17 2.51-7.39L21 11.07z"/>',
+    "user": '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+    "grip": f'<circle {_F} cx="9" cy="6" r="1.2"/><circle {_F} cx="15" cy="6" r="1.2"/>'
+            f'<circle {_F} cx="9" cy="12" r="1.2"/><circle {_F} cx="15" cy="12" r="1.2"/>'
+            f'<circle {_F} cx="9" cy="18" r="1.2"/><circle {_F} cx="15" cy="18" r="1.2"/>',
+    "layout": '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>',
+    "refresh": '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/>'
+               '<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
+    "video": '<rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3"/>',
 }
 
 

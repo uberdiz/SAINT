@@ -26,6 +26,7 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
         "voice": {"stt_backend": "mock", "tts_backend": "mock", "auto_start": False,
                   "wake_word_enabled": False, "wake_word_chime": False},
         "desktop": {"enabled": False},
+        "widgets": {"any_media": False},          # never read this PC's real media sessions
         "automation": {"speak_reminders": False},
         "spotify": {"client_id": ""},
         "logging": {"level": "Errors Only"},

@@ -119,11 +119,16 @@ class EdgeTab(QWidget):
 
 class Halo(QObject):
     open_requested = Signal()
+    preview_ended = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._strips = []
         self._visible = False
+        self.previewing = False
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._end_preview)
         self._t_last = time.monotonic()
         self._t = 0.0
         self._head = 0.0
@@ -171,6 +176,20 @@ class Halo(QObject):
     def visible(self):
         return self._visible
 
+    def preview(self, ms: int = 3200):
+        """Show the Halo right now for a moment — above everything, even the
+        overlay — so a Settings / overlay switch visibly does something."""
+        self.previewing = True
+        self._flash = 1.0
+        self.set_visible(True)
+        for s in self._strips:
+            s.raise_()
+        self._preview_timer.start(ms)
+
+    def _end_preview(self):
+        self.previewing = False
+        self.preview_ended.emit()
+
     def refresh(self):
         """Re-read screen / edge-tab settings while visible."""
         if not self._visible:
@@ -211,8 +230,9 @@ class Halo(QObject):
         p = current_palette()
         state = ui_bus.state.get("state", "offline")
         c = QColor(state_color(state, p))
-        if state in ("wake_listening", "idle") and ui_bus.spotify.get("is_playing"):
-            url = ui_bus.spotify.get("image_large") or ui_bus.spotify.get("image") or ""
+        np = ui_bus.now_playing()
+        if state in ("wake_listening", "idle") and np.get("is_playing"):
+            url = np.get("cover", "")
             cover = covers.color(url)
             if cover is None and url:
                 covers.get(url, lambda _pm: None)

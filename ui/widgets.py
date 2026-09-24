@@ -13,9 +13,9 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import (QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer,
                             QVariantAnimation, Signal)
-from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QFontMetrics, QLinearGradient, QPainter,
+from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QFont, QFontMetrics, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap, QRadialGradient)
-from PySide6.QtWidgets import (QButtonGroup, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser,
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser,
                                QToolButton, QVBoxLayout, QWidget)
 
 from ui import icons, motion
@@ -200,6 +200,99 @@ class IconButton(QToolButton):
         base = p.bg if self._role == "inverse" else getattr(p, self._role, p.muted)
         self.setIcon(icons.icon(self._name, base, self._size,
                                 active_color=None if self._role == "inverse" else p.text))
+
+
+class Switch(QCheckBox):
+    """An on/off switch: a pill track that fills with the accent and a knob
+    that slides across, plus the label and a plain "On" / "Off" — so the
+    state reads at a glance. Same API as QCheckBox (toggled, isChecked)."""
+
+    TRACK_W, TRACK_H = 38, 22
+
+    def __init__(self, text: str = "", parent=None, state_words: bool = True):
+        super().__init__(text, parent)
+        self._pos = 0.0
+        self._words = state_words
+        self.setCursor(Qt.PointingHandCursor)
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(motion.BASE)
+        self._anim.setEasingCurve(motion.EASE)
+        self._anim.valueChanged.connect(self._set_pos)
+        self.toggled.connect(self._slide)
+
+    def setChecked(self, on: bool):
+        super().setChecked(on)
+        self._anim.stop()
+        self._set_pos(1.0 if on else 0.0)
+
+    def _slide(self, on: bool):
+        if not motion.enabled():
+            self._set_pos(1.0 if on else 0.0)
+            return
+        self._anim.stop()
+        self._anim.setStartValue(self._pos)
+        self._anim.setEndValue(1.0 if on else 0.0)
+        self._anim.start()
+
+    def _set_pos(self, v):
+        self._pos = float(v)
+        self.update()
+
+    def _state_word(self) -> str:
+        return ("On" if self.isChecked() else "Off") if self._words else ""
+
+    def sizeHint(self):
+        fm = self.fontMetrics()
+        text = self.text() + ("   " + "Off" if self._words else "")
+        w = self.TRACK_W + (10 + fm.horizontalAdvance(text) if text.strip() else 0)
+        return QSize(w + 4, max(self.TRACK_H + 4, fm.height() + 6))
+
+    def minimumSizeHint(self):
+        return self.sizeHint()
+
+    def hitButton(self, pos):
+        return self.rect().contains(pos)
+
+    def paintEvent(self, _):
+        p = current_palette()
+        g = QPainter(self)
+        g.setRenderHint(QPainter.Antialiasing)
+        h, w = self.TRACK_H, self.TRACK_W
+        y = (self.height() - h) / 2
+        track = QRectF(1, y, w, h)
+        off, on = QColor(p.border_strong), QColor(p.accent)
+        t = self._pos
+        mix = QColor(int(off.red() + (on.red() - off.red()) * t), int(off.green() + (on.green() - off.green()) * t),
+                     int(off.blue() + (on.blue() - off.blue()) * t))
+        if not self.isEnabled():
+            mix.setAlpha(110)
+        g.setPen(Qt.NoPen)
+        g.setBrush(mix)
+        g.drawRoundedRect(track, h / 2, h / 2)
+        if self.hasFocus():
+            g.setPen(QPen(with_alpha(p.accent, 120), 2))
+            g.setBrush(Qt.NoBrush)
+            g.drawRoundedRect(track.adjusted(-2, -2, 2, 2), h / 2 + 2, h / 2 + 2)
+        d = h - 6
+        kx = track.left() + 3 + (w - 6 - d) * t
+        g.setPen(Qt.NoPen)
+        g.setBrush(QColor(0, 0, 0, 50))
+        g.drawEllipse(QRectF(kx, y + 4, d, d))
+        g.setBrush(QColor(p.on_accent if t > 0.5 else "#ffffff"))
+        g.drawEllipse(QRectF(kx, y + 3, d, d))
+        x = w + 11
+        if self.text():
+            g.setPen(QColor(p.text if self.isEnabled() else p.faint))
+            g.drawText(QRectF(x, 0, self.width() - x, self.height()), Qt.AlignVCenter | Qt.AlignLeft, self.text())
+            x += self.fontMetrics().horizontalAdvance(self.text()) + 10
+        word = self._state_word()
+        if word:
+            g.setPen(QColor(p.accent if self.isChecked() else p.faint))
+            f = g.font()
+            f.setWeight(QFont.DemiBold)
+            g.setFont(f)
+            g.drawText(QRectF(x, 0, self.width() - x, self.height()), Qt.AlignVCenter | Qt.AlignLeft, word)
+        g.end()
 
 
 class Segmented(QFrame):
@@ -500,6 +593,7 @@ class CoverCache(QObject):
         self._pix = OrderedDict()
         self._color = {}
         self._waiting = {}
+        self._failed = set()          # never retried in a loop
 
     def put(self, url: str, pm: QPixmap):
         self._pix[url] = pm
@@ -516,12 +610,18 @@ class CoverCache(QObject):
             self._pix.move_to_end(url)
             cb(self._pix[url])
             return
+        if url in self._failed:
+            cb(None)
+            return
         waiting = self._waiting.setdefault(url, [])
         waiting.append(cb)
         if len(waiting) > 1:
             return
 
         def fetch():
+            if url.startswith("media://"):         # a thumbnail Windows gave us (modules/desktop/media.py)
+                from modules.desktop.media import media
+                return media.thumbnail(url)
             import requests
             r = requests.get(url, timeout=10)
             r.raise_for_status()
@@ -537,6 +637,7 @@ class CoverCache(QObject):
             self.put(url, pm)
         else:
             pm = None
+            self._failed.add(url)
         for cb in self._waiting.pop(url, []):
             try:
                 cb(pm)

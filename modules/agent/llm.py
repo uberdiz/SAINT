@@ -36,7 +36,7 @@ _ACTION_HINT = re.compile(
     r"remind|reminder|timer|alarm|schedule|every (day|morning|week)|tomorrow|"
     r"remember|forget|note|jot|write down|nudge|my (favou?rite|name)|do i (like|prefer)|"
     r"open|launch|close|quit|switch|window|monitor|screen|type|press|click|minimi|maximi|snap|"
-    r"app|chrome|discord|browser|desktop|what'?s on)\b", re.I)
+    r"app|chrome|discord|browser|desktop|what'?s on|youtube|video|captions|subtitles|playback|speed)\b", re.I)
 
 _TOOL_SYSTEM = (
     "You can act on the user's PC through the provided tools. Call a tool ONLY through the "
@@ -192,6 +192,22 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
                     spoken.append(question)
                     info["expects_reply"] = True
                     return "".join(spoken), info
+                if res.error_code in ("AMBIGUOUS_WINDOW", "NO_BROWSER"):
+                    # Ask which window (or whether to open a browser), then run
+                    # the same call again with the answer.
+                    from modules.agent.desktop_intents import _ask_which, _offer_browser
+                    from modules.agent.router import Reply
+                    tname, targs = tool.name, dict(res.args or args)
+
+                    def again(tname=tname, targs=targs):
+                        r2 = registry.execute(tname, **targs)
+                        return Reply("Done." if r2.success else (r2.error or "That didn't work."), ok=r2.success)
+                    asked = _ask_which(again) or _offer_browser(again)
+                    if asked is not None:
+                        on_token(asked.text)
+                        spoken.append(asked.text)
+                        info["expects_reply"] = True
+                        return "".join(spoken), info
                 result = res.to_dict()
                 result["result"] = _compact(result.get("result"))
             msgs.append({"role": "tool", "content": json.dumps(result, default=str)[:4000], "tool_name": name})

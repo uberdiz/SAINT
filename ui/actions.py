@@ -71,6 +71,24 @@ def fetch_queue(limit: int = 14):
     return out
 
 
+def transport(action: str, on_error=None):
+    """play_pause / next / previous on whatever the mini player is showing:
+    Spotify through its API, anything else through Windows' media controls."""
+    np = ui_bus.now_playing()
+    if np.get("source") == "spotify":
+        if action == "play_pause":
+            play_pause(on_error)
+        else:
+            spotify("spotify.next" if action == "next" else "spotify.previous", on_error)
+        return
+
+    def go():
+        from modules.desktop.media import media
+        if not media.control(action, np.get("app_id", "")):
+            raise RuntimeError(f"{np.get('app') or 'That app'} didn't accept that.")
+    run_async(go, None, lambda e: on_error and on_error(str(e)))
+
+
 def hotwords_on() -> bool:
     return bool(config.get("voice.music_hotwords", True))
 

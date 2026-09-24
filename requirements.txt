@@ -30,6 +30,13 @@ pywin32>=306
 uiautomation>=2.0.18
 pillow>=10.0.0
 
+# What's playing in any app (mini player): Windows' media controls
+winrt-runtime>=3.0
+winrt-Windows.Media.Control>=3.0
+winrt-Windows.Foundation>=3.0
+winrt-Windows.Foundation.Collections>=3.0
+winrt-Windows.Storage.Streams>=3.0
+
 # Spotify login tokens are stored in the Windows Credential Manager
 keyring>=25.0.0
 

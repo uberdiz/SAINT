@@ -14,11 +14,23 @@ Facts are stored as key/value pairs when possible ("favorite programming
 language" = "Python") so that re-stating a fact updates it instead of creating
 a duplicate, and recall answers from exactly what was stored. SAINT only
 "remembers" what is in this database — there is no LLM-invented memory.
+
+How memories are acquired and kept:
+  * told     — the user said it outright ("remember...", "my X is Y").
+               Confidence 1.0, kept until the user deletes it.
+  * learned  — picked up from conversation (modules/memory/learner.py):
+               plain statements ("I'm a nurse", "I hate horror movies") and
+               facts the local model extracts. Lower confidence; saying it
+               again reinforces it; unconfirmed ones fade after
+               memory.learned_ttl_days (``consolidate``).
+Every memory keeps how often it was mentioned and when it was last seen,
+which the Memory page and the profile (modules/memory/profile.py) show.
 """
 
 import logging
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -30,9 +42,18 @@ log = logging.getLogger("saint.memory")
 _CATEGORY_TYPES = {
     "fact": MemoryType.LONG_TERM,
     "personal": MemoryType.LONG_TERM,
+    "identity": MemoryType.LONG_TERM,
+    "person": MemoryType.LONG_TERM,
+    "routine": MemoryType.LONG_TERM,
     "preference": MemoryType.PREFERENCE,
+    "interest": MemoryType.PREFERENCE,
+    "dislike": MemoryType.PREFERENCE,
     "project": MemoryType.PROJECT,
+    "goal": MemoryType.PROJECT,
 }
+CATEGORIES = list(_CATEGORY_TYPES)
+
+TOLD, LEARNED = "told", "learned"
 _SEARCHABLE = [MemoryType.LONG_TERM, MemoryType.PREFERENCE, MemoryType.PROJECT]
 
 _STOP = {"the", "a", "an", "my", "your", "is", "are", "was", "what", "whats", "do", "does", "i", "me",
@@ -80,6 +101,10 @@ def _expand(tokens: List[str]) -> set:
     return out
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"\W+", " ", (text or "").lower()).strip()
+
+
 def second_person(text: str) -> str:
     """Rewrite a stored first-person fact for speaking back to the user."""
     rules = [(r"\bI am\b", "you are"), (r"\bI'm\b", "you're"), (r"\bI was\b", "you were"),
@@ -121,8 +146,13 @@ class MemoryService:
     # Write
     # ------------------------------------------------------------------ #
     def remember(self, content: str = "", key: str = "", value: str = "",
-                 category: str = "fact", source: str = "user") -> Dict[str, Any]:
-        """Store (or update) a memory. Returns {"id", "updated", "previous", ...}."""
+                 category: str = "fact", source: str = "user", confidence: float = 1.0,
+                 how: str = TOLD) -> Dict[str, Any]:
+        """Store (or update / reinforce) a memory. Returns {"id", "updated", "previous", ...}.
+
+        ``how`` is TOLD (the user said it outright) or LEARNED (picked up from
+        conversation). A learned fact never overwrites a different told value
+        for the same key; saying the same thing again reinforces it."""
         category = category if category in _CATEGORY_TYPES else "fact"
         mtype = _CATEGORY_TYPES[category]
         key = normalize_key(key) if key else ""
@@ -132,28 +162,78 @@ class MemoryService:
             if not (key and value):
                 raise ValueError("Nothing to remember.")
             content = f"My {key} is {value}"
+        now = time.time()
         with self._lock:
-            existing = self.get_by_key(key) if key else self._find_duplicate(content)
+            existing = (self.get_by_key(key) if key else None) or self._find_duplicate(content)
             if existing is not None:
-                previous = existing.metadata.get("value") or existing.content
                 meta = dict(existing.metadata)
+                previous = meta.get("value") or existing.content
+                same = _norm(previous) == _norm(value or content) or _norm(existing.content) == _norm(content)
+                was = meta.get("how", TOLD)
+                if how == LEARNED and not same and was == TOLD:
+                    # A guess never overwrites what the user said.
+                    log.info("memory.learned_conflict id=%s key=%r kept=%r", existing.id, key, previous)
+                    return {"id": existing.id, "updated": False, "kept": True, "previous": previous,
+                            "key": key, "value": meta.get("value", ""), "content": existing.content}
                 history = list(meta.get("history", []))[-4:]
-                if previous and previous != (value or content):
+                if previous and not same:
                     history.append(previous)
+                now_how = TOLD if how == TOLD or (was == TOLD and same) else LEARNED
                 meta.update({"key": key or meta.get("key", ""), "value": value or meta.get("value", ""),
-                             "category": category, "history": history})
-                self.db.update(existing.id, content=content, metadata=meta)
+                             "category": category if how == TOLD or not meta.get("category") else meta["category"],
+                             "history": history, "mentions": int(meta.get("mentions", 1)) + (1 if same else 0),
+                             "last_seen": now, "how": now_how})
+                conf = 1.0 if now_how == TOLD else min(0.95, max(existing.confidence, confidence) + (0.15 if same else 0))
+                self.db.update(existing.id, content=existing.content if (same and how == LEARNED) else content,
+                               metadata=meta, confidence=conf)
                 event_bus.emit_event(EventType.MEMORY_UPDATED, {"id": existing.id, "key": key,
-                                                                "category": category})
-                log.info("memory.updated id=%s key=%r", existing.id, key)
-                return {"id": existing.id, "updated": True, "previous": previous,
+                                                                "category": category, "how": now_how})
+                log.info("memory.%s id=%s key=%r", "reinforced" if same else "updated", existing.id, key)
+                return {"id": existing.id, "updated": not same, "reinforced": same, "previous": previous,
                         "key": key, "value": value, "content": content}
             entry_id = self.db.store(mtype, content,
-                                     metadata={"key": key, "value": value, "category": category},
-                                     source=source, tags=[category] + ([key] if key else []))
-        event_bus.emit_event(EventType.MEMORY_STORED, {"id": entry_id, "key": key, "category": category})
-        log.info("memory.stored id=%s category=%s key=%r", entry_id, category, key)
+                                     metadata={"key": key, "value": value, "category": category, "how": how,
+                                               "mentions": 1, "last_seen": now},
+                                     source=source, confidence=1.0 if how == TOLD else max(0.1, min(0.95, confidence)),
+                                     tags=[category] + ([key] if key else []))
+        event_bus.emit_event(EventType.MEMORY_STORED, {"id": entry_id, "key": key, "category": category, "how": how})
+        log.info("memory.stored id=%s category=%s key=%r how=%s", entry_id, category, key, how)
         return {"id": entry_id, "updated": False, "key": key, "value": value, "content": content}
+
+    def confirm(self, entry_id: int) -> bool:
+        """The user vouched for a learned memory (Memory page): it becomes told."""
+        entry = self.db.retrieve(int(entry_id))
+        if entry is None:
+            return False
+        ok = self.db.update(entry.id, metadata=dict(entry.metadata, how=TOLD, last_seen=time.time()),
+                            confidence=1.0)
+        if ok:
+            event_bus.emit_event(EventType.MEMORY_UPDATED, {"id": entry.id, "how": TOLD})
+        return ok
+
+    def consolidate(self, now: Optional[float] = None) -> Dict[str, int]:
+        """Retention pass: learned memories that were never confirmed or
+        repeated fade out after memory.learned_ttl_days (weak ones sooner,
+        often-mentioned ones later). What the user told SAINT is never
+        removed here."""
+        from core.config import config
+        now = now or time.time()
+        ttl = float(config.get("memory.learned_ttl_days", 60) or 60) * 86400
+        faded = kept = 0
+        for e in self.all():
+            if e.metadata.get("how", TOLD) != LEARNED:
+                continue
+            seen = float(e.metadata.get("last_seen") or e.updated_at)
+            life = ttl * (0.5 + e.confidence) * min(4, int(e.metadata.get("mentions", 1)))
+            if now - seen > life:
+                self.db.delete(e.id)
+                faded += 1
+            else:
+                kept += 1
+        if faded:
+            event_bus.emit_event(EventType.MEMORY_DELETED, {"faded": faded})
+            log.info("memory.consolidate faded=%d kept=%d", faded, kept)
+        return {"faded": faded, "kept": kept}
 
     def update(self, entry_id: int, content: Optional[str] = None, value: Optional[str] = None) -> bool:
         entry = self.db.retrieve(int(entry_id))
@@ -201,8 +281,10 @@ class MemoryService:
     def all(self, category: Optional[str] = None) -> List[MemoryEntry]:
         types = [_CATEGORY_TYPES[category]] if category in _CATEGORY_TYPES else _SEARCHABLE
         entries = self.db.all_of_types(types)
-        if category in ("fact", "personal"):
-            entries = [e for e in entries if e.metadata.get("category", "fact") == category]
+        if category in _CATEGORY_TYPES:
+            default = {MemoryType.LONG_TERM: "fact", MemoryType.PREFERENCE: "preference",
+                       MemoryType.PROJECT: "project"}
+            entries = [e for e in entries if e.metadata.get("category", default.get(e.type, "fact")) == category]
         return entries
 
     def get_by_key(self, key: str) -> Optional[MemoryEntry]:
@@ -215,11 +297,20 @@ class MemoryService:
         return None
 
     def _find_duplicate(self, content: str) -> Optional[MemoryEntry]:
-        norm = re.sub(r"\W+", " ", content.lower()).strip()
+        """The same statement, ignoring punctuation and small wording changes
+        ("I love hiking" / "I really love hiking")."""
+        norm = _norm(content)
+        toks = set(_tokens(content))
+        best, best_sim = None, 0.0
         for e in self.all():
-            if re.sub(r"\W+", " ", e.content.lower()).strip() == norm:
+            if _norm(e.content) == norm:
                 return e
-        return None
+            other = set(_tokens(e.content))
+            if toks and other:
+                sim = len(toks & other) / len(toks | other)
+                if sim > best_sim:
+                    best, best_sim = e, sim
+        return best if best_sim >= 0.8 and len(toks) >= 2 else None
 
     def recall(self, query: str, limit: int = 5, min_score: float = 0.5, strict: bool = True) -> List[Recall]:
         q = _tokens(query)
@@ -259,6 +350,17 @@ class MemoryService:
         """Relevant memories to give the LLM for this prompt."""
         hits = self.recall(prompt, limit=limit, min_score=0.75, strict=False)
         return [h.entry.content for h in hits]
+
+    def core_facts(self, limit: int = 8) -> List[str]:
+        """The few things always worth knowing (name, work, home, strongest
+        likes) — given to the model with every answer, so SAINT talks to the
+        user as someone it knows."""
+        order = {"identity": 0, "personal": 1, "person": 2, "preference": 3, "interest": 4, "project": 5,
+                 "goal": 5, "dislike": 6, "routine": 7, "fact": 8}
+        entries = [e for e in self.all() if e.confidence >= 0.6]
+        entries.sort(key=lambda e: (order.get(e.metadata.get("category", "fact"), 9),
+                                    -int(e.metadata.get("mentions", 1)), -e.updated_at))
+        return [e.content for e in entries[:limit]]
 
 
 memory_service = MemoryService()
