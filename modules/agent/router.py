@@ -103,6 +103,10 @@ def parse_system(text: str) -> Optional[Intent]:
     if _DISMISS.match(t.strip(" .!?,")):
         def run_dismiss():
             from modules.agent.confirm import choices
+            from core.cancel import cancel
+            if not t.startswith(("thank", "ok", "cool", "great", "got it", "no", "nah", "that", "nothing",
+                                 "i'm good", "im good", "all good")):
+                cancel.trip("current")
             confirmations.clear("dismissed")
             choices.clear()
             return Reply("You're welcome." if t.startswith("thank") else "Okay.")
@@ -1198,9 +1202,45 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
     browser window), the rest of the plan continues after the answer.
     """
     from modules.agent.confirm import choices
+    from core.activity import activity
+    from core.cancel import cancel
     replies = replies if replies is not None else []
+    tok = cancel.token()
+    activity.begin("a multi-step request", [step_label(it.name) for it in intents])
+    try:
+        return _run_plan_steps(intents, start, replies, tok, choices, activity)
+    finally:
+        activity.end()
+
+
+_GERUND = {"open": "opening", "search": "searching", "click": "clicking", "move": "moving", "type": "typing",
+           "play": "playing", "set": "setting", "press": "pressing", "close": "closing", "focus": "focusing",
+           "arrange": "arranging", "scroll": "scrolling", "extract": "extracting", "launch": "launching",
+           "save": "saving", "restore": "restoring", "run": "running", "pause": "pausing", "resume": "resuming",
+           "next": "skipping", "previous": "going back", "volume": "changing the volume", "navigate": "opening",
+           "new": "opening a new", "minimize": "minimizing", "maximize": "maximizing", "place": "placing",
+           "locate": "looking for", "read": "reading", "recycle": "recycling", "compress": "compressing"}
+
+
+def step_label(intent_name: str) -> str:
+    """'desktop.open_app' -> 'opening an app' (for "what are you doing?")."""
+    name = intent_name.split(".", 1)[-1] if "." in intent_name else intent_name
+    words = name.replace("_", " ").split()
+    if not words:
+        return intent_name
+    first = _GERUND.get(words[0])
+    if first:
+        return " ".join([first] + words[1:])
+    return "working on " + " ".join(words)
+
+
+def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
     for i in range(start, len(intents)):
         it = intents[i]
+        if tok.cancelled:
+            log.info("agent.plan.cancelled before step %d/%d", i + 1, len(intents))
+            return Reply(" ".join(replies + ["Stopped."]).strip(), ok=False)
+        activity.step(i)
         before = _observe(f"before {it.name}") if it.domain in ("desktop", "browser") else ""
         t0 = time.perf_counter()
         r = it.run()
@@ -1209,6 +1249,8 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
         if not r.ok and it.domain in ("desktop", "browser") and any(k in r.text.lower() for k in _RETRYABLE):
             # Reassess instead of blindly repeating: wait for the UI, look again, retry once.
             time.sleep(1.2)
+            if tok.cancelled:
+                return Reply(" ".join(replies + ["Stopped."]).strip(), ok=False)
             after = _observe(f"retry {it.name}")
             log.info("agent.retry %s (screen %s)", it.name, "changed" if after != before else "unchanged")
             r = it.run()

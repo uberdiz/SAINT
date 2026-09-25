@@ -126,6 +126,15 @@ class EventType:
     DESKTOP_ACTION="desktop.action"; SCREEN_CAPTURED="screen.captured"
     # User-facing notification (tray balloon / toast)
     NOTIFY="notify"
+    # A tool asks the main window to do something (navigate, mini player, ...);
+    # handled on the GUI thread in ui/main_window.py (core/ui_link.py)
+    UI_COMMAND="ui.command"
+    # Long-running callable tasks (scans, extraction; modules/automation/tasks.py)
+    TASK_PROGRESS="task.progress"; TASK_DONE="task.done"
+    # A watcher fired (modules/watch) / what SAINT is doing changed (core/activity.py)
+    WATCH_FIRED="watch.fired"; ACTIVITY_CHANGED="activity.changed"
+    # "Stop everything" — cancel plans, typing, background work (core/cancel.py)
+    STOP_ALL="stop.all"
     ERROR="error"; WARNING="warning"
 
 

@@ -148,14 +148,26 @@ class SceneStore:
 
     def run(self, scene: Scene, run_command: Callable[[str], str]) -> List[str]:
         log.info("scene.run name=%r steps=%d", scene.name, len(scene.steps))
+        from core.activity import activity
+        from core.cancel import cancel
+        tok = cancel.token()
         results = []
-        for step in scene.steps:
-            try:
-                results.append(run_command(step) or "")
-            except Exception as e:
-                log.exception("scene.step_failed %r", step)
-                results.append(f"Failed: {e}")
-            time.sleep(0.4)            # let Spotify / windows settle between steps
+        activity.begin(f"the {scene.name} scene", [f"running \u201c{st}\u201d" for st in scene.steps])
+        try:
+            for i, step in enumerate(scene.steps):
+                if tok.cancelled:            # "stop" said while the scene runs
+                    log.info("scene.cancelled name=%r at step %d", scene.name, i + 1)
+                    results.append("Stopped.")
+                    break
+                activity.step(i)
+                try:
+                    results.append(run_command(step) or "")
+                except Exception as e:
+                    log.exception("scene.step_failed %r", step)
+                    results.append(f"Failed: {e}")
+                time.sleep(0.4)            # let Spotify / windows settle between steps
+        finally:
+            activity.end()
         scene.last_run = time.time()
         with self._lock:
             scenes = self._load()

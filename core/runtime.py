@@ -121,6 +121,15 @@ class SaintRuntime:
         else:
             assistant_state.set_resting(AssistantState.OFFLINE, detail="Voice module disabled")
 
+        # What's playing in any app (Windows media controls). Started here, not
+        # only by the UI, so the Spotify agent notices track changes / skips
+        # made in the Spotify app instantly even with no window open.
+        try:
+            from modules.desktop.media import media
+            media.start()
+        except Exception:
+            log.debug("runtime.media_watcher_unavailable", exc_info=True)
+
         event_bus.subscribe(self._on_event)
         log.info("runtime.started voice=%s wake=%s automation=%s",
                  config.get("modules.voice", True), config.get("voice.wake_word_enabled", True),
@@ -176,6 +185,15 @@ class SaintRuntime:
         return any(get(self._snapshot, k) != config.get(k) for k in keys)
 
     def _on_event(self, ev):
+        if ev.type == EventType.TASK_DONE:
+            # Background work (scans, extraction) finishing: say so, and show a toast.
+            p = ev.payload or {}
+            summary = p.get("summary", "")
+            if summary and p.get("announce", True) and p.get("status") != "cancelled":
+                event_bus.emit_event(EventType.NOTIFY, {"title": "SAINT", "message": summary})
+                if self.controller:
+                    self.controller.announce(summary, source="task")
+            return
         if ev.type != EventType.SETTINGS_CHANGED:
             return
         threading.Thread(target=self.apply_settings, daemon=True, name="apply-settings").start()

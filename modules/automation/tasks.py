@@ -11,7 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 
 class TaskStatus(str, Enum):
@@ -34,6 +34,8 @@ class AgentTask:
     result: Optional[dict] = None
     error: Optional[str] = None
     process: Optional[subprocess.Popen] = field(default=None, repr=False)
+    progress: float = 0.0
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
 class BackgroundTaskManager:
@@ -95,6 +97,83 @@ class BackgroundTaskManager:
                     task.current_action = "failed"
                     task.updated_at = time.time()
 
+    def create_callable_task(self, description: str, fn: Callable, on_done: Optional[Callable] = None,
+                             announce: bool = True) -> AgentTask:
+        """Run ``fn(progress, cancel_event)`` in the background.
+
+        ``progress(fraction 0-1, text="")`` reports progress (TASK_PROGRESS,
+        throttled); ``cancel_event`` is set when the task is cancelled or the
+        user says "stop everything". ``fn``'s return value becomes the result;
+        ``on_done(task)`` runs afterwards (on the worker thread). The final
+        TASK_DONE event carries a short spoken summary when ``fn`` returns a
+        dict with a "summary" key.
+        """
+        from core.activity import activity
+        from core.events import event_bus, EventType
+        task = AgentTask(id=uuid.uuid4().hex[:12], description=description)
+        with self._lock:
+            self._tasks[task.id] = task
+        last_emit = [0.0]
+
+        def progress(fraction: float, text: str = ""):
+            now = time.time()
+            with self._lock:
+                task.progress = max(0.0, min(1.0, float(fraction or 0.0)))
+                if text:
+                    task.current_action = text
+                task.updated_at = now
+            if now - last_emit[0] >= 0.5 or task.progress >= 1.0:
+                last_emit[0] = now
+                event_bus.emit_event(EventType.TASK_PROGRESS, {
+                    "id": task.id, "description": description,
+                    "progress": task.progress, "text": task.current_action})
+
+        def stop_all(ev):
+            if ev.type == EventType.STOP_ALL:
+                task.cancel_event.set()
+
+        def run():
+            with self._lock:
+                task.status = TaskStatus.RUNNING
+                task.started_at = time.time()
+            activity.add_background(task.id, description)
+            event_bus.subscribe(stop_all)
+            try:
+                result = fn(progress, task.cancel_event)
+                with self._lock:
+                    if task.cancel_event.is_set():
+                        task.status = TaskStatus.CANCELLED
+                    else:
+                        task.status = TaskStatus.COMPLETED
+                        task.progress = 1.0
+                    task.result = result if isinstance(result, dict) else {"value": result}
+            except Exception as exc:
+                with self._lock:
+                    task.status = TaskStatus.FAILED
+                    task.error = getattr(exc, "user_message", None) or str(exc)
+            finally:
+                event_bus.unsubscribe(stop_all)
+                activity.remove_background(task.id)
+                task.updated_at = time.time()
+            summary = ""
+            if task.status == TaskStatus.COMPLETED:
+                summary = (task.result or {}).get("summary", "") or f"Finished {description}."
+            elif task.status == TaskStatus.FAILED:
+                summary = f"{description[:1].upper()}{description[1:]} failed: {task.error}"
+            elif task.status == TaskStatus.CANCELLED:
+                summary = f"Stopped {description}."
+            event_bus.emit_event(EventType.TASK_DONE, {
+                "id": task.id, "description": description, "status": task.status.value,
+                "summary": summary, "result": task.result, "announce": announce})
+            if on_done:
+                try:
+                    on_done(task)
+                except Exception:
+                    pass
+
+        threading.Thread(target=run, daemon=True, name=f"saint-task-{task.id}").start()
+        return task
+
     def get(self, task_id: str) -> Optional[AgentTask]:
         with self._lock:
             return self._tasks.get(task_id)
@@ -105,6 +184,7 @@ class BackgroundTaskManager:
             if not task or task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
                 return False
             task.status = TaskStatus.CANCELLED
+            task.cancel_event.set()
             task.current_action = "cancelled"
             task.updated_at = time.time()
             if task.process and task.process.poll() is None:
@@ -127,6 +207,7 @@ class BackgroundTaskManager:
             "started_at": task.started_at,
             "updated_at": task.updated_at,
             "current_action": task.current_action,
+            "progress": task.progress,
             "result": task.result,
             "error": task.error,
         }

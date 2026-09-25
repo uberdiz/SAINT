@@ -61,6 +61,24 @@ _initialized = False
 _handlers = []
 
 
+class _DropKnownNoise(logging.Filter):
+    """Third-party warnings that repeat on every sentence and mean nothing to
+    the user (Kokoro's phonemizer word-count check)."""
+    _NOISE = ("words count mismatch",)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+        return not any(n in msg for n in self._NOISE)
+
+
+def _quiet_third_party():
+    noise = _DropKnownNoise()
+    logging.getLogger("phonemizer").addFilter(noise)
+
+
 def _level_for(name: str, debug: bool = False) -> int:
     level = _LEVELS.get(name, logging.INFO)
     return logging.DEBUG if debug else level
@@ -94,6 +112,7 @@ def init_logger(level="Normal", debug=False):
     if root.level == logging.NOTSET or root.level > logging.WARNING:
         root.setLevel(logging.WARNING)
 
+    _quiet_third_party()
     apply_level(level, debug)
     event_bus.subscribe(_on_event)
     _initialized = True

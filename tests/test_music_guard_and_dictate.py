@@ -32,10 +32,31 @@ def test_music_guard_blocks_lyrics_but_allows_short_commands(monkeypatch):
 
 
 def test_music_guard_off_when_no_music(monkeypatch):
+    from core.config import config
     vm = VoiceModule.__new__(VoiceModule)
     vm._music_playing = False
+    monkeypatch.setitem(config._data["voice"], "followup_requires_intent", False)
     ok, _ = _gate(vm, "One time for you, yo, say hi to you, show love me")
     assert ok      # not addressed to SAINT during silence — normal gates only
+
+
+def test_followup_needs_something_to_act_on(monkeypatch):
+    """Without the wake word, follow-ups must be a command, a direct question
+    or an answer SAINT asked for — remarks to someone else are ignored."""
+    from core.config import config
+    vm = VoiceModule.__new__(VoiceModule)
+    vm._music_playing = False
+    monkeypatch.setitem(config._data["voice"], "followup_requires_intent", True)
+    monkeypatch.setattr(VoiceModule, "_is_command", staticmethod(lambda text: text.lower().startswith("open")))
+    monkeypatch.setattr(VoiceModule, "_ai_expects_reply", staticmethod(lambda: False))
+    for said in ("OK? Shit. Why not?", "See how great it was 100% worth it.",
+                 "One time for you, yo, say hi to you, show love me"):
+        ok, reason = _gate(vm, said)
+        assert not ok and reason.startswith("followup_"), (said, reason)
+    assert _gate(vm, "open spotify")[0]
+    assert _gate(vm, "What's the capital of France?")[0]
+    monkeypatch.setattr(VoiceModule, "_ai_expects_reply", staticmethod(lambda: True))
+    assert _gate(vm, "the blue one I think")[0]     # answering SAINT's question
 
 
 # ---------------------------------------------------------------- dictation

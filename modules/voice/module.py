@@ -848,6 +848,15 @@ class VoiceModule(BaseModule):
             return ""
         raw_text = (getattr(result, "text", "") or "").strip()
         confidence = float(getattr(result, "confidence", 0.0) or 0.0)
+        if raw_text and config.get("voice.repetition_filter", True):
+            from modules.voice.stt_filters import clean_transcript
+            cleaned = clean_transcript(raw_text)
+            if cleaned is None:
+                log.info("voice.stt.repetition_dropped session=%s words=%d", session_id, len(raw_text.split()))
+                event_bus.emit_event(EventType.VOICE_STT_SKIP, {
+                    "session_id": session_id, "reason": "repetition", "text": raw_text[:80]})
+                return ""
+            raw_text = cleaned
         hot = False
         if wake_check:
             # Second-stage wake: only a transcript that starts with the wake
@@ -911,6 +920,8 @@ class VoiceModule(BaseModule):
                 "text": text, "confidence": round(confidence, 3)})
             return ""
 
+        from modules.voice.output_policy import output_policy
+        output_policy.note_input(rms)
         event_bus.emit_event(EventType.VOICE_STT_FINAL, {
             "text": text,
             "confidence": confidence,
@@ -1015,6 +1026,22 @@ class VoiceModule(BaseModule):
         r"^(?:what|what's|whats|who|who's|where|where's|when|why|how|is|are|can|could|will|would|do|does|"
         r"did|should)\b.*\?$", re.IGNORECASE)
 
+    # Remarks and interjections that are never meant for SAINT.
+    _CHATTER = re.compile(
+        r"^(?:(?:ok(?:ay)?|oh|ah|yeah|yep|nah|no|wow|lol|damn|shit|fuck|dude|bro|man|huh|hmm|what|"
+        r"why not|oh my god|omg|see|look|nice|cool|great|right|sure|well)[\s.,!?]*){1,6}$"
+        r"|^(?:see how|i can'?t believe|that'?s (?:so|crazy|funny|wild)|you'?re (?:so )?(?:right|good))",
+        re.IGNORECASE)
+
+    @staticmethod
+    def _ai_expects_reply() -> bool:
+        """SAINT's last answer asked the user something (the LLM path)."""
+        try:
+            from core.module_manager import module_manager
+            return bool(getattr(module_manager.get("ai"), "expects_reply", False))
+        except Exception:
+            return False
+
     @staticmethod
     def _is_command(text: str) -> bool:
         """Does the agent recognise ``text`` as something to do?"""
@@ -1085,6 +1112,13 @@ class VoiceModule(BaseModule):
         if follow_up and self._music_playing and config.get("voice.music_strict_followup", True):
             if not (command or self._DIRECT_QUESTION.match(stripped) and len(words) <= 14):
                 return False, "music_playing_needs_wake_word"
+        # Talking to someone else: without the wake word, only something SAINT
+        # would act on, a direct question, or an answer SAINT asked for counts.
+        if follow_up and config.get("voice.followup_requires_intent", True):
+            if self._CHATTER.match(stripped) and not command:
+                return False, "followup_chatter"
+            if not (command or self._DIRECT_QUESTION.match(stripped) or self._ai_expects_reply()):
+                return False, "followup_no_intent"
         if follow_up:
             min_conf = min(min_conf, float(config.get("voice.followup_min_confidence", 0.25)))
             if command:

@@ -11,11 +11,18 @@ tool is, in order of precedence:
        autonomous  everything allowed, except high → confirm when
                    automation.confirm_dangerous is on
 
+Tools in ALWAYS_CONFIRM (moving files to the Recycle Bin, moving folders,
+uninstalling games, power actions) always ask, whatever the mode or override
+says — only an explicit "deny" beats them.
+
 "confirm" means SAINT asks the user ("Should I close Discord?") and only runs
 the tool after an explicit yes.
 """
 
 from core.config import config
+
+
+ALWAYS_CONFIRM = frozenset({"files.recycle", "files.move", "steam.uninstall", "system.power"})
 
 
 class PermissionManager:
@@ -39,6 +46,12 @@ class PermissionManager:
         return self.CONFIRM if level == "high" else self.ALLOW
 
     def policy_for_tool(self, tool_name: str, permission_level: str = "medium") -> str:
+        policy = self._policy_for_tool(tool_name, permission_level)
+        if tool_name in ALWAYS_CONFIRM and policy != self.DENY:
+            return self.CONFIRM
+        return policy
+
+    def _policy_for_tool(self, tool_name: str, permission_level: str) -> str:
         overrides = self._overrides()
         if tool_name in overrides:
             return overrides[tool_name]

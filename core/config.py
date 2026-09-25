@@ -12,7 +12,7 @@ import threading
 
 from core.paths import data_path
 
-CONFIG_VERSION = 6
+CONFIG_VERSION = 7
 
 DEFAULT_CONFIG = {
     "config_version": CONFIG_VERSION,
@@ -51,6 +51,8 @@ DEFAULT_CONFIG = {
         "memory": True,
         "spotify": False,
         "desktop": True,
+        "watch": True,                    # "tell me when this finishes", "what changed?"
+        "notifications": False,           # read Windows notifications aloud (opt-in)
     },
 
     # ------------------------------------------------------------------
@@ -159,6 +161,15 @@ DEFAULT_CONFIG = {
         # "louder", "go back") work without saying "Hey SAINT" first.
         "music_hotwords": True,
         "hotword_min_confidence": 0.2,     # the whole utterance must be a playback command
+        # Follow-ups without the wake word must look like a command, a direct
+        # question or an answer to SAINT's question — chatter is ignored.
+        "followup_requires_intent": True,
+        # Whisper-quiet: when you speak quietly SAINT answers quietly.
+        "whisper_replies": True,
+        "whisper_rms": 0.02,              # utterances below this RMS count as whispering
+        "whisper_gain": 0.45,             # reply volume multiplier while whispering
+        # Drop Whisper hallucinations like "No, no, no, no, ..." (a repeated phrase)
+        "repetition_filter": True,
 
         # Conversation
         "max_context_turns": 6,
@@ -247,10 +258,52 @@ DEFAULT_CONFIG = {
         # How long the window SAINT last worked in stays the default target
         # for "click X" / "scroll down" before the foreground window wins.
         "context_window_ttl_sec": 45.0,
-        "multi_window_policy": "ask",     # several matching windows: "ask" which one | "recent" = use the latest
+        # Several matching windows: "smart" = the one you used most recently
+        # (asks only when none was used lately) | "ask" | "recent" = newest
+        "multi_window_policy": "smart",
+        "recent_focus_sec": 600,          # "smart": how recently a window must have been used
         "preferred_browser": None,        # the browser window picked last time (kept until it closes)
         "max_type_length": 500,
         "apps": {},                       # custom "name": "path or URI" launch aliases
+    },
+
+    # ------------------------------------------------------------------
+    # Files, storage and archives (modules/files). Nothing is ever deleted
+    # permanently: removals go to the Recycle Bin after you confirm.
+    # ------------------------------------------------------------------
+    "files": {
+        "games_dir": "D:\\Games",        # "my games folder"
+        "known": {},                      # extra named folders: {"emulators": "D:\\Emulators"}
+        "scan_cache_hours": 24,
+        "temp_age_days": 2,               # temp files older than this count as junk
+        "recordings_age_days": 60,        # Medal / clips older than this are listed (never removed automatically)
+    },
+
+    # ------------------------------------------------------------------
+    # Steam (modules/steam)
+    # ------------------------------------------------------------------
+    "steam": {
+        "extra_libraries": ["D:\\SteamLibrary"],   # libraries Steam may not know about
+    },
+
+    # ------------------------------------------------------------------
+    # Developer mode (modules/dev)
+    # ------------------------------------------------------------------
+    "dev": {
+        "project_dir": "",                # "run the tests" runs here (blank = SAINT's own folder)
+        "test_command": "python -m pytest -q",
+        "editor": "code",                 # opens "the file causing the error"
+    },
+
+    # ------------------------------------------------------------------
+    # Watching (modules/watch): "tell me when this finishes", "what changed?"
+    # ------------------------------------------------------------------
+    "watch": {
+        "snapshot_sec": 10,               # how often the screen state is noted
+        "keep_min": 30,                   # how far back "what changed?" can look
+        "screen_hash": True,              # also note a tiny per-monitor image hash
+        "max_watchers": 5,
+        "expire_min": 120,
     },
 
     # ------------------------------------------------------------------
@@ -297,6 +350,12 @@ DEFAULT_CONFIG = {
         "close_to_tray": True,            # closing the window keeps SAINT running
         "start_minimized": False,
         "actions": True,                  # small pill at the bottom of the screen when SAINT does something
+        # Windows notifications read aloud (modules/notifications, opt-in)
+        "important_only": True,           # only announce notifications that match the rules below
+        "allow": [],                      # apps always announced, e.g. ["Discord"]
+        "deny": [],                       # apps never announced
+        "keywords": ["failed", "error", "completed", "finished", "mentioned you", "calling"],
+        "poll_sec": 5,
     },
 
     # ------------------------------------------------------------------
@@ -402,6 +461,16 @@ def _migrate(data: dict) -> dict:
         if ai.get("temperature") in (0.7, None):
             ai["temperature"] = 0.5
         data["config_version"] = 6
+    if version < 7:
+        # 'llama3' was never an installed tag, so every turn warned and fell back.
+        ai = data.setdefault("ai", {})
+        if ai.get("model") in ("llama3", "llama3:latest"):
+            ai["model"] = "llama3.1"
+        # Asking "which browser?" every time was the most common failed command.
+        desktop = data.setdefault("desktop", {})
+        if desktop.get("multi_window_policy", "ask") == "ask":
+            desktop["multi_window_policy"] = "smart"
+        data["config_version"] = 7
     return data
 
 

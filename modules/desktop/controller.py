@@ -737,7 +737,13 @@ class DesktopController:
             from modules.desktop import uia
             focused = uia.focus_input(target)
             time.sleep(0.05)
-        _send_unicode(text)
+        # Typed in chunks so "stop" interrupts long text part-way.
+        from core.cancel import cancel
+        tok = cancel.token()
+        for i in range(0, len(text), 40):
+            if tok.cancelled:
+                raise ToolError(f"Stopped typing after {i} characters.", "CANCELLED")
+            _send_unicode(text[i:i + 40])
         if press_enter:
             self._tap("enter")
         return {"typed": len(text), "target": focused or (win.title if win else "active window"),

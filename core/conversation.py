@@ -182,23 +182,30 @@ class ConversationController:
         """Explicit stop (UI button)."""
         self._handle_interrupt("button")
 
-    def announce(self, text: str, source: str = "system"):
-        """Speak a message that did not come from a user turn (e.g. a reminder)."""
+    def announce(self, text: str, source: str = "system", wait: bool = True):
+        """Speak a message that did not come from a user turn (e.g. a reminder).
+
+        ``wait=False`` speaks right away over a busy turn (used for "what are
+        you doing?" while a long plan runs)."""
         text = (text or "").strip()
         if not text:
             return
+        from modules.voice.output_policy import output_policy
+        speak = output_policy.should_speak(text, source)
 
         def run():
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + (30 if wait else 0)
             while self.busy and time.monotonic() < deadline:
                 time.sleep(0.2)   # don't talk over an active answer
+            if not wait and self._tts:
+                self._tts.interrupt()
             with self._turn_id_lock:
                 self._turn_id += 1
                 turn_id = self._turn_id
             self._active_turn_id = turn_id
             event_bus.emit_event(EventType.UI_CHAT_RENDER, {
                 "turn_id": turn_id, "role": "assistant", "text": text, "source": source})
-            if not self._tts:
+            if not self._tts or not speak:
                 return
             assistant_state.begin_turn()
             self._speak_chunk(text, f"announce_{turn_id}", turn_id)
@@ -220,17 +227,31 @@ class ConversationController:
                             addressed: bool = False):
         state = self._get_state()
         tts_recent = time.perf_counter() - self._last_tts_end_time < 5.0
+        busy = state in (ConvState.THINKING, ConvState.SPEAKING, ConvState.INTERRUPTED)
+
+        # "What are you doing?" / "silent mode" while a long plan runs: answer
+        # now without cancelling the work (the agent is busy running it).
+        from modules.agent.meta import match_meta, run_meta
+        meta = match_meta(text)
+        if meta and busy and meta.kind in ("status", "silent_on", "silent_off"):
+            log.info("voice.meta.%s while busy", meta.kind)
+            self.announce(run_meta(meta), source="silent" if meta.kind != "status" else "system",
+                          wait=False)
+            return
 
         # Stop/override commands — never suppressed as echo.
-        if self._is_stop_command(text) and state in (ConvState.THINKING, ConvState.SPEAKING,
-                                                      ConvState.INTERRUPTED):
+        if (self._is_stop_command(text) or (meta and meta.kind in ("stop", "stop_all"))) and busy:
             log.info("voice.stop.detected text=%r → stopping", text)
+            from core.cancel import cancel
+            cancel.trip("all" if meta and meta.kind == "stop_all" else "current")
             self._cancel_current()
             self._set_state(ConvState.IDLE)
             with self._turn_id_lock:
                 self._active_turn_id = -1
             self._voice.set_saint_speaking(False)
             assistant_state.end_turn()
+            if meta and meta.kind == "stop_all":
+                self.announce(run_meta(meta), source="silent")
             return
 
         # The microphone is never muted during TTS, so the transcript may be
@@ -296,13 +317,20 @@ class ConversationController:
             if source == "button":
                 assistant_state.end_turn()
 
+    _STOP_FILLER = {"okay", "ok", "saint", "hey", "please", "just", "now", "oh", "um", "uh", "wait",
+                    "no", "so", "alright", "right", "dude", "man"}
+
     def _is_stop_command(self, text: str) -> bool:
         cleaned = re.sub(r'[^\w\s]', '', text.lower()).strip()
         if not cleaned:
             return False
+        # A stop phrase counts only as (nearly) the whole utterance, so
+        # "I'm done gaming" or "be quiet for 30 minutes" still reach the agent.
         for phrase in STOP_PHRASES:
             if phrase in cleaned:
-                return True
+                rest = cleaned.replace(phrase, " ", 1).split()
+                if all(w in self._STOP_FILLER for w in rest):
+                    return True
         words = cleaned.split()
         # Only short utterances count as a bare stop word ("stop", "okay stop"),
         # so "stop the music" still reaches the agent.
@@ -493,6 +521,10 @@ class ConversationController:
         if not cleaned_text or not self._tts:
             return
         if self._get_state() == ConvState.INTERRUPTED:
+            return
+        from modules.voice.output_policy import output_policy
+        if not output_policy.should_speak(cleaned_text, "reply"):
+            log.info("tts.silent_mode skipped turn_id=%s", turn_id)
             return
         self._set_state(ConvState.SPEAKING)
         self._voice.set_saint_speaking(True)

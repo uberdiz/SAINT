@@ -44,6 +44,16 @@ class Agent:
             return None
         t0 = time.perf_counter()
 
+        # Commands about SAINT itself (stop, "what are you doing?", silent
+        # mode) never wait for the lock a running plan holds.
+        from modules.agent.meta import match_meta, run_meta
+        meta = match_meta(text)
+        if meta is not None:
+            reply = run_meta(meta)
+            log.info("agent.intent meta.%s", meta.kind)
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": f"meta.{meta.kind}", "text": text[:80]})
+            return AgentResult(reply, f"meta.{meta.kind}")
+
         # Dictation mode: while active, every utterance is *content*, not a
         # command. Say "done" to finish, "cancel" to throw it away.
         from modules.agent.dictate import dictation
@@ -72,6 +82,17 @@ class Agent:
             log.info("agent.intent choice_reply")
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "choice", "text": text[:80]})
             return AgentResult(chosen, "choice", expects_reply=choices.pending is not None)
+
+        from modules.agent.aliases import aliases, parse_alias_command
+        alias_reply = parse_alias_command(text)
+        if alias_reply is not None:
+            log.info("agent.intent alias")
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "alias", "text": text[:80]})
+            return AgentResult(alias_reply, "alias")
+        expanded = aliases.expand(text)
+        if expanded != text:
+            log.info("agent.alias.expand %r -> %r", text[:60], expanded[:60])
+            text = expanded
 
         from modules.automation.scenes import scenes
         scene = scenes.match(text)
@@ -123,6 +144,11 @@ class Agent:
             from modules.agent.confirm import choices
             if dictation.active or confirmations.pending is not None or choices.pending is not None:
                 return True
+            from modules.agent.meta import match_meta
+            if match_meta(text) is not None:
+                return True
+            from modules.agent.aliases import aliases
+            text = aliases.expand(text)
             from modules.automation.scenes import scenes
             if scenes.match(text) is not None:
                 return True

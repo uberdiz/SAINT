@@ -213,6 +213,12 @@ class KokoroTTS(TTSEngine):
 
                 event_bus.emit_event(EventType.TTS_PLAYBACK_START, {"word_index": chunk_index})
 
+                # Whispered request -> quieter reply (applied before the echo
+                # monitor sees the block, so barge-in predicts the real level).
+                from modules.voice.output_policy import output_policy
+                gain = output_policy.gain()
+                if gain != 1.0:
+                    samples = samples * gain
                 # Write blocks in smaller chunks to allow quick cancellation
                 chunk_size = sample_rate // 10  # 100ms chunks
                 for i in range(0, len(samples), chunk_size):
@@ -857,6 +863,11 @@ class QwenTTS(TTSEngine):
                 t_playback_start = time.perf_counter()
                 t_play_start = time.perf_counter()
                 duration = len(samples_int16) / sample_rate if sample_rate > 0 else 0
+                from modules.voice.output_policy import output_policy
+                gain = output_policy.gain()
+                if gain != 1.0:
+                    samples = samples * gain
+                    samples_int16 = (samples_int16.astype(np.float32) * gain).astype(np.int16)
                 playback_monitor.note_block(float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0,
                                             duration)
                 sd.play(samples_int16, sample_rate)

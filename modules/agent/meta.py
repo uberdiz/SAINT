@@ -1,0 +1,103 @@
+"""
+modules/agent/meta.py
+
+Commands about SAINT itself that must work *while* SAINT is busy and never
+go to the LLM:
+
+    stop / cancel / abort / shut up / be quiet      → stop what's running now
+    stop everything / cancel everything             → also background work
+    what are you doing?                              → describe current work
+    silent mode (for 30 minutes) / be quiet for 1 h  → act, but don't talk
+    you can talk again / normal mode                 → end silent mode
+
+``match_meta`` only matches the *whole* utterance (with fillers like "okay",
+"saint", "please"), so "stop the music" and "I'm done gaming" are untouched.
+"""
+
+import re
+from dataclasses import dataclass
+from typing import Optional
+
+_FILL = r"(?:(?:hey|ok(?:ay)?|yo|um+|uh+|just|please|saint|now|right now|already|dude|man|oh)[\s,.!]*)*"
+
+_STOP_ALL = re.compile(
+    rf"^{_FILL}(?:stop|cancel|abort|kill|halt)\s+(?:everything|it all|all of it|all tasks|all the tasks|"
+    rf"all background (?:tasks|work)|whatever you'?re doing)[\s,.!]*{_FILL}$", re.I)
+_STOP = re.compile(
+    rf"^{_FILL}(?:stop(?:\s+(?:it|that|now|talking|what you'?re doing))?|cancel(?:\s+(?:it|that))?|"
+    rf"abort(?:\s+(?:it|that))?|shut\s+up|be\s+quiet|quiet|enough|halt|stop\s+stop)[\s,.!]*{_FILL}$", re.I)
+_STATUS = re.compile(
+    rf"^{_FILL}(?:what\s+are\s+you\s+(?:doing|up\s+to|working\s+on)|what'?s\s+(?:going\s+on|happening|"
+    rf"taking\s+so\s+long)|are\s+you\s+(?:still\s+)?(?:working|busy|doing\s+something)|status(?:\s+update)?)"
+    rf"(?:\s+(?:right\s+)?now)?[\s,.!?]*$", re.I)
+_SILENT_ON = re.compile(
+    rf"^{_FILL}(?:(?:go\s+|turn\s+on\s+|enable\s+|switch\s+to\s+)?(?:silent|quiet)\s+mode"
+    rf"|be\s+(?:quiet|silent)|stay\s+quiet|stop\s+talking|don'?t\s+(?:talk|answer\s+me|speak))"
+    rf"(?:\s+(?:for|during)\s+(?:the\s+next\s+)?(?P<n>\d+|an?|one|two|three|half\s+an)\s*"
+    rf"(?P<u>minutes?|mins?|hours?|hrs?))?[\s,.!]*$", re.I)
+_SILENT_OFF = re.compile(
+    rf"^{_FILL}(?:(?:you\s+can\s+)?(?:talk|speak)\s+(?:again|to\s+me\s+again)|normal\s+mode|"
+    rf"(?:turn\s+off|stop|end|disable|exit|leave)\s+(?:the\s+)?(?:silent|quiet)\s+mode|unmute\s+yourself)"
+    rf"[\s,.!]*$", re.I)
+
+_NUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "half an": 0.5}
+
+
+@dataclass
+class Meta:
+    kind: str                 # stop | stop_all | status | silent_on | silent_off
+    minutes: float = 0.0
+
+
+def match_meta(text: str) -> Optional[Meta]:
+    t = " ".join((text or "").strip().split())
+    if not t:
+        return None
+    if _STOP_ALL.match(t):
+        return Meta("stop_all")
+    m = _SILENT_ON.match(t)
+    # A timed "be quiet for 30 minutes" / any explicit "silent mode" is silent
+    # mode; a bare "be quiet" / "stop talking" is a stop.
+    if m and (m.group("n") or re.search(r"\b(silent|quiet)\s+mode\b|don'?t\s+(?:talk|answer|speak)", t, re.I)):
+        n = (m.group("n") or "").lower()
+        minutes = 60.0
+        if n:
+            value = float(n) if n.isdigit() else _NUM.get(n, 1)
+            minutes = value * (60 if m.group("u").lower().startswith("h") else 1)
+        return Meta("silent_on", minutes)
+    if _SILENT_OFF.match(t):
+        return Meta("silent_off")
+    if _STOP.match(t):
+        return Meta("stop")
+    if _STATUS.match(t):
+        return Meta("status")
+    return None
+
+
+def run_meta(meta: Meta) -> str:
+    """Apply a meta command that doesn't need the conversation controller.
+    Returns the reply text."""
+    from core.activity import activity
+    from core.cancel import cancel
+    from modules.agent.confirm import confirmations, choices
+    from modules.voice.output_policy import output_policy
+    if meta.kind in ("stop", "stop_all"):
+        cancel.trip("all" if meta.kind == "stop_all" else "current")
+        confirmations.clear("dismissed")
+        choices.clear()
+        if meta.kind == "stop_all":
+            return "Stopped everything."
+        return "Okay."
+    if meta.kind == "status":
+        return activity.describe()
+    if meta.kind == "silent_on":
+        output_policy.set_silent(meta.minutes)
+        mins = int(round(meta.minutes))
+        span = (f"{mins // 60} hour{'s' if mins // 60 != 1 else ''}" if mins >= 60 and mins % 60 == 0
+                else f"{mins} minutes")
+        return f"Silent mode for {span}. I'll still speak up for questions, errors and reminders."
+    if meta.kind == "silent_off":
+        was = output_policy.silent
+        output_policy.clear_silent()
+        return "I'm back." if was else "I wasn't in silent mode."
+    return ""
