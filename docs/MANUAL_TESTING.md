@@ -139,3 +139,83 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | Create a scene "Focus mode" (play lofi beats · set volume to 35 · minimize all windows besides Claude), then say "Hey SAINT, focus mode" | All steps run; a toast confirms; History shows a Scene entry |
 | ✅ | History page after a few requests | Counts, 30-day chart, most-used tools and the timeline match what you did |
 | ✅ | Ctrl+K → "demo" → Enter, then Esc part-way | Demo drives the UI; Esc stops it and your real state and chat come back |
+
+## SAINT's own window
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | "Turn off the mini player" · "show the mini player" (with and without a YouTube tab in front) | SAINT's mini player hides/shows; YouTube's miniplayer only when you say "YouTube mini player" |
+| 🔲 | "Open the dashboard" · "go to history" · "go to settings" · "open settings" | SAINT's pages; plain "open settings" still opens Windows Settings |
+| 🔲 | "Hide the halo" · "dark mode" · "minimize yourself" | Applied at once |
+
+## Stop, silence, status
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | Start a long multi-step request or a scene, then "stop" | It stops before the next step; no keys left held down |
+| 🔲 | "Be quiet for 5 minutes", then "skip" / "what time is it" / "open blahblah" | Acts silently on the first two (reply shown on screen), still says the error for the third |
+| 🔲 | Whisper "Hey SAINT, what time is it" | Answer is noticeably quieter |
+| 🔲 | During a long request: "what are you doing?" | Names the current step without cancelling it |
+| 🔲 | In a follow-up window, talk to someone else ("OK, why not?") | Ignored |
+
+## Steam
+
+| | Test | Expected |
+|---|---|---|
+| ✅ | "What games do I have" · "what are my biggest games" · "how big is Apex Legends" | Lists from Steam's files (verified live) |
+| 🔲 | "Launch Terraria" · "start cs2" | Game starts through Steam |
+| 🔲 | "Launch Apex Legends" (in the unregistered D:\SteamLibrary) | Explains how to add the library in Steam → Settings → Storage |
+| 🔲 | "Open my Steam library and search how many dudes" | Opens the library, then "you don't have it" + store search |
+
+## Files, storage and WinRAR (try removals on a test folder first)
+
+| | Test | Expected |
+|---|---|---|
+| ✅ | "How much space is left on E" · "how full are my drives" | Real numbers (verified live) |
+| ✅ | "What's taking up space on E" | Announces the biggest folders when the background scan ends (E: ≈ 50 s) |
+| 🔲 | Put a file and an identical "file (1)" copy in Downloads → "clean up my Downloads" → "yes" | The copy goes to the Recycle Bin; restore it from there |
+| 🔲 | "What can I delete on E" | Reports the old Windows install on E: as report-only, plus recordings |
+| 🔲 | "Empty the recycle bin" | Refuses, opens the Recycle Bin |
+| 🔲 | Download a .rar → "go to my Downloads folder, click the first download and extract it using WinRAR to my games folder" | Progress, then "Extracted … to D:\Games\…"; nothing overwritten |
+| 🔲 | "Unzip the latest download and delete it afterwards" → "yes" | Extracts, then asks, then recycles the archive |
+| 🔲 | "Move this folder to the D drive" (a test folder selected in Explorer) → "yes" | Windows' own move with progress; Ctrl+Z in Explorer undoes it |
+| 🔲 | System page → Storage → Scan / Check for junk | Bars, biggest folders with Open, junk summary |
+
+## Windows controls
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | "Mute my mic" / "unmute my mic" | The Windows mic mute icon changes |
+| 🔲 | "Set Spotify to 30 percent" · "mute the game" (a game in front) | Volume mixer changes for that app only |
+| 🔲 | "Switch audio to my headphones" · "use my speakers" | Default output changes (HyperX = headphones) |
+| 🔲 | "Restart my PC" → "yes" → "cancel the shutdown" | Windows shows the 60 s warning, then it's cancelled |
+| 🔲 | "Lock my PC" · "take a screenshot" | Locks · PNG in Pictures\Screenshots |
+
+## Watching, workspaces, clipboard, notifications, developer mode
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | Ask Claude something, then "tell me when Claude finishes" → switch away → "take me back" | Announced a few seconds after the reply stops streaming; focuses Claude |
+| 🔲 | Start a download → "tell me when this download finishes" | Announced when the file is complete |
+| 🔲 | Step away ≥ 2 min, come back → "what changed while I was away?" | Windows opened/closed/retitled |
+| 🔲 | "Watch my right screen" → "what's on my screen?" → "use all screens" | Uses the right monitor, then follows you again |
+| 🔲 | Arrange windows on both monitors → "save this workspace as Coding" → move them → "restore Coding" | Windows go back to their monitors and sizes; closed apps reopen |
+| 🔲 | "Gaming mode" → "I'm done gaming" | Saves the layout, pauses music, opens Steam, goes quiet · restores and talks again |
+| 🔲 | Copy a paragraph → "summarize what I copied"; copy buggy code → "fix the code I copied" → "paste" | Spoken summary; fixed code pasted |
+| 🔲 | "Read my notifications out loud", then get a Discord message / a failed build | Announced if important; "always tell me about Discord" |
+| 🔲 | Copy a Python traceback → "open the file causing the error" | VS Code opens at that line |
+| 🔲 | A dialog asking to update → "handle this" | Proposes one button and asks before clicking |
+
+## Spotify learning
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | Skip a song in the Spotify app itself | One `skips` row with source `app` within ~2 s |
+| 🔲 | Say "skip" | Exactly one `skips` row, source `voice` |
+| 🔲 | "More energetic" · "more like the last song" · "no more of this artist" | Picks change accordingly; the artist stops appearing |
+
+## History
+
+| | Test | Expected |
+|---|---|---|
+| ✅ | History page with a year of synthetic data, dark and light theme | Day squares fill the card, hover shows "N requests · date", streak / success / time-of-day cards |

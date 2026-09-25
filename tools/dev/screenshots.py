@@ -88,6 +88,21 @@ def main():
     from core.events import EventType
     from modules.desktop.media import media
     media.start = lambda: None          # never show what's really playing on this PC
+    # Made-up drives for the Storage card — never this PC's real disks or folders.
+    import modules.files.scan as storage
+    GB = 1e9
+    storage.drive_overview = lambda: [
+        {"drive": "C:\\", "letter": "C", "label": "System", "total": 1000 * GB, "used": 612 * GB, "free": 388 * GB,
+         "percent": 61.2},
+        {"drive": "D:\\", "letter": "D", "label": "Games", "total": 2000 * GB, "used": 1710 * GB,
+         "free": 290 * GB, "percent": 85.5},
+        {"drive": "E:\\", "letter": "E", "label": "Archive", "total": 500 * GB, "used": 481 * GB, "free": 19 * GB,
+         "percent": 96.2}]
+    storage.cached = lambda root: {"root": "C:\\", "total": 612 * GB, "at": time.time() - 600, "folders": [
+        {"path": "C:\\" + p, "size": s * GB, "depth": p.count("\\") + 1} for p, s in (
+            ("Users", 240), ("Program Files", 118), ("Windows", 38), ("Program Files (x86)", 64),
+            ("Users\\alex\\Videos", 96), ("Users\\alex\\AppData", 71), ("Users\\alex\\Downloads", 34),
+            ("ProgramData", 22))]} if root.upper().startswith("C") else None
     from modules.automation.scheduler import scheduler
     from modules.automation.timeparse import parse_schedule
     for what, when in (("Stand up and stretch", "in 20 minutes"), ("Check the calendar", "every weekday at 8:30")):

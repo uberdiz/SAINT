@@ -34,7 +34,11 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
   just say **“skip”**, **“pause”**, **“go back”**, **“louder”** — no wake word.
 - **Scenes.** One phrase, many actions: “focus mode” → play lofi, set volume, open Notion. Run them by
   voice, from the overlay, or on a schedule.
-- **History.** Everything you've asked and what SAINT did — with usage charts — stored only on your PC.
+- **Your whole PC, by voice.** Launch Steam games, find what's filling your drives and clear it safely,
+  extract downloads with WinRAR, lock the PC, mute your mic, set Discord to 30 %, switch to your
+  headphones, save and restore window layouts, and "tell me when Claude finishes".
+- **History.** Everything you've asked and what SAINT did — a year of activity as day squares, streaks and
+  usage charts — stored only on your PC.
 - **Command palette.** <kbd>Ctrl</kbd>+<kbd>K</kbd> jumps to any page, runs scenes and actions, or asks
   SAINT directly.
 - **Private by design.** Wake word, speech, voice and language model are all local. Nothing about you
@@ -42,7 +46,58 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
-**Latest:**
+**Latest — hands-free PC control:**
+
+- **SAINT controls itself.** "Open the dashboard", "go to history", "turn off the mini player", "hide the
+  halo", "dark mode", "minimize yourself". "The mini player" means SAINT's; YouTube's only when YouTube is
+  named or being watched.
+- **Steam.** "Launch Counter-Strike 2", "start cs2", "play Terraria on Steam", "open my Steam library",
+  "search Steam for Hades", "what games do I have", "what are my biggest games", "uninstall Celeste" (asks
+  first, and Steam asks again). SAINT reads Steam's own files, including libraries Steam has forgotten
+  about, and tells you how to add them back.
+- **Files and storage.** "How much space is left on E", "what's taking up space on D", "clean up my
+  Downloads", "what can I delete on E", "only the installers", "find my emulators", "open my games
+  folder". Duplicate downloads, archives you've already extracted, temp files, shader caches and old
+  recordings are found for you. Games, emulators, ROMs and Steam libraries are never suggested. Anything
+  removed goes to the Recycle Bin **after you say yes** — SAINT never deletes permanently and refuses
+  anything the Recycle Bin couldn't hold. The System page has a Storage card with every drive, a scan and
+  the biggest folders.
+- **WinRAR.** "Go to my Downloads folder, click the first download and extract it using WinRAR to my games
+  folder" is one action: the newest archive, into its own folder, with a free-space check, progress, no
+  overwriting, and "delete it afterwards" if you ask. "Compress this folder as a rar."
+- **Windows.** "Lock my PC", "restart" / "shut down" (asks, then waits 60 s — "cancel the shutdown"), "mute
+  my mic", "set Discord to 30 percent", "mute the game", "switch audio to my headphones", "brightness 60",
+  "take a screenshot".
+- **Stop, silent mode, whispering.** "Stop" / "cancel" / "stop everything" interrupt speech, multi-step
+  plans, scenes and typing mid-way. "Be quiet for 30 minutes" keeps SAINT working without talking (it
+  still asks questions and reports errors). Whisper a request and SAINT answers quietly. "What are you
+  doing?" describes the plan in progress.
+- **Watching.** "Tell me when Claude finishes", "tell me when this download finishes", "tell me when Steam
+  closes", then "take me back". "What changed while I was away?" "Watch my left screen" makes "click",
+  "read this" and "what's on screen" use that monitor.
+- **Workspaces and scenes.** "Save this workspace as Coding" / "restore Coding" reopens and places every
+  window on the right monitor and resumes your music. New starter scenes: *Gaming mode* ("let's game"),
+  *Done gaming* ("I'm done gaming") and *Dev environment*.
+- **Clipboard, notifications, developer mode.** "Read my clipboard" (never secrets), "summarize / translate
+  what I copied", "fix the code I copied" (the fix goes back on the clipboard). "Read my notifications",
+  "only tell me about important notifications", "always tell me about Discord". "Run the tests", "open the
+  file causing the error". "Handle this" proposes one step for the window in front and asks first.
+- **Personal aliases.** "When I say the lab, I mean open my SAINT project in VS Code."
+- **Spotify learns from what you actually skip.** Skips in the Spotify app are caught within seconds
+  (through Windows' media controls) and recorded once — voice skips used to be counted twice. Paused time
+  isn't "listening". Your Spotify top tracks, saved songs and recently played feed the picks. **DJ mode:**
+  "more energetic", "something darker", "more like the last song", "something I haven't heard", "no more
+  of this artist".
+- **History.** A GitHub-style year of day squares, current and longest streak, success rate, typical reply
+  time, time of day, busiest weekday and how you ask (voice, hot-words, typed, scenes).
+- **Fixes from the logs.** "Moved Otis" now says "Moved Spotify" (and YouTube instead of Opera). "Press F to
+  full screen", "one time speed", "go to my browser on my right screen", "clear everything off the screen
+  but YouTube", "go to Astral Games" (a link on the page) all work. SAINT uses the browser window you used
+  last instead of asking "which one?". Follow-ups without the wake word ignore chatter like "OK? Why
+  not?", and Whisper's "No, no, no, no…" loops are dropped. The `llama3` model-missing warning is gone
+  (your setting is updated to `llama3.1`).
+
+**Previous update:**
 
 - **Rearrange the overlay.** Drag any card in the <kbd>Alt</kbd>+<kbd>`</kbd> overlay by its title bar to
   move it, or drag an edge or corner to resize it. The layout is remembered; *Reset layout* puts it back.
@@ -97,9 +152,9 @@ A ground-up rewrite of the interface:
 | ![Overlay](docs/screenshots/overlay.png) | ![The Halo and the mini player](docs/screenshots/halo.png) |
 | **Overlay** — over whatever you're doing | **Halo** — light around the screen edge, plus the mini player |
 | ![Music](docs/screenshots/music.png) | ![History](docs/screenshots/history.png) |
-| **Music** — cover-tinted player, hands-free words, queue | **History** — local usage stats and timeline |
+| **Music** — cover-tinted player, hands-free words, queue | **History** — a year of activity, streaks and timeline |
 | ![Automations](docs/screenshots/automations.png) | ![System](docs/screenshots/system.png) |
-| **Scenes** — one phrase, many actions | **System** — health, latency, modules |
+| **Scenes** — one phrase, many actions | **System** — health, storage, latency, modules |
 
 <sub>Screenshots are generated by `tools/dev/screenshots.py` from synthetic demo data (fictional tracks
 with generated covers) — no personal data.</sub>
@@ -124,6 +179,7 @@ with generated covers) — no personal data.</sub>
 - [Reminders and automations](#reminders-and-automations)
 - [Desktop control and permissions](#desktop-control-and-permissions)
 - [Screen awareness](#screen-awareness)
+- [Your PC, hands-free](#your-pc-hands-free)
 - [The interface](#the-interface)
 - [Configuration](#configuration)
 - [Logging and debugging](#logging-and-debugging)
@@ -157,6 +213,12 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
 | Halo, overlay (global hotkey + edge tab), mini player, demo mode | ✅ Verified live with the real runtime. The Halo costs ~0.1–0.3 % CPU while animating. |
 | Music hot-words ("skip", "pause", "louder" with no wake word while music plays) | ✅ Tested end-to-end through the voice loop with synthetic audio. ⚠️ One-word hot-words were fixed after a live run (Whisper scores single words near zero confidence) and need a live re-check. |
 | Scenes (voice phrase, "run …", UI, schedule) and History | ✅ Covered by automated tests. |
+| Steam: installed games, sizes, library/store, launch | ✅ Game list and sizes verified live against this PC's libraries. ⚠️ Launching and uninstalling by voice need a live check. |
+| Drive space, biggest folders, junk report, Storage card | ✅ Verified live, read-only (a 500 GB drive with 1.9 M files scans in under a minute). ⚠️ Recycling and moving are covered by tests with a simulated Windows file operation; try them on a test folder first. |
+| WinRAR extraction and compression | ✅ Verified with the installed WinRAR against test archives. |
+| Windows controls (lock, power, mic, per-app volume, output device, brightness) | ✅ Audio devices and sessions read live. ⚠️ Changing them by voice needs a live check. |
+| Stop / silent mode / whisper replies / "what are you doing?" | ✅ Covered by tests. ⚠️ Whisper loudness needs a live check. |
+| Watchers, "what changed?", workspaces, notifications, clipboard | ✅ Covered by tests; the notification list was read live on this PC. ⚠️ Restoring a workspace across monitors needs a live check. |
 
 ### Known limitations
 
@@ -176,6 +238,16 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
   from the queue** isn't possible through the API at all, and SAINT says so.
 - **Spotify genre data** is no longer returned to new apps, so "something like X" uses the artist,
   their collaborators and your own listening history.
+- **Notifications** are read from Windows' own notification list (read-only), because Windows reserves its
+  notification-listener API for Store apps. A future Windows update could change that file's layout.
+- **Do Not Disturb** has no API for regular apps: SAINT opens its settings. **Brightness** works on laptop
+  screens; most desktop monitors don't let Windows change it.
+- **An old Windows installation on a second drive** (like `E:\Windows` + `E:\Users`) is far too big for
+  the Recycle Bin, so SAINT only reports it. Copy what you need from its `Users` folder, then format the
+  drive yourself in Disk Management.
+- **Steam libraries Steam doesn't list** (e.g. after reinstalling Windows) are shown, but their games can't
+  be launched until you add the folder in Steam → Settings → Storage.
+- **Workspaces** put programs and windows back, not browser tabs or open files.
 - **Web pages** are read through the browser's accessibility tree. Pages that don't expose their
   content (canvas apps, some games) can't be clicked by name; use coordinates or a vision model.
 
@@ -341,7 +413,17 @@ on my second screen".
 | "…move the browser to my second monitor" · "make it bigger" · "put it on the left" · "put this window next to Spotify" · "close all the browser windows" | Window management (closing asks first) |
 | "…open my browser, search YouTube for Kendrick Lamar, click the first video, and turn the volume down" | Multi-step plan, each step verified |
 | "…what's on my second screen?" · "what am I looking at?" · "what's currently open?" · "what is this error?" | Screen understanding per monitor. "Error" answers only from text actually on screen. |
-| "…stop" (while SAINT is talking) | Stops speaking |
+| "…open the dashboard" · "go to history" · "turn off the mini player" · "hide the halo" · "dark mode" | SAINT's own window |
+| "…launch Counter-Strike 2" · "open my Steam library and search Hades" · "what are my biggest games?" | Steam |
+| "…how much space is left on E?" · "what's taking up space on D?" · "clean up my Downloads" · "only the installers" | Storage (removing always asks; Recycle Bin only) |
+| "…go to my Downloads, click the first download and extract it using WinRAR to my games folder" | One extraction, newest archive → its own folder |
+| "…lock my PC" · "mute my mic" · "set Discord to 30 percent" · "switch audio to my headphones" · "restart" (asks) | Windows controls |
+| "…tell me when Claude finishes" · "take me back" · "what changed while I was away?" · "watch my left screen" | Watching |
+| "…save this workspace as Coding" · "restore Coding" · "gaming mode" · "I'm done gaming" | Workspaces and scenes |
+| "…read my clipboard" · "fix the code I copied" · "read my notifications" · "run the tests" · "handle this" | Clipboard, notifications, developer mode |
+| "…more energetic" · "something darker" · "more like the last song" · "no more of this artist" | Spotify DJ mode |
+| "…when I say the lab, I mean open my SAINT project" · "be quiet for 30 minutes" · "what are you doing?" | Aliases, silent mode, status |
+| "…stop" · "cancel" · "stop everything" | Stops speaking, the running plan or scene, and typing (everything also stops background work) |
 
 Anything else goes to the language model, which can also call the same tools.
 
@@ -593,6 +675,51 @@ Vision → *Screen reading* turns it off.
 
 ---
 
+## Your PC, hands-free
+
+Everything here also works typed, and every destructive action asks first. Nothing is ever deleted
+permanently: removals go to the Recycle Bin, and SAINT checks the Recycle Bin can hold each item first.
+
+**SAINT itself** — "open the dashboard", "go to history / settings / music", "turn off the mini player",
+"hide the halo" / "halo always on", "open the overlay", "turn off action notices", "dark mode",
+"minimize yourself".
+
+**Steam** — reads `libraryfolders.vdf` and each `appmanifest_*.acf`, plus `steam.extra_libraries`
+(default `D:\SteamLibrary`). Launching uses `steam://rungameid/…`, so Steam does the work.
+
+**Files and storage** (`modules/files`) — drive overview, background scans (cached for
+`files.scan_cache_hours`), a junk report, and cleanup that asks before anything moves. "My games folder" is
+`files.games_dir` (default `D:\Games`); name more folders in `files.known`. Never touched: Windows, Program
+Files, ProgramData, drive roots, your profile folder itself, code repositories and SAINT. Never suggested:
+Steam libraries, your games folder, emulators and ROMs.
+
+**Archives** — `.rar` through WinRAR's `UnRAR.exe` (with progress), `.zip` through WinRAR or Python,
+`.7z` through `WinRAR.exe`. The archive goes into its own folder unless it's already wrapped in one.
+
+**Windows** — lock, sleep, restart, shut down (asks; restart and shutdown wait 60 s), mic mute, per-app and
+whole-PC volume, output device, brightness, screenshots (Pictures\Screenshots). Audio uses `pycaw`.
+
+**Stop and silence** — "stop", "cancel", "shut up" stop what's happening now; "stop everything" also stops
+background scans, extraction and watchers. "Silent mode" / "be quiet for 30 minutes" / "you can talk again".
+Quiet requests get quiet answers (Settings: `voice.whisper_replies`, `whisper_rms`, `whisper_gain`).
+
+**Watching** (`modules/watch`) — up to five watches at a time, each ending after two hours. "Finished"
+means the window changed and then stayed still for 8 seconds (a reply finished streaming, a build
+finished). "What changed?" compares window titles and tiny per-screen fingerprints kept in memory for 30
+minutes.
+
+**Workspaces** — `data/workspaces.json`: each window's program, monitor, position and state, plus the
+Spotify context. **Scenes** *Gaming mode*, *Done gaming* and *Dev environment* are added once; edit or
+delete them on the Automations page.
+
+**Notifications** — off until you say "read my notifications out loud" (or enable the module). Then new
+notifications that match `notifications.keywords`, or come from an app in `notifications.allow`, are
+announced; apps in `notifications.deny` never are. "Read my notifications" works any time.
+
+**Aliases** — "when I say X, I mean Y" (`data/aliases.json`); "what aliases do I have", "forget the alias X".
+
+---
+
 ## The interface
 
 Everything you see is driven by real events from the core runtime — the UI never guesses what SAINT is
@@ -664,7 +791,7 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word, `music_hotwor
 .venv\Scripts\python -m pytest
 ```
 
-329 automated tests cover:
+About 700 automated tests cover:
 
 - wake-word model loading, silence and noise rejection, the windowed trigger and cooldown
 - music hot-words (accepted only while music is active, whole-utterance match, confidence floor)
@@ -681,7 +808,16 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word, `music_hotwor
 - memory store, recall, update and delete, including persistence across a restart
 - the scheduler (parse, persist, execute, missed reminders, recurring, cancel)
 - tool validation, permissions and confirmations, and desktop safety checks
-- Spotify resolution, device recovery and listening memory against a simulated API
+- Spotify resolution, device recovery and listening memory against a simulated API, including skips
+  counted once, paused time, skip sources and DJ mode
+- SAINT's own window by voice, and every misrouted request from the live logs
+- Steam file parsing and game matching; drive scans (junctions, cloud files), junk rules, WinRAR
+  listing, zip-slip protection, and Recycle Bin / move safety against a simulated Windows file operation
+  (a test fails if permanent deletion ever appears in `modules/files`)
+- stop / silent mode / whisper replies, cancelling multi-step plans, aliases, the follow-up intent gate
+- History streaks, heatmap levels and the never-trimmed daily summary
+- Windows controls, clipboard (secret detection), workspaces, watchers with a fake clock, "what
+  changed?", error-location parsing, "handle this" validation, notification parsing
 
 Tests use a temporary data directory and mock STT, TTS and LLM backends, so they never touch your
 settings, microphone, Spotify account or desktop. `tools/dev/` holds manual diagnostic scripts, and
@@ -725,7 +861,10 @@ core/
   events.py             event bus (direct core subscribers + Qt signal for UI)
   config.py, paths.py   settings (+ migration) and project-relative paths
   permissions.py        allow / confirm / deny policy
-  history.py            local usage log (data/history.jsonl) behind the History page
+  history.py            local usage log (data/history.jsonl) + never-trimmed daily summary
+  history_stats.py      streaks, heatmap levels and totals for the History page
+  cancel.py, activity.py  "stop" across plans/scenes/typing; "what are you doing?"
+  ui_link.py            lets tools drive SAINT's window on the GUI thread
   logger.py, device.py, analytics.py, state.py, setup.py
 modules/
   voice/                mic capture, VAD, wake word (ONNX), STT, TTS
@@ -733,7 +872,14 @@ modules/
   automation/           tool registry, scheduler, time parser, scenes, background tasks
   spotify/              OAuth PKCE, API client, tools, listening memory
   memory/               SQLite store + structured memory service
-  desktop/              apps, windows, keyboard/mouse, UI Automation
+  desktop/              apps, windows, keyboard/mouse, UI Automation, clipboard, Windows/audio controls
+  files/                drive scans, junk rules, Recycle Bin / move (undoable), WinRAR archives
+  steam/                Steam library files, game matching, steam:// actions
+  watch/                watchers ("tell me when…") and the "what changed?" log
+  workspace/            saved window layouts
+  notifications/        Windows notifications (read-only)
+  dev/                  run tests, open the file behind an error
+  ui_control/           voice control of SAINT's own window
   vision/               screen capture, UI context, optional vision model
   ai/                   providers (Ollama/OpenAI-compatible/mock), context
 ui/
@@ -762,5 +908,10 @@ tools/                  wake-word training config, dev scripts
   is never uploaded. Demo mode never writes to it.
 - The overlay's frosted background is a snapshot of your screen taken the moment it opens; it's kept
   in memory only and dropped when the overlay closes.
+- **Files are never deleted permanently.** Removals go to the Recycle Bin after you confirm; moving,
+  recycling, uninstalling games and power actions always ask, whatever the permission mode.
+- **Clipboard and notifications stay on your PC** and are never offered to the language model as tools.
+  Anything that looks like a password, key or token is never read aloud.
+- "What changed?" keeps window titles and 64-bit screen fingerprints in memory only, for 30 minutes.
 - The LLM can only act through explicit, validated tools. It has no shell access, and high-risk
   actions need your confirmation.
