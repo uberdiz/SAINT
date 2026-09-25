@@ -22,7 +22,7 @@ _MUST_SPEAK = re.compile(
     r"\?|\b(couldn'?t|can'?t|cannot|failed|error|isn'?t connected|not connected|unable|"
     r"don'?t have|wasn'?t able|sorry|went wrong|stopped there|should i|do you want)\b", re.I)
 # Announcement sources that always speak (you asked for them).
-_ALWAYS_SOURCES = {"reminder", "watch", "confirm", "silent"}
+_ALWAYS_SOURCES = {"reminder", "watch", "confirm", "silent"}      # notifications stay quiet in silent mode
 
 
 class OutputPolicy:

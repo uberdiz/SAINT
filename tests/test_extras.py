@@ -289,3 +289,81 @@ def test_handle_this_always_asks(monkeypatch):
         assert confirmations.pending is not None
     finally:
         confirmations.clear()
+
+
+# ---------------------------------------------------------------- notifications
+TOAST = ('<toast><visual><binding template="ToastGeneric"><text>Build failed</text>'
+         '<text>3 tests failed in test_files.py</text></binding></visual></toast>')
+
+
+def test_toast_parsing_and_app_names():
+    from modules.notifications.reader import app_name, parse_payload
+    assert parse_payload(TOAST) == ["Build failed", "3 tests failed in test_files.py"]
+    assert parse_payload(TOAST.encode()) == ["Build failed", "3 tests failed in test_files.py"]
+    assert app_name("Claude_pzs8sxrjxfjjc!Claude") == "Claude"
+    assert app_name("com.squirrel.Discord.Discord") == "Discord"
+
+
+def test_reading_a_notification_database(tmp_path):
+    import sqlite3
+    from modules.notifications import reader
+    db = tmp_path / "wpn.db"
+    con = sqlite3.connect(db)
+    con.executescript('CREATE TABLE NotificationHandler (RecordId INTEGER, PrimaryId TEXT);'
+                      'CREATE TABLE Notification ("Order" INTEGER, HandlerId INTEGER, Type TEXT, Payload BLOB, '
+                      'ArrivalTime INTEGER);')
+    con.execute("INSERT INTO NotificationHandler VALUES (1, 'Claude_x!Claude'), (2, 'com.squirrel.Discord.Discord')")
+    ft = int((time.time() + 11644473600) * 1e7)
+    con.execute('INSERT INTO Notification VALUES (5, 1, "toast", ?, ?)', (TOAST.encode(), ft))
+    con.execute('INSERT INTO Notification VALUES (6, 2, "tile", ?, ?)', (b"<tile/>", ft))
+    con.execute('INSERT INTO Notification VALUES (7, 2, "toast", ?, ?)',
+                (b"<toast><visual><binding><text>Sam</text><text>lol</text></binding></visual></toast>", ft))
+    con.commit()
+    con.close()
+    items = reader.read(0, path=str(db))
+    assert [(n["app"], n["title"]) for n in items] == [("Claude", "Build failed"), ("Discord", "Sam")]
+    assert abs(items[0]["at"] - time.time()) < 5
+    assert reader.read(5, path=str(db))[0]["order"] == 7
+    assert reader.latest_order(str(db)) == 7
+
+
+def test_importance_rules(monkeypatch):
+    from core.config import config
+    from modules.notifications.reader import is_important
+    monkeypatch.setitem(config._data, "notifications", {"important_only": True, "allow": ["Discord"],
+                                                         "deny": ["nvapp"], "keywords": ["failed"]})
+    assert is_important({"app": "Discord", "title": "Sam", "body": "lol"})
+    assert is_important({"app": "Claude", "title": "Build failed", "body": ""})
+    assert not is_important({"app": "Claude", "title": "Response ready", "body": ""})
+    assert not is_important({"app": "nvapp", "title": "Driver install failed", "body": ""})
+
+
+@pytest.mark.parametrize("text,intent", [
+    ("read my notifications", "notifications.read"), ("any new notifications", "notifications.read"),
+    ("clear my notifications", "notifications.clear"),
+    ("only tell me about important notifications", "notifications.set_filter"),
+    ("mute discord notifications", "notifications.set_filter"),
+    ("read my notifications out loud", "notifications.set_filter"),
+])
+def test_notification_phrases(text, intent):
+    assert _name(text) == intent
+
+
+# ---------------------------------------------------------------- starter scenes
+def test_starter_scenes_are_added_once(tmp_path, monkeypatch):
+    from core.config import config
+    from modules.automation.scenes import SceneStore
+    store = SceneStore(str(tmp_path / "scenes.json"))
+    store._sync_schedule = lambda s: None
+    monkeypatch.setitem(config._data, "scenes", {"seeded": []})
+    store.ensure_defaults()
+    names = {s.name for s in store.all()}
+    assert {"Gaming mode", "Done gaming", "Dev environment"} <= names
+    assert store.match("i'm done gaming").name == "Done gaming"
+    gm = next(s for s in store.all() if s.name == "Gaming mode")
+    store.delete(gm.id)
+    store.ensure_defaults()                    # a deleted starter scene stays deleted
+    assert "Gaming mode" not in {s.name for s in store.all()}
+    for step in next(s for s in store.all() if s.name == "Done gaming").steps:
+        from modules.agent.meta import match_meta
+        assert match_meta(step) is not None or route(step) is not None, step

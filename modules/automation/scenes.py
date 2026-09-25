@@ -130,6 +130,36 @@ class SceneStore:
             log.exception("scenes.schedule_delete_failed id=%s", aid)
 
     # ------------------------------------------------------------------ #
+    # Starter scenes (added once each; edit or delete them freely)
+    # ------------------------------------------------------------------ #
+    DEFAULTS = [
+        Scene("Gaming mode", ["save this workspace as before gaming", "pause the music",
+                              "open my steam library", "silent mode for 3 hours"], phrase="let's game"),
+        Scene("Done gaming", ["you can talk again", "restore before gaming workspace"], phrase="i'm done gaming"),
+        Scene("Dev environment", ["open visual studio code", "open terminal", "open my browser",
+                                  "play something chill"], phrase="get my dev environment ready"),
+    ]
+
+    def ensure_defaults(self):
+        """Add the starter scenes the first time only — a deleted one stays deleted."""
+        from core.config import config
+        seeded = set(config.get("scenes.seeded", []) or [])
+        existing = {_norm(s.name) for s in self.all()}
+        added = []
+        for d in self.DEFAULTS:
+            key = _norm(d.name)
+            if key in seeded:
+                continue
+            if key not in existing:
+                try:
+                    self.save(Scene(d.name, list(d.steps), phrase=d.phrase))
+                except ValueError:
+                    continue
+            added.append(key)
+        if added:
+            config.set("scenes.seeded", sorted(seeded | set(added)))
+
+    # ------------------------------------------------------------------ #
     # Voice matching + running
     # ------------------------------------------------------------------ #
     def match(self, text: str) -> Optional[Scene]:

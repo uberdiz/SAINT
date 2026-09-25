@@ -8,6 +8,7 @@ from modules.memory.module import MemoryModule
 from modules.spotify.module import SpotifyModule
 from modules.desktop.module import DesktopModule
 from modules.watch.module import WatchModule
+from modules.notifications.module import NotificationsModule
 
 
 class ModuleManager:
@@ -21,6 +22,7 @@ class ModuleManager:
             "spotify": SpotifyModule(),
             "desktop": DesktopModule(),
             "watch": WatchModule(),
+            "notifications": NotificationsModule(),
         }
         self._apply_initial_state()
 

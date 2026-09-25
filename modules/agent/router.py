@@ -119,9 +119,10 @@ def parse_system(text: str) -> Optional[Intent]:
                       "system")
     if re.search(r"^what can you do|^what are you able to do|^help$|^what do you do", t):
         return Intent("capabilities", lambda: Reply(
-            "I can play and control Spotify, remember things about you, set reminders and scheduled "
-            "automations, open, switch, move and close apps, type and press keys for you, and read what's "
-            "in the active window. Just ask."), "system")
+            "I can play and control Spotify, launch your Steam games, check and clean up your drives, extract "
+            "archives with WinRAR, open, move and arrange apps, control volume, your mic and audio output, "
+            "set reminders, save and restore workspaces, tell you when something finishes, read your "
+            "clipboard and notifications, and control my own window. Just ask."), "system")
     return None
 
 

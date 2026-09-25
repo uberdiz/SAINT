@@ -107,6 +107,11 @@ class SaintRuntime:
         from modules.agent.agent import agent
         scheduler.announce = self.controller.announce
         scheduler.run_command = agent.run_command
+        try:
+            from modules.automation.scenes import scenes
+            scenes.ensure_defaults()           # Gaming mode / Done gaming / Dev environment (once)
+        except Exception:
+            log.exception("runtime.default_scenes_failed")
         if config.get("modules.automation", True) and config.get("automation.enabled", True):
             try:
                 scheduler.start()

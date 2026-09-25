@@ -30,7 +30,7 @@ def _is_app(name: str) -> bool:
     n = (name or "").strip()
     return bool(n) and n not in _NOT_APPS and len(n.split()) <= 3 and not re.search(
         r"\b(brightness|timer|alarm|reminder|theme|mode|temperature|volume|speed|quality|playback|screen|"
-        r"halo|overlay|notices|mini ?player)\b", n)
+        r"halo|overlay|notices|mini ?player|notifications?)\b", n)
 
 
 def _run(tool: str, describe: str, ok, **kwargs) -> Intent:

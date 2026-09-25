@@ -446,7 +446,8 @@ def _register_default_tools(registry: ToolRegistry):
                     ("modules.desktop.clipboard", "register_clipboard_tools"),
                     ("modules.workspace.tools", "register_workspace_tools"),
                     ("modules.dev.tools", "register_dev_tools"),
-                    ("modules.watch.tools", "register_watch_tools")):
+                    ("modules.watch.tools", "register_watch_tools"),
+                    ("modules.notifications.tools", "register_notification_tools")):
         try:
             __import__(mod, fromlist=[fn]).__dict__[fn](registry)
         except Exception:  # pragma: no cover - optional deps missing

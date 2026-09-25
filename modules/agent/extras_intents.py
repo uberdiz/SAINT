@@ -35,7 +35,7 @@ def parse_extras(text: str) -> Optional[Intent]:
     t = raw.lower().strip(" .!?")
     if not t:
         return None
-    for parser in (_watch, _clipboard, _workspace, _dev, _handle):
+    for parser in (_watch, _notifications, _clipboard, _workspace, _dev, _handle):
         it = parser(t, raw)
         if it is not None:
             return it
@@ -88,6 +88,42 @@ def _watch(t: str, raw: str) -> Optional[Intent]:
         return Intent("watch.add", lambda: _say(call("watch.add", kind=kind, target=target)), "watch")
     if re.match(r"^watch (?:this|that)(?: window)?(?: for (?:me|changes))?$|^keep an eye on (?:this|that|it)$", t):
         return Intent("watch.add", lambda: _say(call("watch.add", kind="change", target="this")), "watch")
+    return None
+
+
+# ---------------------------------------------------------------------- #
+# Notifications
+# ---------------------------------------------------------------------- #
+def _notifications(t: str, raw: str) -> Optional[Intent]:
+    if re.match(r"^(?:read|check|show|what are)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:new\s+|latest\s+|recent\s+)?"
+                r"notifications$|^(?:do i have\s+)?any\s+(?:new\s+)?notifications$|^what did i get$", t):
+        return Intent("notifications.read", lambda: _say(call("notifications.read")), "notifications")
+    if re.match(r"^(?:clear|dismiss|mark(?:\s+all)?(?:\s+as)?\s+read)\s+(?:all\s+)?(?:my\s+|the\s+)?notifications$", t):
+        return Intent("notifications.clear", lambda: _say(call("notifications.clear")), "notifications")
+    if re.match(r"^(?:only\s+(?:tell|notify)\s+me\s+(?:about\s+)?important\s+(?:ones|notifications)|"
+                r"only important notifications)$", t):
+        return Intent("notifications.set_filter", lambda: _say(call("notifications.set_filter", important_only=True)),
+                      "notifications")
+    if re.match(r"^(?:tell me about|announce|read out)\s+(?:all|every)\s+(?:my\s+)?notifications?$", t):
+        return Intent("notifications.set_filter",
+                      lambda: _say(call("notifications.set_filter", important_only=False)), "notifications")
+    m = re.match(r"^(?:always\s+tell\s+me\s+about|always announce)\s+(.+?)(?:\s+notifications)?$", t)
+    if m:
+        app = m.group(1)
+        return Intent("notifications.set_filter", lambda: _say(call("notifications.set_filter", allow=app)),
+                      "notifications")
+    m = re.match(r"^(?:never\s+tell\s+me\s+about|stop\s+telling\s+me\s+about|mute|ignore)\s+(.+?)\s+notifications$", t)
+    if m:
+        app = m.group(1)
+        return Intent("notifications.set_filter", lambda: _say(call("notifications.set_filter", deny=app)),
+                      "notifications")
+    m = re.match(r"^(?:(?:start|turn on)\s+reading\s+(?:my\s+)?notifications(?:\s+out loud)?|read\s+(?:my\s+)?"
+                 r"notifications\s+out\s+loud|announce\s+(?:my\s+)?notifications)$|^(?P<off>(?:stop|turn off)\s+reading"
+                 r"\s+(?:my\s+)?notifications(?:\s+out loud)?)$", t)
+    if m:
+        state = "off" if m.group("off") else "on"
+        return Intent("notifications.set_filter", lambda: _say(call("notifications.set_filter", announce=state)),
+                      "notifications")
     return None
 
 

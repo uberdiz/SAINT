@@ -69,6 +69,28 @@ _SIGNALS: Dict[str, List] = {
     "system": [
         (r"\bwhat time is it\b|\bwhat(?:'s| is)\s+the\s+time\b|\bwhat day is it\b", 3),
         (r"\bwhat can you do\b|\bhelp\b", 1),
+        (r"\b(lock|sleep|restart|reboot|shut ?down|brightness|do not disturb|screenshot)\b", 3),
+    ],
+    "audio": [
+        (r"\b(mic|microphone|headphones|headset|speakers|audio output|volume mixer)\b", 3),
+        (r"\b(?:set|turn|mute)\s+\w+\s+(?:to\s+\d+|down|up)\b", 1),
+    ],
+    "files": [
+        (r"\b(files?|folders?|downloads|drive|disk|storage|space|junk|clean ?up|recycle bin)\b", 3),
+        (r"\b(extract|unzip|unrar|winrar|zip|rar|7z|archive|compress)\b", 4),
+        (r"\b(emulators?|roms?)\b", 3),
+    ],
+    "steam": [
+        (r"\b(steam|game library|my games|launch \w+)\b", 3),
+    ],
+    "ui": [
+        (r"\b(mini ?player|dashboard|halo|overlay|history page|settings page|dark mode|light mode)\b", 4),
+    ],
+    "watch": [
+        (r"\btell me when\b|\blet me know when\b|\bwhat changed\b|\bwatch (?:this|my)\b", 4),
+    ],
+    "workspace": [
+        (r"\b(workspace|layout)\b", 3),
     ],
 }
 
@@ -105,6 +127,15 @@ _DOMAIN_LABELS = {
     "automation": "Reminders and scheduled commands (once, daily, weekly, conditional)",
     "system":     "Time / date and what SAINT can do",
     "web":        "Current information (news, weather, latest facts) — separate from browser control",
+    "ui":         "SAINT's own window (open the dashboard or a page, mini player, halo, overlay, theme)",
+    "steam":      "Steam (launch installed games, open the library, search the store, game sizes)",
+    "files":      "Files and storage (drive space, what's using it, junk to clear, find games/emulators, open "
+                  "folders; WinRAR extraction and moving/recycling are done by SAINT's own commands and always ask)",
+    "audio":      "Audio (mic mute, per-app volume, whole-PC volume, switch output device)",
+    "watch":      "Watching (tell the user when a window finishes/closes/changes or a download finishes; what "
+                  "changed recently; follow one screen)",
+    "workspace":  "Workspaces (save and restore window layouts)",
+    "display":    "Screen brightness (laptop screens)",
 }
 
 
