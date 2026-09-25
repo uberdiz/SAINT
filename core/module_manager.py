@@ -7,6 +7,7 @@ from modules.vision.module import VisionModule
 from modules.memory.module import MemoryModule
 from modules.spotify.module import SpotifyModule
 from modules.desktop.module import DesktopModule
+from modules.watch.module import WatchModule
 
 
 class ModuleManager:
@@ -19,6 +20,7 @@ class ModuleManager:
             "memory": MemoryModule(),
             "spotify": SpotifyModule(),
             "desktop": DesktopModule(),
+            "watch": WatchModule(),
         }
         self._apply_initial_state()
 

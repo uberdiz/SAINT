@@ -441,7 +441,12 @@ def _register_default_tools(registry: ToolRegistry):
     # register into the same registry.
     for mod, fn in (("modules.ui_control.tools", "register_ui_tools"),
                     ("modules.steam.tools", "register_steam_tools"),
-                    ("modules.files.tools", "register_file_tools")):
+                    ("modules.files.tools", "register_file_tools"),
+                    ("modules.desktop.system_controls", "register_system_tools"),
+                    ("modules.desktop.clipboard", "register_clipboard_tools"),
+                    ("modules.workspace.tools", "register_workspace_tools"),
+                    ("modules.dev.tools", "register_dev_tools"),
+                    ("modules.watch.tools", "register_watch_tools")):
         try:
             __import__(mod, fromlist=[fn]).__dict__[fn](registry)
         except Exception:  # pragma: no cover - optional deps missing

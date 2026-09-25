@@ -25,6 +25,7 @@ class DesktopContext:
         self._element = None         # (name, x, y, time)
         self._domain = ("", 0.0)
         self._spotify_playing = (False, 0.0)
+        self._follow_monitor = None   # "watch my left screen": screen commands prefer this monitor
         try:
             from core.events import event_bus, EventType
             event_bus.subscribe(self._on_event)
@@ -96,6 +97,14 @@ class DesktopContext:
         with self._lock:
             d, t = self._domain
         return d if time.time() - t <= max_age else ""
+
+    def follow_monitor(self):
+        with self._lock:
+            return self._follow_monitor
+
+    def set_follow_monitor(self, index):
+        with self._lock:
+            self._follow_monitor = index
 
     def clear(self):
         with self._lock:

@@ -245,16 +245,17 @@ def _compact(value, depth=0):
     return value
 
 
-def complete(prompt: str, system: str = "", timeout: float = 45.0) -> str:
+def complete(prompt: str, system: str = "", timeout: float = 45.0, max_tokens: int = 0) -> str:
     """One-shot, non-streaming answer from the configured local model (used
     for small agent sub-tasks such as explaining an error on screen).
-    Returns '' on failure; the output is cleaned of any internal markup."""
+    ``max_tokens`` overrides the spoken-reply cap (e.g. for rewriting copied
+    code). Returns '' on failure; the output is cleaned of any internal markup."""
     from modules.ai.module import AIModule
     base = config.get("ai.base_url", "http://localhost:11434")
     try:
         model, _ = AIModule._resolve_model(None, "ollama", base, config.get("ai.model", ""))
         opts = {"temperature": 0.3}
-        cap = int(config.get("ai.max_tokens", 0) or 0)
+        cap = int(max_tokens or config.get("ai.max_tokens", 0) or 0)
         if cap > 0:
             opts["num_predict"] = cap
         r = requests.post(base.replace("localhost", "127.0.0.1").rstrip("/") + "/api/chat", timeout=timeout,

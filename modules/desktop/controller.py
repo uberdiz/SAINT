@@ -370,6 +370,16 @@ class DesktopController:
             w = next((x for x in wins if x.hwnd == ref and not x.minimized), None)
             if w is not None and not user_switched:
                 return self._activate(w) if activate and not w.foreground else w
+        # "Watch my left screen": the window in front on that monitor.
+        try:
+            from modules.agent.context import desktop_context
+            follow = desktop_context.follow_monitor()
+        except Exception:
+            follow = None
+        if follow and (fg is None or self._is_own(fg) or fg.monitor != follow):
+            on = next((x for x in wins if x.monitor == follow and not x.minimized and not self._is_own(x)), None)
+            if on is not None:
+                return self._activate(on) if activate else on
         if fg and not self._is_own(fg):
             return fg
         other = next((w for w in wins if not w.minimized and not self._is_own(w)), None)

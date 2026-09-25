@@ -156,7 +156,8 @@ def parse_memory(text: str) -> Optional[Intent]:
     m = re.match(r"^(?:forget|delete|erase|remove)\s+(?:that\s+|about\s+|the fact that\s+)?(.+)$", t)
     if m and m.group(1).strip() in ("it", "that", "this", "about it"):
         m = None                       # "forget it" is a dismissal, not a memory deletion
-    if m and not re.search(r"\b(reminder|timer|alarm|automation|song|track|playlist|window|app)\b", t):
+    if m and not re.search(r"\b(reminder|timer|alarm|automation|song|track|playlist|window|app|workspace|layout|"
+                           r"alias|file|folder|files|archive|download|downloads|zip|rar|game|screenshot)s?\b", t):
         target = m.group(1).strip()
         if re.fullmatch(r"(everything|all (of )?(it|that|my memories|your memories)|all memories|everything about me)",
                         target):
@@ -1285,8 +1286,18 @@ def parse_files(text: str) -> Optional[Intent]:
     return parse(text)
 
 
-_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_spotify,
-                   parse_desktop_nl, parse_desktop]
+def parse_winctl(text: str) -> Optional[Intent]:
+    from modules.agent.winctl_intents import parse_winctl as parse
+    return parse(text)
+
+
+def parse_extras(text: str) -> Optional[Intent]:
+    from modules.agent.extras_intents import parse_extras as parse
+    return parse(text)
+
+
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_winctl,
+                   parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
 
 
 def route_single(text: str) -> Optional[Intent]:
@@ -1469,7 +1480,8 @@ def _route_composite(text: str) -> Optional[Intent]:
 # A new command starting mid-sentence: "open my browser search YouTube for X"
 # (speech has no commas). Only tried when the text doesn't parse as one step.
 _NEXT_VERB = re.compile(r"\s+(?=(?:search|google|look up|click|double click|right click|play|go to|navigate to|"
-                        r"turn|pause|type|press|scroll|put|make|open|close|find)\b)", re.I)
+                        r"turn|pause|type|press|scroll|put|make|open|close|find|extract|unzip|launch|start|save|"
+                        r"restore|lock|mute|tell me|watch|move)\b)", re.I)
 
 
 def _route_steps(text: str, depth: int = 0) -> Optional[List[Intent]]:
