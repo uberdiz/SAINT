@@ -86,8 +86,13 @@ def loads(text: str) -> Dict[str, Any]:
 
 
 def load(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8", errors="replace") as f:
-        return loads(f.read())
+    with open(path, "rb") as f:
+        raw = f.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("cp1252", errors="replace")      # older manifests ("Call of Duty®")
+    return loads(text)
 
 
 def get_ci(d: Dict[str, Any], key: str, default=None):

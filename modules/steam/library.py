@@ -111,7 +111,7 @@ def read_manifest(path: str, library: str, registered: bool) -> Optional[Game]:
         data = vdf.get_ci(vdf.load(path), "AppState", {})
     except OSError:
         return None
-    name = vdf.get_ci(data, "name", "") or ""
+    name = re.sub(r"\s*[™®©]\s*", " ", vdf.get_ci(data, "name", "") or "").strip()   # read aloud cleanly
     appid = str(vdf.get_ci(data, "appid", "") or "")
     if not name or not appid or _NOT_GAMES.search(name) or appid == "228980":
         return None

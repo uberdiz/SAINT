@@ -61,8 +61,6 @@ def scan_tree(root: str, depth: int = 3, progress: Optional[Callable] = None,
              "skipped": n unreadable folders, "elapsed"}."""
     root = os.path.normpath(root)
     t0 = time.time()
-    sizes: Dict[str, int] = {}
-    total = files = skipped = 0
     expected = 0
     try:
         import psutil
@@ -70,14 +68,73 @@ def scan_tree(root: str, depth: int = 3, progress: Optional[Callable] = None,
             expected = psutil.disk_usage(root).used
     except Exception:
         pass
-    # (path, depth, ancestors whose totals this folder adds to)
-    stack = [(root, 0, ())]
-    last_report = 0.0
+    shared = {"total": 0, "last": 0.0}
+    lock = threading.Lock()
+
+    def report(added: int):
+        if not progress:
+            return
+        with lock:
+            shared["total"] += added
+            now = time.time()
+            if now - shared["last"] < 0.5:
+                return
+            shared["last"] = now
+            done = shared["total"]
+        progress(min(0.99, done / expected) if expected else 0.0, f"{done / 1e9:.1f} GB counted")
+
+    # The top level is listed here; each top-level folder is walked on its own
+    # thread (os.scandir releases the GIL, so a fast SSD is read in parallel).
+    sizes: Dict[str, int] = {}
+    total = files = skipped = 0
+    subdirs = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                try:
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                a = _attrs(st)
+                if a & _REPARSE or stat.S_ISLNK(st.st_mode):
+                    continue
+                if stat.S_ISDIR(st.st_mode):
+                    subdirs.append(entry.path)
+                    continue
+                size = 0 if a & _ONLINE_ONLY else st.st_size
+                total += size
+                files += 1
+    except OSError:
+        skipped += 1
+    sizes[root] = total
+    if subdirs:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(8, len(subdirs))) as pool:
+            parts = list(pool.map(lambda p: _walk(p, 1, (root,), depth, cancel, report), subdirs))
+        for part_sizes, part_total, part_files, part_skipped in parts:
+            for k, v in part_sizes.items():
+                sizes[k] = sizes.get(k, 0) + v
+            total += part_total
+            files += part_files
+            skipped += part_skipped
+    folders = [{"path": p, "size": s, "depth": _depth(root, p)} for p, s in sizes.items() if p != root]
+    folders.sort(key=lambda f: f["size"], reverse=True)
+    return {"root": root, "total": total, "files": files, "folders": folders, "skipped": skipped,
+            "elapsed": round(time.time() - t0, 1), "complete": not (cancel is not None and cancel.is_set())}
+
+
+def _walk(start: str, start_depth: int, ancestors: tuple, depth: int, cancel, report):
+    """Iterative walk of one subtree. Sizes are added to every folder in the
+    chain down to ``depth`` (the root's share comes back in ``ancestors``)."""
+    sizes: Dict[str, int] = {}
+    total = files = skipped = 0
+    stack = [(start, start_depth, ancestors)]
+    pending = 0
     while stack:
         if cancel is not None and cancel.is_set():
             break
-        path, d, ancestors = stack.pop()
-        chain = ancestors + ((path,) if d <= depth else ())
+        path, d, anc = stack.pop()
+        chain = anc + ((path,) if d <= depth else ())
         try:
             it = os.scandir(path)
         except OSError:
@@ -97,18 +154,15 @@ def scan_tree(root: str, depth: int = 3, progress: Optional[Callable] = None,
                     continue
                 size = 0 if a & _ONLINE_ONLY else st.st_size
                 total += size
+                pending += size
                 files += 1
-                for anc in chain:
-                    sizes[anc] = sizes.get(anc, 0) + size
-        now = time.time()
-        if progress and now - last_report > 0.5:
-            last_report = now
-            frac = min(0.99, total / expected) if expected else 0.0
-            progress(frac, f"{total / 1e9:.1f} GB counted")
-    folders = [{"path": p, "size": s, "depth": _depth(root, p)} for p, s in sizes.items() if p != root]
-    folders.sort(key=lambda f: f["size"], reverse=True)
-    return {"root": root, "total": total, "files": files, "folders": folders, "skipped": skipped,
-            "elapsed": round(time.time() - t0, 1), "complete": not (cancel is not None and cancel.is_set())}
+                for c in chain:
+                    sizes[c] = sizes.get(c, 0) + size
+        if pending > 200e6:
+            report(pending)
+            pending = 0
+    report(pending)
+    return sizes, total, files, skipped
 
 
 def _depth(root: str, path: str) -> int:

@@ -94,7 +94,7 @@ def run_meta(meta: Meta) -> str:
         output_policy.set_silent(meta.minutes)
         mins = int(round(meta.minutes))
         span = (f"{mins // 60} hour{'s' if mins // 60 != 1 else ''}" if mins >= 60 and mins % 60 == 0
-                else f"{mins} minutes")
+                else f"{mins} minute{'s' if mins != 1 else ''}")
         return f"Silent mode for {span}. I'll still speak up for questions, errors and reminders."
     if meta.kind == "silent_off":
         was = output_policy.silent
