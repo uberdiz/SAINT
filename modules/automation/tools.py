@@ -440,7 +440,8 @@ def _register_default_tools(registry: ToolRegistry):
     # Voice control of SAINT's own window, and the feature packages below,
     # register into the same registry.
     for mod, fn in (("modules.ui_control.tools", "register_ui_tools"),
-                    ("modules.steam.tools", "register_steam_tools")):
+                    ("modules.steam.tools", "register_steam_tools"),
+                    ("modules.files.tools", "register_file_tools")):
         try:
             __import__(mod, fromlist=[fn]).__dict__[fn](registry)
         except Exception:  # pragma: no cover - optional deps missing

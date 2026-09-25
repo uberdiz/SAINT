@@ -1275,7 +1275,17 @@ def parse_steam(text: str) -> Optional[Intent]:
     return parse(text)
 
 
-_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_spotify,
+def parse_files_task(text: str) -> Optional[Intent]:
+    from modules.agent.files_intents import parse_files_task as parse
+    return parse(text)
+
+
+def parse_files(text: str) -> Optional[Intent]:
+    from modules.agent.files_intents import parse_files as parse
+    return parse(text)
+
+
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_spotify,
                    parse_desktop_nl, parse_desktop]
 
 
@@ -1294,7 +1304,9 @@ def route_single(text: str) -> Optional[Intent]:
 def route(text: str) -> Optional[Intent]:
     # parse_web runs before parse_automation so "what's the weather tomorrow" is
     # answered, not scheduled.
-    for parser in (parse_web, parse_automation, parse_memory):
+    # parse_files_task: "go to Downloads, click the first download and extract it
+    # to my games folder" is ONE extraction, not three unrelated steps.
+    for parser in (parse_web, parse_files_task, parse_automation, parse_memory):
         try:
             intent = parser(text)
         except Exception:
