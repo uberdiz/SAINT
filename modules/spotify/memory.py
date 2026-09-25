@@ -77,11 +77,14 @@ class SpotifyMemory:
             CREATE TABLE IF NOT EXISTS artist_genres (
                 artist_id TEXT PRIMARY KEY, name TEXT, genres_json TEXT, updated_at REAL);
         """, script=True)
-        # Older databases lack listening.artist_id
-        try:
-            self._exec("ALTER TABLE listening ADD COLUMN artist_id TEXT")
-        except sqlite3.OperationalError:
-            pass
+        # Older databases lack listening.artist_id / skips.source
+        for sql in ("ALTER TABLE listening ADD COLUMN artist_id TEXT",
+                    # voice = "skip" said to SAINT, ui = mini player button, app = in Spotify itself
+                    "ALTER TABLE skips ADD COLUMN source TEXT NOT NULL DEFAULT 'app'"):
+            try:
+                self._exec(sql)
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------------ #
     # Preferences
@@ -171,14 +174,53 @@ class SpotifyMemory:
     def recent_requests(self, limit: int = 20) -> List[Dict[str, Any]]:
         return self._query("SELECT * FROM requests ORDER BY created_at DESC LIMIT ?", (limit,))
 
-    def record_skip(self, track: Dict[str, Any], progress_ms: int = 0):
+    def record_skip(self, track: Dict[str, Any], progress_ms: int = 0, source: str = "app"):
         item = track or {}
         artists = item.get("artists") or []
-        self._exec("""INSERT INTO skips(created_at,track_id,track_name,artist,progress_ms,duration_ms)
-                      VALUES(?,?,?,?,?,?)""",
+        self._exec("""INSERT INTO skips(created_at,track_id,track_name,artist,progress_ms,duration_ms,source)
+                      VALUES(?,?,?,?,?,?,?)""",
                    (time.time(), item.get("id"), item.get("name"),
                     artists[0].get("name", "") if artists else "", int(progress_ms or 0),
-                    int(item.get("duration_ms") or 0)))
+                    int(item.get("duration_ms") or 0), source or "app"))
+
+    def skip_sources(self, days: int = 30) -> Dict[str, int]:
+        rows = self._query("SELECT source, COUNT(*) AS n FROM skips WHERE created_at>=? GROUP BY source",
+                           (time.time() - days * 86400,))
+        return {r["source"]: r["n"] for r in rows}
+
+    def all_track_ids(self) -> set:
+        return {r["track_id"] for r in self._query("SELECT DISTINCT track_id FROM listening") if r["track_id"]}
+
+    # ------------------------------------------------------------------ #
+    # Artist bans ("no more of this artist")
+    # ------------------------------------------------------------------ #
+    def ban_artist(self, name: str):
+        self.set_preference("ban.artist." + name.strip().lower(), name.strip(), "explicit")
+
+    def unban_artist(self, name: str) -> bool:
+        key = "ban.artist." + name.strip().lower()
+        existed = bool(self._query("SELECT key FROM preferences WHERE key=?", (key,)))
+        self._exec("DELETE FROM preferences WHERE key=?", (key,))
+        return existed
+
+    def banned_artists(self) -> set:
+        return {str(p["value"]).lower() for p in self.get_preferences("ban.artist.")}
+
+    def artist_genres_by_name(self, name: str) -> List[str]:
+        rows = self._query("SELECT genres_json FROM artist_genres WHERE lower(name)=lower(?)", (name,))
+        if not rows:
+            rows = self._query("""SELECT g.genres_json FROM artist_genres g JOIN listening l ON l.artist_id=g.artist_id
+                                  WHERE l.artist=? LIMIT 1""", (name,))
+        try:
+            return json.loads(rows[0]["genres_json"] or "[]") if rows else []
+        except ValueError:
+            return []
+
+    def cached_preference(self, key: str, max_age: float) -> Optional[Any]:
+        rows = self._query("SELECT value, updated_at FROM preferences WHERE key=?", (key,))
+        if rows and time.time() - float(rows[0]["updated_at"]) < max_age:
+            return json.loads(rows[0]["value"])
+        return None
 
     def skipped_track_ids(self, days: int = 30) -> set:
         rows = self._query("SELECT track_id FROM skips WHERE created_at>=?", (time.time() - days * 86400,))

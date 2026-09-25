@@ -363,6 +363,56 @@ def _stt_music_fix(lower: str) -> str:
     return lower
 
 
+_MOOD_WORDS = {"energetic": "energetic", "upbeat": "energetic", "hype": "energetic", "harder": "energetic",
+               "hyped": "energetic", "turnt": "energetic", "darker": "darker", "dark": "darker",
+               "chill": "chill", "chiller": "chill", "calmer": "chill", "calm": "chill", "mellow": "chill",
+               "mellower": "chill", "relaxed": "chill", "sad": "sad", "sadder": "sad", "happier": "happy",
+               "happy": "happy"}
+_DJ_MOOD = re.compile(
+    r"^(?:(?:make it|play|give me|put on|go|let'?s go|switch to|something|play something|give me something)\s+)?"
+    r"(?:something\s+)?(?:a\s+(?:bit|little)\s+|way\s+|much\s+)?(?:more\s+)?"
+    r"(energetic|upbeat|hype|hyped|harder|turnt|darker|dark|chill|chiller|calmer|calm|mellow|mellower|relaxed|"
+    r"sad|sadder|happier|happy)(?:\s+(?:music|songs?|stuff|vibes?|tracks?))?$")
+_NO_MORE = re.compile(r"^(?:no more|ban|block|stop recommending|don'?t play(?: me)?(?: any)?(?: more)?)\s+(?:of\s+)?"
+                      r"(?:songs by\s+|music by\s+)?(.+?)(?:\s+(?:anymore|any more|again|please))?$")
+
+
+def _dj_intent(lower: str) -> Optional[SpotifyIntent]:
+    """DJ mode: steer what plays by mood, the last song, novelty or artist bans."""
+    if re.fullmatch(r"(?:dj|dj mode|be my dj|start dj mode|you'?re the dj|play dj)", lower):
+        return SpotifyIntent("play_for_me", "spotify.play_recommended", {"context": ""})
+    m = re.match(r"^bring (?:the )?energy (?:back )?(up|down)$|^(?:turn|crank) up the energy$|^calm it down$", lower)
+    if m:
+        mood = "chill" if (m.group(1) == "down" or lower.startswith("calm")) else "energetic"
+        return SpotifyIntent("dj", "spotify.play_recommended", {"mood": mood})
+    m = _DJ_MOOD.match(lower)
+    if m and (lower.split()[0] in ("make", "play", "give", "put", "go", "let's", "lets", "switch", "something", "more")
+              or lower in _MOOD_WORDS):
+        return SpotifyIntent("dj", "spotify.play_recommended", {"mood": _MOOD_WORDS[m.group(1)]})
+    if re.match(r"^(?:play |give me |put on )?(?:something|more|songs?|music)\s+(?:more\s+)?like the "
+                r"(?:last|previous) (?:song|track|one)$|^back to (?:something like )?the last (?:song|vibe)$", lower):
+        return SpotifyIntent("dj", "spotify.play_recommended", {"seed_last": True})
+    if re.match(r"^(?:play |give me |find me |put on )?(?:something|songs?|music|stuff)\s+i (?:haven'?t|have not|"
+                r"never) (?:heard|listened to)(?: before)?$|^(?:play |give me )?something (?:completely )?new$|"
+                r"^surprise me with something new$", lower):
+        return SpotifyIntent("dj", "spotify.play_recommended", {"novel": True})
+    m = re.match(r"^(?:unban|unblock|allow)\s+(.+?)(?:\s+again)?$", lower)
+    if m and m.group(1) not in ("it", "this", "that", "notifications"):
+        return SpotifyIntent("unban", "spotify.unban_artist", {"name": m.group(1)})
+    m = _NO_MORE.match(lower)
+    if m:
+        who = m.group(1).strip()
+        if re.fullmatch(r"(?:this|that|the)?\s*(?:artist|guy|rapper|singer|band|one)|him|her|them", who):
+            return SpotifyIntent("ban", "spotify.ban_artist", {})
+        if who and not re.search(r"\b(song|songs|track|tracks|music|this|that|it|ads?|notifications?|spotify|"
+                                 r"playlist|album|videos?|windows?|tabs?)\b", who) and len(who.split()) <= 4:
+            return SpotifyIntent("ban", "spotify.ban_artist", {"name": who})
+    if re.match(r"^(?:i'?m|i am) (?:done|sick|tired) (?:with|of) (?:this|that) (?:artist|guy|rapper|singer|band)$",
+                lower):
+        return SpotifyIntent("ban", "spotify.ban_artist", {})
+    return None
+
+
 def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     """Map a music utterance to a Spotify tool. Works without the word 'spotify'."""
     lower = _lower(text)
@@ -385,6 +435,11 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         return SpotifyIntent("next_reject", "spotify.next", {})
     if _CHANGE_TRACK.match(lower):
         return SpotifyIntent("next", "spotify.next", {})
+
+    # --- DJ mode ("more energetic", "something darker", "more like the last song") ----------
+    dj = _dj_intent(lower)
+    if dj is not None:
+        return dj
 
     # --- "something like X" / "something by X" ------------------------------
     m = _SIMILAR_TO.match(lower)
@@ -627,6 +682,13 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
     if k in ("play_for_me", "similar"):
         basis = f" Picked from {r['basis']}." if r.get("basis") else ""
         return f"Playing {r['name']} by {r['artist']}, then {r['count'] - 1} more.{basis}"
+    if k == "dj":
+        return f"Switching it up: {r['name']} by {r['artist']}, then {r['count'] - 1} more."
+    if k == "ban":
+        return f"Got it — no more {r['banned']}."
+    if k == "unban":
+        return f"{r['unbanned']} can come back in the mix." if r.get("was_banned") else \
+            f"{r['unbanned']} wasn't blocked."
     if k == "history":
         if not r["count"]:
             return ("I haven't recorded any listening today yet." if r["period"] == "today"

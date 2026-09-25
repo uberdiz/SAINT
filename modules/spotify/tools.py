@@ -29,6 +29,18 @@ from modules.spotify.memory import SpotifyMemory
 
 logger = logging.getLogger("saint.spotify")
 
+# A skip is a track changed before this share of it played (voice and app alike).
+SKIP_FRACTION = 0.5
+
+# DJ mode: mood -> genre words matched against the artists' Spotify genres.
+MOODS = {
+    "energetic": ("trap", "rage", "drill", "hip hop", "edm", "dance", "rock", "punk", "hyperpop", "phonk"),
+    "darker": ("horrorcore", "dark", "phonk", "emo", "drill", "industrial", "metal", "underground", "goth"),
+    "chill": ("lo-fi", "lofi", "chill", "r&b", "soul", "indie", "bedroom", "acoustic", "ambient", "jazz"),
+    "sad": ("sad", "emo", "indie", "singer-songwriter", "acoustic", "slowcore"),
+    "happy": ("pop", "dance", "funk", "disco", "afrobeats", "house"),
+}
+
 GENRES = {
     "jazz", "blues", "rock", "classic rock", "hard rock", "indie", "indie rock", "indie pop", "pop", "k-pop",
     "kpop", "j-pop", "hip hop", "hip-hop", "rap", "trap", "r&b", "rnb", "soul", "funk", "disco", "house",
@@ -83,6 +95,8 @@ class SpotifyTools:
         self._last: Optional[Dict[str, Any]] = None          # last observed track (poller)
         self._rec_ids: Dict[str, float] = {}                 # recommended track id -> time played
         self._saint_skip_at = 0.0
+        self._skip_handled_id = None     # a skip SAINT already recorded (voice / mini player)
+        self._backfilled = False
 
     @property
     def memory(self) -> SpotifyMemory:
@@ -115,7 +129,13 @@ class SpotifyTools:
                  {"context": "string (optional)"}, L, self.play_recommended,
                  parameters={"context": P("string", "mood/genre hint", required=False, default=""),
                              "similar_to_current": P("boolean", required=False, default=False),
-                             "seed": P("string", "song/album/artist to base it on", required=False, default="")},
+                             "seed": P("string", "song/album/artist to base it on", required=False, default=""),
+                             "mood": P("string", "DJ mood", required=False, default="",
+                                       enum=["", "energetic", "darker", "chill", "sad", "happy"]),
+                             "novel": P("boolean", "only songs the user hasn't heard", required=False,
+                                        default=False),
+                             "seed_last": P("boolean", "similar to the previous song", required=False,
+                                            default=False)},
                  llm_exposed=True),
             Tool("spotify.seek", "Jump within the current track (seconds from the start, or relative)",
                  {"seconds": "int"}, L, self.seek,
@@ -128,7 +148,15 @@ class SpotifyTools:
                  {"state": "bool"}, L, self.smart_shuffle, parameters={"state": P("boolean")},
                  llm_exposed=True),
             Tool("spotify.pause", "Pause Spotify playback", {}, L, self.pause, parameters={}, llm_exposed=True),
-            Tool("spotify.next", "Skip to the next track", {}, L, self.next, parameters={}, llm_exposed=True),
+            Tool("spotify.next", "Skip to the next track", {}, L, self.next,
+                 parameters={"source": P("string", "who skipped", required=False, default="voice",
+                                         enum=["voice", "ui"])}, llm_exposed=True),
+            Tool("spotify.ban_artist", "Stop recommending an artist ('no more of this artist')",
+                 {"name": "string (optional)"}, L, self.ban_artist,
+                 parameters={"name": P("string", "artist; blank = the one playing", required=False, default="")},
+                 llm_exposed=True),
+            Tool("spotify.unban_artist", "Allow a banned artist in recommendations again",
+                 {"name": "string"}, L, self.unban_artist, parameters={"name": P("string")}),
             Tool("spotify.previous", "Go back to the previous track", {}, L, self.previous,
                  parameters={}, llm_exposed=True),
             Tool("spotify.volume", "Set Spotify volume (0-100)", {"percent": "int"}, L, self.volume,
@@ -296,6 +324,8 @@ class SpotifyTools:
 
     def _refresh_soon(self, delay: float = 0.8):
         self.invalidate_state_cache()
+        # SAINT changed playback: the next track change isn't the user skipping.
+        self._saint_skip_at = time.time()
         def run():
             time.sleep(delay)
             try:
@@ -542,14 +572,18 @@ class SpotifyTools:
         self._refresh_soon(0.5)
         return {"success": True, "action": "pause"}
 
-    def next(self):
+    def next(self, source="voice"):
         try:
             st = self._state()
             if st["item"] and config.get("spotify.track_history", True):
                 dur = st["duration_ms"] or 1
-                if st["progress_ms"] < 0.8 * dur:
-                    self.memory.record_skip(st["item"], st["progress_ms"])
-                    self._note_rec_outcome(st["id"], st["progress_ms"], dur, skipped=True)
+                if st["progress_ms"] < SKIP_FRACTION * dur:
+                    self.memory.record_skip(st["item"], st["progress_ms"], source=source or "voice")
+                self._note_rec_outcome(st["id"], st["progress_ms"], dur, skipped=st["progress_ms"] < SKIP_FRACTION * dur)
+                with self._lock:
+                    # The poller must not count this track change as a second (app) skip.
+                    self._skip_handled_id = st["id"]
+                    self._last = None
         except SpotifyAPIError:
             pass
         self._saint_skip_at = time.time()
@@ -679,10 +713,36 @@ class SpotifyTools:
                 seeds[a["name"]] = seeds.get(a["name"], 0) + max(1.0, 6 - i * 0.5)
         except SpotifyAPIError:
             pass
+        for artist, score in self._spotify_taste_artists().items():
+            seeds[artist] = seeds.get(artist, 0) + score
         for artist, score in self.memory.feedback_scores().items():
             if artist:
                 seeds[artist] = seeds.get(artist, 0) + 2 * score
-        return {k: v for k, v in seeds.items() if v > 0}
+        banned = self.memory.banned_artists()
+        return {k: v for k, v in seeds.items() if v > 0 and k.lower() not in banned}
+
+    def _spotify_taste_artists(self) -> Dict[str, float]:
+        """Artists from Spotify's own data — your top tracks (last month) and
+        saved songs — cached for 6 hours so recommendations stay fast."""
+        cached = self.memory.cached_preference("cache.spotify_taste", 6 * 3600)
+        if isinstance(cached, dict):
+            return {str(k): float(v) for k, v in cached.items()}
+        scores: Dict[str, float] = {}
+        try:
+            for i, t in enumerate((self.client.top_tracks("short_term", 20) or {}).get("items", [])):
+                for a in (t.get("artists") or [])[:1]:
+                    scores[a["name"]] = scores.get(a["name"], 0) + max(0.5, 3 - i * 0.15)
+        except Exception:
+            pass
+        try:
+            for entry in (self.client.saved_tracks(50) or {}).get("items", []):
+                for a in ((entry.get("track") or {}).get("artists") or [])[:1]:
+                    scores[a["name"]] = scores.get(a["name"], 0) + 0.5
+        except Exception:
+            pass
+        if scores:
+            self.memory.set_preference("cache.spotify_taste", scores, "cache")
+        return scores
 
     def _seed_from(self, seed: str):
         """(main_artist {id,name}, exclude_track_id, label) for 'something like <seed>'."""
@@ -705,16 +765,27 @@ class SpotifyTools:
         main = {"id": found[0]["id"], "name": found[0]["name"]} if found else {"id": None, "name": artist}
         return main, None, f"{ent['name']} by {artist}".strip(" by")
 
-    def recommend(self, context="", limit=5, similar_to_current=False, seed=""):
+    def recommend(self, context="", limit=5, similar_to_current=False, seed="", mood="", novel=False):
         limit = max(1, min(20, int(limit)))
         recent_ids = {r["track_id"] for r in self.memory.recent(time.time() - 3 * 3600, 200)}
         skipped = self.memory.skipped_track_ids(30)
+        banned = self.memory.banned_artists()
+        if novel:       # "something I haven't heard": nothing from your history or saved songs
+            recent_ids |= self.memory.all_track_ids()
+            try:
+                recent_ids |= {(e.get("track") or {}).get("id") for e in
+                               (self.client.saved_tracks(50) or {}).get("items", [])}
+            except SpotifyAPIError:
+                pass
+        mood_words = MOODS.get((mood or "").lower(), ())
         candidates: Dict[str, tuple] = {}
         basis = ""
 
         def add(track, score, why):
             tid = track.get("id")
             if not tid or tid in recent_ids or tid in skipped:
+                return
+            if any((a or {}).get("name", "").lower() in banned for a in track.get("artists") or []):
                 return
             if tid not in candidates or candidates[tid][0] < score:
                 candidates[tid] = (score, track, why)
@@ -769,8 +840,18 @@ class SpotifyTools:
             seeds = self._seed_artists()
             if not seeds:
                 return {"recommendations": [], "reason": "no_history", "context": context}
+            if mood_words:
+                # DJ mode: favour the artists you play whose genres fit the mood.
+                fitted = {}
+                for name, weight in sorted(seeds.items(), key=lambda kv: kv[1], reverse=True)[:25]:
+                    genres = " ".join(self.memory.artist_genres_by_name(name) or [])
+                    fit = sum(1 for w in mood_words if w in genres)
+                    fitted[name] = weight * (1.0 + fit) if fit else weight * 0.3
+                seeds = fitted
             top = sorted(seeds.items(), key=lambda kv: kv[1], reverse=True)[:6]
             basis = "your listening history (" + ", ".join(a for a, _ in top[:3]) + ")"
+            if mood_words:
+                basis = f"your {mood} side (" + ", ".join(a for a, _ in top[:3]) + ")"
             ctx_words = {w for w in re.findall(r"[a-z]+", (context or "").lower()) if len(w) > 3}
             for name, weight in top:
                 for t in _items(self.client.search(f'artist:"{name}"', "track", limit=10), "track"):
@@ -781,6 +862,12 @@ class SpotifyTools:
             if context and _norm(context) in GENRES:
                 for t in _items(self.client.search(f'genre:"{_norm(context)}"', "track", limit=10), "track"):
                     add(t, 1.5 + random.random(), context)
+            for g in mood_words[:2]:
+                if len(candidates) >= 20:
+                    break
+                for t in _items(self.client.search(f'genre:"{g}"', "track", limit=10), "track"):
+                    if (t.get("popularity") or 0) >= 45:
+                        add(t, 1.2 + random.random() * 0.5, g)
         ranked = sorted(candidates.values(), key=lambda x: x[0], reverse=True)
         per_artist: Dict[str, int] = {}
         out, names = [], set()
@@ -799,8 +886,18 @@ class SpotifyTools:
                 break
         return {"recommendations": out, "basis": basis, "context": context}
 
-    def play_recommended(self, context="", similar_to_current=False, seed=""):
-        rec = self.recommend(context=context, limit=10, similar_to_current=similar_to_current, seed=seed)
+    def play_recommended(self, context="", similar_to_current=False, seed="", mood="", novel=False,
+                         seed_last=False):
+        if seed_last and not seed:
+            # "more like the last song": the track before the one playing now.
+            rows = [r for r in self.memory.recent(limit=5) if r.get("track_name")]
+            st = self._state()
+            prev = next((r for r in rows if r.get("track_id") != st.get("id")), None)
+            if prev is None:
+                raise SpotifyAPIError("I don't know what the last song was yet.", status=404, code="NO_HISTORY")
+            seed = f"{prev['track_name']} by {prev['artist']}"
+        rec = self.recommend(context=context, limit=10, similar_to_current=similar_to_current, seed=seed,
+                             mood=mood, novel=novel)
         recs = rec["recommendations"]
         if not recs:
             if rec.get("reason") == "no_history":
@@ -811,7 +908,8 @@ class SpotifyTools:
         now = time.time()
         with self._lock:
             for r in recs:
-                self._rec_ids[r["id"]] = now
+                self._rec_ids[r["id"]] = {"at": now, "track": {
+                    "id": r["id"], "name": r.get("name", ""), "artist": (r.get("artists") or "").split(",")[0].strip()}}
         self.memory.record_request(context or (f"like {seed}" if seed else
                                                "similar" if similar_to_current else "something I like"),
                                    "recommendation", recs[0]["name"], recs[0]["uri"], recs[0]["artists"])
@@ -837,13 +935,13 @@ class SpotifyTools:
             started = self._rec_ids.pop(track_id, None) if track_id else None
         if started is None:
             return
+        track = started.get("track") if isinstance(started, dict) else None
+        track = track or {"id": track_id, "name": "", "artist": ""}
         listened = progress_ms / max(1, duration_ms)
         if skipped and listened < 0.35:
-            self.memory.record_feedback({"id": track_id, "name": "", "artists": []}, -0.5,
-                                        "recommendation rejected (skipped)")
+            self.memory.record_feedback(track, -0.5, "recommendation rejected (skipped)")
         elif listened >= 0.6:
-            self.memory.record_feedback({"id": track_id, "name": "", "artists": []}, 0.5,
-                                        "recommendation accepted (listened)")
+            self.memory.record_feedback(track, 0.5, "recommendation accepted (listened)")
 
     def seek(self, seconds, relative=False):
         st = self._state()
@@ -919,6 +1017,19 @@ class SpotifyTools:
             logger.debug("spotify.smart_shuffle_uia_failed %s", e)
             return None
 
+    def ban_artist(self, name=""):
+        """'No more of this artist' (the one playing) or 'no more Drake'."""
+        if not name:
+            st = self._state()
+            if not st["item"]:
+                raise SpotifyAPIError("Nothing is playing.", status=404, code="NO_PLAYBACK")
+            name = (st["item"].get("artists") or [{}])[0].get("name", "")
+        self.memory.ban_artist(name)
+        return {"banned": name}
+
+    def unban_artist(self, name):
+        return {"unbanned": name, "was_banned": self.memory.unban_artist(name)}
+
     def feedback(self, signal, reason=""):
         st = self._state()
         if not st["item"]:
@@ -948,21 +1059,36 @@ class SpotifyTools:
         self._publish(st)
         if not config.get("spotify.track_history", True):
             return st
+        if not self._backfilled:
+            # Once per start: what you played on your phone / other devices
+            # while SAINT wasn't watching (Spotify's recently-played list).
+            self._backfilled = True
+            try:
+                self.recent(50)
+            except Exception as e:
+                logger.debug("spotify.backfill_failed %s", e)
         with self._lock:
             last = self._last
             if st["id"] and (last is None or last.get("id") != st["id"]):
-                if last and last.get("id"):
-                    elapsed = (time.time() - last["seen_at"]) * 1000 + last["progress_ms"]
+                if last and last.get("id") and last["id"] != self._skip_handled_id:
+                    # Only time spent *playing* counts: a paused song left for an
+                    # hour and then changed is not "listened to the end".
+                    elapsed = last["progress_ms"]
+                    if last.get("is_playing"):
+                        elapsed += (time.time() - last["seen_at"]) * 1000
+                    elapsed = min(elapsed, last["duration_ms"])
                     frac = elapsed / max(1, last["duration_ms"])
-                    user_skip = frac < 0.5 and time.time() - self._saint_skip_at > 5
+                    user_skip = frac < SKIP_FRACTION and time.time() - self._saint_skip_at > 5
                     if user_skip and last.get("item"):
-                        self.memory.record_skip(last["item"], int(elapsed))
-                    self._note_rec_outcome(last["id"], min(elapsed, last["duration_ms"]), last["duration_ms"],
-                                           skipped=user_skip)
+                        self.memory.record_skip(last["item"], int(elapsed), source="app")
+                        logger.info("spotify.skip.app track=%r at=%.0f%%", last["item"].get("name"), frac * 100)
+                    self._note_rec_outcome(last["id"], elapsed, last["duration_ms"], skipped=user_skip)
+                self._skip_handled_id = None
                 self.memory.record_listening(st["item"], context_uri=st["context_uri"])
             if st["id"]:
                 self._last = {"id": st["id"], "item": st["item"], "progress_ms": st["progress_ms"],
-                              "duration_ms": st["duration_ms"] or 1, "seen_at": time.time()}
+                              "duration_ms": st["duration_ms"] or 1, "seen_at": time.time(),
+                              "is_playing": bool(st["is_playing"])}
         # Slowly fill in genre data for artists we've seen (one lookup per poll).
         for artist_id in self.memory.uncached_artist_ids(1):
             self._genres_for(artist_id, "")

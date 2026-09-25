@@ -79,7 +79,10 @@ def transport(action: str, on_error=None):
         if action == "play_pause":
             play_pause(on_error)
         else:
-            spotify("spotify.next" if action == "next" else "spotify.previous", on_error)
+            if action == "next":
+                spotify("spotify.next", on_error, source="ui")     # a mini player skip, not a voice one
+            else:
+                spotify("spotify.previous", on_error)
         return
 
     def go():

@@ -101,6 +101,7 @@ class DesktopContext:
         with self._lock:
             self._window = self._element = None
             self._domain = ("", 0.0)
+            self._spotify_playing = (False, 0.0)
 
 
 desktop_context = DesktopContext()

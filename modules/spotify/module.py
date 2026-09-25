@@ -50,7 +50,10 @@ class SpotifyModule(BaseModule):
         self.tools = SpotifyTools(self.client)
         self._poll_thread = None
         self._poll_stop = threading.Event()
+        self._poll_wake = threading.Event()   # poll now: the Spotify app changed track
+        self._last_media_title = None
         self._last_error_code = ""
+        event_bus.subscribe(self._on_media)
 
     # ------------------------------------------------------------------ #
     def availability(self):
@@ -109,6 +112,20 @@ class SpotifyModule(BaseModule):
 
     def stop_poller(self):
         self._poll_stop.set()
+        self._poll_wake.set()
+
+    def _on_media(self, ev):
+        """Windows reports a new track in the Spotify app (a skip you made there):
+        poll right away instead of up to 15 s later, so short listens are caught."""
+        if ev.type != EventType.MEDIA_CHANGED:
+            return
+        p = ev.payload or {}
+        if not p.get("is_spotify"):
+            return
+        title = (p.get("title"), p.get("artist"))
+        if title != self._last_media_title:
+            self._last_media_title = title
+            self._poll_wake.set()
 
     def _poll_loop(self):
         while not self._poll_stop.is_set():
@@ -128,4 +145,8 @@ class SpotifyModule(BaseModule):
                         interval = 60
                 except Exception:
                     log.exception("spotify.poller.crash")
-            self._poll_stop.wait(interval)
+            # Sleep until the next regular poll — or until the Spotify app
+            # changes track (MEDIA_CHANGED), debounced so a burst is one poll.
+            if self._poll_wake.wait(interval) and not self._poll_stop.is_set():
+                self._poll_stop.wait(1.5)
+            self._poll_wake.clear()
