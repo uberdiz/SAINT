@@ -212,7 +212,8 @@ def parse_memory(text: str) -> Optional[Intent]:
     m3 = re.match(r"^(?:where do i (live|work)|when is my birthday|what(?:'s| is) my name|who am i)\??$", t)
     if m3:
         rq = {"live": "home location live", "work": "employer work"}.get(m3.group(1) or "", t)
-    if rq and not re.search(r"\b(reminders?|playlist|song|music|schedule|screen|window)\b", rq):
+    if rq and not re.search(r"\b(reminders?|playlist|song|music|schedule|screen|window|games?|folders?|files?|"
+                            r"drives?|downloads?|space|storage|notifications?|aliases|workspaces?|clipboard)\b", rq):
         query = rq
 
         def run_recall():
@@ -1269,8 +1270,13 @@ def parse_saint_ui(text: str) -> Optional[Intent]:
     return parse(text)
 
 
-_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_spotify, parse_desktop_nl,
-                   parse_desktop]
+def parse_steam(text: str) -> Optional[Intent]:
+    from modules.agent.steam_intents import parse_steam as parse
+    return parse(text)
+
+
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_spotify,
+                   parse_desktop_nl, parse_desktop]
 
 
 def route_single(text: str) -> Optional[Intent]:
@@ -1439,7 +1445,7 @@ def _route_composite(text: str) -> Optional[Intent]:
             return None
         for it in steps:
             intents.append(it)
-            if it.domain in ("browser", "spotify"):
+            if it.domain in ("browser", "spotify", "steam"):
                 desktop_context.note_domain(it.domain)
     desktop_context.note_domain(saved)
     if len(intents) < 2:

@@ -118,7 +118,7 @@ class Agent:
             except Exception:
                 log.exception("agent.intent_failed %s", intent.name)
                 reply = Reply("Something went wrong while doing that, so I stopped.", ok=False)
-        if intent.domain in ("spotify", "browser", "desktop"):
+        if intent.domain in ("spotify", "browser", "desktop", "steam"):
             from modules.agent.context import desktop_context
             if not (intent.domain == "desktop" and desktop_context.domain() == "browser"):
                 desktop_context.note_domain(intent.domain)

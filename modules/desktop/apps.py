@@ -168,13 +168,17 @@ class AppCatalog:
         custom = {(_norm(k)): v for k, v in (config.get("desktop.apps", {}) or {}).items()}
         if query in custom:
             target = str(custom[query])
-            kind = "uri" if re.match(r"^[a-z][\w+.-]*:(?![\\/])", target, re.I) else "path"
+            # "steam://open/games" and "ms-settings:display" are URIs; "C:\..." (a
+            # one-letter scheme) is a path.
+            kind = "uri" if re.match(r"^[a-z][\w+.-]+:", target, re.I) else "path"
             # Prefer the target's filename stem as the process hint — the display
             # alias ("AIDE") often has no relation to the actual process
             # (e.g. aide.exe / VSCodium.exe). Falls back to the alias.
             stem = ""
             if kind == "path":
                 stem = os.path.splitext(os.path.basename(target.strip('"')))[0].lower()
+            else:
+                stem = target.split(":", 1)[0].lower()     # steam://... -> the Steam process
             return AppEntry(name, kind, target, "custom",
                             process_hint=stem or query.split(" ")[0])
 
