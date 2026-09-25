@@ -38,7 +38,7 @@ class UIBus(QObject):
         event_bus.event_occurred.connect(self._forward)
 
     def _forward(self, ev):
-        if self.demo:
+        if self.demo and ev.type != EventType.UI_COMMAND:   # a real voice command still reaches the window
             return
         self._track(ev)
         self.event.emit(ev)

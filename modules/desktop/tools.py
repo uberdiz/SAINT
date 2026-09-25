@@ -78,8 +78,8 @@ def register_desktop_tools(registry: ToolRegistry):
     def minimize_others(keep):
         return desktop.minimize_others(keep)
 
-    def focus_window(name):
-        return desktop.focus(name).to_dict()
+    def focus_window(name, monitor=None):
+        return desktop.focus(name, monitor=monitor or None).to_dict()
 
     def list_windows():
         return {"windows": [w.to_dict() for w in desktop.list_windows()],
@@ -179,7 +179,10 @@ def register_desktop_tools(registry: ToolRegistry):
              parameters={"name": win_param}, llm_exposed=True, category="desktop"),
         Tool("desktop.focus_window", "Switch to / bring an application window to the front",
              {"name": "string"}, PermissionLevel.LOW, focus_window,
-             parameters={"name": win_param}, llm_exposed=True, category="desktop"),
+             parameters={"name": win_param,
+                         "monitor": P("string", "only a window on this monitor: left/right/main/second/1/2",
+                                      required=False, default="")},
+             llm_exposed=True, category="desktop"),
         Tool("desktop.list_windows", "List open windows and monitors", {}, PermissionLevel.LOW, list_windows,
              parameters={}, llm_exposed=True, category="desktop"),
         Tool("desktop.move_window", "Move a window to another monitor",

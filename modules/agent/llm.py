@@ -36,7 +36,9 @@ _ACTION_HINT = re.compile(
     r"remind|reminder|timer|alarm|schedule|every (day|morning|week)|tomorrow|"
     r"remember|forget|note|jot|write down|nudge|my (favou?rite|name)|do i (like|prefer)|"
     r"open|launch|close|quit|switch|window|monitor|screen|type|press|click|minimi|maximi|snap|"
-    r"app|chrome|discord|browser|desktop|what'?s on|youtube|video|captions|subtitles|playback|speed)\b", re.I)
+    r"app|chrome|discord|browser|desktop|what'?s on|youtube|video|captions|subtitles|playback|speed|"
+    r"clear|folder|files?|drive|space|storage|extract|unzip|winrar|archive|steam|game|download|"
+    r"clipboard|workspace|lock|sleep|restart|shut ?down|mic|notifications?|watch|dashboard|mini ?player)\b", re.I)
 
 _TOOL_SYSTEM = (
     "You can act on the user's PC through the provided tools. Call a tool ONLY through the "

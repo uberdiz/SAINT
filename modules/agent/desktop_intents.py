@@ -50,9 +50,9 @@ def _win(ref: str) -> str:
 
 
 def _title(r) -> str:
-    t = (r or {}).get("title") or (r or {}).get("window") or ""
-    t = re.sub(r"^\(\d+\)\s*", "", t)
-    return (t.split(" - ")[-1] or t)[:50] if t else "it"
+    """The app / site a tool result refers to ("YouTube", "Spotify")."""
+    from modules.vision.screen import app_label
+    return app_label(r)
 
 
 # ---------------------------------------------------------------------- #
@@ -341,6 +341,29 @@ def parse(text: str) -> Optional[Intent]:
                 r"screen)(?:\s+i'?m on| i am on)?$|^what(?:'s| is) (?:this|the) (?:page|article|website) about$|"
                 r"^tl;?dr(?: this)?$", t):
         return Intent("screen.summarize", _summarize_screen, "desktop")
+
+    # ---- clear the screen ("clear everything off the screen but YouTube") ---------------------
+    m = re.match(r"^(?:clear|get|move|take|put)\s+(?:everything|all(?: the| my)? windows?|all of it|it all)\s+"
+                 r"(?:off|away)(?:\s+(?:of\s+)?(?:the|my)\s+screens?)?(?:\s+(?:but|except(?: for)?|besides|other than|"
+                 r"apart from|aside from)\s+(?:the\s+|my\s+)?(.+))?$|"
+                 r"^clear (?:the|my) screens?(?:\s+(?:but|except(?: for)?|besides|other than)\s+(?:the\s+|my\s+)?(.+))?$", t)
+    if m:
+        keep = (m.group(1) or m.group(2) or "").strip()
+        # Whisper hears "but YouTube" as "but you too".
+        keep = re.sub(r"^(?:you ?too?b?e?|you tube|u tube)$", "youtube", keep)
+        if not keep:
+            def run_show_desktop():
+                return _tool("desktop.press_keys", "show the desktop", lambda r: "Cleared the screen.",
+                             retry=run_show_desktop, keys="win+d")
+            return Intent("desktop.show_desktop", run_show_desktop, "desktop")
+
+        def run_clear():
+            def ok(r):
+                what = " and ".join(r["kept"]) or keep
+                note = f" I couldn't find {', '.join(r['missing'])}." if r.get("missing") else ""
+                return (f"Cleared the screen except {what}." if r["minimized"] else f"Only {what} was open already.") + note
+            return run_tool("desktop.minimize_others", f"hide everything except {keep}", ok, keep=keep)
+        return Intent("desktop.minimize_others", run_clear, "desktop")
 
     # ---- hide everything except X ------------------------------------------------------------
     m = re.match(r"^(?:hide|minimi[sz]e|close)\s+(?:everything|all(?: (?:the|my|of my|other))?(?: (?:windows|tabs|apps|"

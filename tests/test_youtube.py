@@ -19,7 +19,8 @@ from modules.desktop import youtube
     ("skip the ad", ("skip_ad", None)),
     ("sleep timer 30 minutes", ("sleep_timer", "30")),
     ("next chapter", ("next_chapter", None)),
-    ("mini player", ("miniplayer", None)),
+    ("youtube mini player", ("miniplayer", None)),
+    ("put the video in the mini player", ("miniplayer", None)),
 ])
 def test_unambiguous_requests(text, expected):
     assert youtube.parse(text) == expected
@@ -32,6 +33,8 @@ def test_unambiguous_requests(text, expected):
     ("slow down", ("speed_down", None)),
     ("play at 2x", ("speed", 2.0)),
     ("normal speed", ("speed", 1.0)),
+    ("put it back at one time speed", ("speed", 1.0)),
+    ("mini player", ("miniplayer", None)),
     ("set speed to 1.25", ("speed", 1.25)),
     ("skip ahead 30 seconds", ("seek_seconds", 30.0)),
     ("go back 10 seconds", ("seek_seconds", -10.0)),
@@ -44,7 +47,8 @@ def test_bare_commands_mean_the_video_while_watching(text, expected):
     assert youtube.parse(text, youtube_context=True) == expected
 
 
-@pytest.mark.parametrize("text", ["pause", "faster", "mute", "can you repeat that", "what time is it",
+@pytest.mark.parametrize("text", ["mini player", "turn off the SAINT mini player", "close your mini player",
+                                  "pause", "faster", "mute", "can you repeat that", "what time is it",
                                   "play some music", "what does the caption say"])
 def test_not_hijacked_without_youtube(text):
     assert youtube.parse(text) is None

@@ -26,6 +26,8 @@ class DesktopModule(BaseModule):
         from modules.automation.tools import get_tool_registry
         from modules.desktop.apps import app_catalog
         get_tool_registry()          # registers desktop tools
+        from modules.desktop.focus_history import focus_history
+        focus_history.start()        # which window you used last ("smart" window choice)
         app_catalog.warm()           # build the installed-app catalogue in the background
         if not getattr(self, "_connected", False):
             event_bus.subscribe(self._on_event)

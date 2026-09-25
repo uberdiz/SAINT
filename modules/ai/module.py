@@ -104,6 +104,9 @@ class AIModule(BaseModule):
             return configured, None
         if configured in names:
             return configured, None
+        # "llama3.1" is Ollama's "llama3.1:latest" — the same model, not a substitution.
+        if configured and ":" not in configured and f"{configured}:latest" in names:
+            return f"{configured}:latest", None
         # Configured model isn't installed — pick the closest available.
         base = (configured or "").split(":")[0].lower()
 

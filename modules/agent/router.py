@@ -793,8 +793,8 @@ def parse_desktop(text: str) -> Optional[Intent]:
 
         def ok(r):
             if r.get("reused"):
-                t = re.sub(r"^\(\d+\)\s*", "", r.get("window") or "")
-                return f"Switched to {t.split(' - ')[-1] or r['app']}" + (
+                from modules.vision.screen import app_label
+                return f"Switched to {app_label(r)}" + (
                     f" (you have {r['count']} of its windows open)." if r.get("count", 1) > 1 else ".")
             if r.get("window"):
                 return f"Opened {r['app']}."
@@ -822,7 +822,8 @@ def parse_desktop(text: str) -> Optional[Intent]:
         def run_close():
             def ok(r):
                 if r.get("closed"):
-                    return f"Closed {r['title'].split(' - ')[-1] or label}."
+                    from modules.vision.screen import app_label
+                    return f"Closed {app_label(r) or label}."
                 return f"I asked {label} to close, but it's still open — {r.get('note', '')}".strip()
             return run_tool("desktop.close_app", f"close {label}", ok, name=name)
         return Intent("desktop.close_app", run_close, "desktop")
@@ -845,7 +846,7 @@ def parse_desktop(text: str) -> Optional[Intent]:
 
         def run_snap():
             return run_tool("desktop.arrange_window", f"snap {window} {side}",
-                            lambda r: f"Moved {r['title'].split(' - ')[-1] or 'it'} to the {side} side.",
+                            lambda r: f"Moved {_app_label(r)} to the {side} side.",
                             window=window, action=f"snap_{side}")
         return Intent("desktop.arrange_window", run_snap, "desktop")
 
@@ -860,7 +861,7 @@ def parse_desktop(text: str) -> Optional[Intent]:
 
         def run_move():
             return run_tool("desktop.move_window", f"move {window} to monitor {which}",
-                            lambda r: f"Moved {r['title'].split(' - ')[-1] or 'it'} to monitor {r['monitor']}.",
+                            lambda r: f"Moved {_app_label(r)} to monitor {r['monitor']}.",
                             window=window, monitor=which)
         return Intent("desktop.move_window", run_move, "desktop")
 
@@ -889,10 +890,28 @@ def parse_desktop(text: str) -> Optional[Intent]:
                  r"(?:\s+(?:window|app))?(?:\s+to the front)?$", t)
     if m and not re.search(r"\b(reminders?|memories|playlist|settings page|next song|previous)\b", t):
         name = m.group(1)
+        monitor = None
+        mm = re.search(r"\s+(?:on|in)\s+(?:my|the)\s+(second|other|2nd|left|right|main|primary|first|1st|third|"
+                       r"3rd|1|2|3|secondary|laptop)\s+(?:screen|monitor|display)$", name)
+        if mm:
+            monitor, name = mm.group(1), name[:mm.start()].strip()
+            name = re.sub(r"\s+(?:window|app)$", "", name) or "this"
+        # A whole request ("downloads folder, click the first download, and
+        # extract it ...") is never a window name.
+        if not _looks_like_app_name(name):
+            return None
 
         def run_focus():
-            return run_tool("desktop.focus_window", f"switch to {name}",
-                            lambda r: f"Switched to {r['title'].split(' - ')[-1] or name}.", name=name)
+            kwargs = {"name": name, **({"monitor": monitor} if monitor else {})}
+            res = call("desktop.focus_window", **kwargs)
+            if res.success:
+                return Reply(f"Switched to {_app_label(res.result)}.")
+            if res.error_code == "NOT_FOUND" and not monitor and _foreground_is_browser():
+                # "Go to Astral Games" on a web page means the link, not a window.
+                r2 = call("desktop.click_element", name=name)
+                if r2.success:
+                    return Reply(f"Clicked {r2.result.get('clicked', name)}.")
+            return Reply(res.error or f"I couldn't switch to {name}.", ok=False)
         return Intent("desktop.focus_window", run_focus, "desktop")
 
     # type
@@ -917,7 +936,11 @@ def parse_desktop(text: str) -> Optional[Intent]:
     # press keys
     m = re.match(r"^(?:press|hit|tap)\s+(?:the\s+)?(.+?)(?:\s+key)?$", t)
     if m:
-        keys = m.group(1).replace(" plus ", "+").replace(" and ", "+")
+        # "Press F to full screen" / "hit space so it pauses": the purpose isn't a key.
+        keys = re.sub(r"\s+(?:key\s+)?(?:to|so(?: that| it)?|in order to|for|then|and then)\s+.+$", "", m.group(1))
+        keys = re.sub(r"\s+key$", "", keys).replace(" plus ", "+").replace(" and ", "+")
+        if not _is_key_combo(keys):
+            return None
 
         def run_press():
             return run_tool("desktop.press_keys", f"press {keys}", lambda r: f"Pressed {r['keys']}.", keys=keys)
@@ -932,6 +955,44 @@ def parse_desktop(text: str) -> Optional[Intent]:
             return run_tool("desktop.click_element", f"click {name}", lambda r: f"Clicked {r['clicked']}.", name=name)
         return Intent("desktop.click_element", run_click, "desktop")
     return None
+
+
+def _app_label(r) -> str:
+    from modules.vision.screen import app_label
+    return app_label(r)
+
+
+def _foreground_is_browser() -> bool:
+    try:
+        from modules.desktop.controller import desktop
+        w = desktop.target_window()
+        return bool(w and desktop.is_browser(w))
+    except Exception:
+        return False
+
+
+_KEY_NAMES = {"enter", "return", "space", "spacebar", "tab", "esc", "escape", "backspace", "delete", "del", "home",
+              "end", "pageup", "pagedown", "page up", "page down", "up", "down", "left", "right", "insert",
+              "ctrl", "control", "alt", "shift", "win", "windows", "cmd", "super", "capslock", "caps lock",
+              "printscreen", "print screen", "prtsc", "volumeup", "volumedown", "volumemute", "playpause",
+              "nexttrack", "prevtrack", "menu", "apps", "up arrow", "down arrow", "left arrow", "right arrow",
+              "numlock", "scrolllock", "pause"}
+
+
+def _is_key_combo(keys: str) -> bool:
+    """'f', 'ctrl+shift+t', 'alt f4', 'space' — not 'f to full screen'."""
+    parts = [p.strip() for p in re.split(r"\s*\+\s*|\s+(?=\S)", keys.strip()) if p.strip()]
+    if not parts or len(parts) > 4:
+        return False
+    joined = keys.strip().lower()
+    if joined in _KEY_NAMES:
+        return True
+    for p in parts:
+        if len(p) == 1 or p in _KEY_NAMES or re.fullmatch(r"f(?:[1-9]|1[0-9]|2[0-4])", p) or \
+                re.fullmatch(r"num(?:pad)?\s?\d", p):
+            continue
+        return False
+    return True
 
 
 _COMMAND_VERB = re.compile(r"\b(?:search|click|play|type|press|scroll|turn|pause|go to|navigate|close|find|"
@@ -1141,7 +1202,13 @@ def parse_web(text: str) -> Optional[Intent]:
     return Intent("web.current", run_web, "web")
 
 
-_SINGLE_PARSERS = [parse_system, parse_web, parse_youtube, parse_spotify, parse_desktop_nl, parse_desktop]
+def parse_saint_ui(text: str) -> Optional[Intent]:
+    from modules.agent.saint_intents import parse_saint_ui as parse
+    return parse(text)
+
+
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_spotify, parse_desktop_nl,
+                   parse_desktop]
 
 
 def route_single(text: str) -> Optional[Intent]:

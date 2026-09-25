@@ -243,6 +243,8 @@ class MainWindow(QMainWindow):
         self.apply_appearance()
         self.navigate("Home", animate=False)
         ui_bus.event.connect(self._on_event)
+        from core.ui_link import ui_link
+        ui_link.attached = True            # voice can now drive the window ("open the dashboard")
         self._render_state(ui_bus.state)
         event_bus.emit_event(EventType.APP_STARTED, {})
 
@@ -492,7 +494,9 @@ class MainWindow(QMainWindow):
 
     def _on_event(self, ev):
         t, p = ev.type, ev.payload or {}
-        if t == EventType.ASSISTANT_STATE:
+        if t == EventType.UI_COMMAND:
+            self._handle_ui_command(p)
+        elif t == EventType.ASSISTANT_STATE:
             self._render_state(p)
         elif t in (EventType.VOICE_LISTENING_START, EventType.VOICE_LISTENING_STOP):
             self._sync_mic()
@@ -504,6 +508,59 @@ class MainWindow(QMainWindow):
             self._notice("Automation failed", f"{p.get('title')}: {p.get('error')}", "error")
         elif t == EventType.SPOTIFY_ERROR and self.isActiveWindow():
             self._notice("Spotify", p.get("error", ""), "warn", "music")
+
+    def _handle_ui_command(self, p: dict):
+        """A voice command about SAINT itself (modules/ui_control/tools.py)."""
+        from core.ui_link import ui_link
+        cmd, args, cid = p.get("cmd"), p.get("args") or {}, p.get("id", "")
+        if self.demo.running:
+            self.demo.stop()
+        try:
+            message = ""
+            if cmd == "navigate":
+                page = args.get("page", "Home")
+                if not self.isVisible() or self.isMinimized():
+                    self.show_normal()
+                self.navigate(page)
+            elif cmd == "set":
+                feature, value = args.get("feature"), str(args.get("value", "")).lower()
+                if feature == "mini_player":
+                    on = (not bool(config.get("widgets.spotify", False))) if value == "toggle" else value == "on"
+                    self.set_widget(on)
+                elif feature == "halo":
+                    cur = config.get("overlay.halo", "minimized")
+                    mode = {"on": "always", "toggle": "off" if cur != "off" else "minimized"}.get(value, value)
+                    self.set_halo_mode(mode)
+                elif feature == "overlay":
+                    if value == "on":
+                        self.open_overlay()
+                    elif value == "off":
+                        if self.overlay.isVisible():
+                            self.overlay.close_overlay()
+                    else:
+                        self.toggle_overlay()
+                elif feature == "action_notices":
+                    on = (not config.get("notifications.actions", True)) if value == "toggle" else value == "on"
+                    self.set_action_notices(on)
+                elif feature == "theme":
+                    if value == "toggle":
+                        dark = str(config.get("appearance.theme", "Dark")).lower() != "light"
+                        value = "light" if dark else "dark"
+                    self._set_theme(value.capitalize())
+            elif cmd == "window":
+                action = args.get("action")
+                if action == "show":
+                    self.show_normal()
+                elif action == "minimize":
+                    self.showMinimized()
+                elif action == "hide":
+                    self.hide()
+            else:
+                ui_link.ack(cid, False, f"Unknown window command {cmd}.")
+                return
+            ui_link.ack(cid, True, message)
+        except Exception as e:                  # never leave the voice turn waiting
+            ui_link.ack(cid, False, f"That didn't work: {e}")
 
     # ------------------------------------------------------------------ #
     def changeEvent(self, e):
@@ -537,6 +594,8 @@ class MainWindow(QMainWindow):
                                       QSystemTrayIcon.Information, 5000)
             return
         self._quitting = True
+        from core.ui_link import ui_link
+        ui_link.attached = False
         self.demo.stop()
         self.hotkey.unregister()
         self.halo.shutdown()

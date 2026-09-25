@@ -105,8 +105,14 @@ def choose(hint: str = "", wins: Optional[List] = None, remember_hint: bool = Tr
     visible = on_screen(wins)
     if len(visible) == 1:
         return visible[0]
-    if config.get("desktop.multi_window_policy", "ask") == "recent":
+    policy = config.get("desktop.multi_window_policy", "smart")
+    if policy == "recent":
         return (visible or wins)[0]          # z-order: the most recently used
+    if policy == "smart":
+        from modules.desktop.focus_history import smart_pick
+        recent = smart_pick(wins, visible)
+        if recent is not None:
+            return recent
     if visible:
         raise AmbiguousWindow("browser", visible, remember=True)
     raise AmbiguousWindow("browser", wins, remember=True, offscreen=True)

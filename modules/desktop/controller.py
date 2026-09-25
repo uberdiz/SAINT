@@ -377,9 +377,30 @@ class DesktopController:
             return other or fg
         return self._activate(other)
 
-    def focus(self, query: str) -> WindowInfo:
+    def focus(self, query: str, monitor: Optional[str] = None) -> WindowInfo:
         _require("allow_window_control", "Window control")
+        if monitor:
+            return self._activate(self.find_window_on(query, monitor))
         return self._activate(self.find_window(query))
+
+    def find_window_on(self, query: str, monitor: str) -> WindowInfo:
+        """'my browser on my right screen': the matching window on that monitor."""
+        mon = self.resolve_monitor(monitor, 1)
+        q = re.sub(r"^(the|my)\s+", "", (query or "").strip().lower())
+        q = re.sub(r"\s+(window|app|application)$", "", q)
+        wins = [w for w in self.list_windows() if w.monitor == mon.index and not self._is_own(w)]
+        if q in ("", "this", "it", "that", "window", "whatever", "the window", "whatever's there"):
+            hits = [w for w in wins if not w.minimized]
+        elif q in ("browser", "web browser"):
+            hits = [w for w in wins if self.is_browser(w)]
+        else:
+            hits = [w for w in wins if q in w.title.lower() or q in w.process.lower()]
+            if not hits:
+                apps = {w.hwnd for w in self.app_windows(q)}
+                hits = [w for w in wins if w.hwnd in apps]
+        if not hits:
+            raise ToolError(f"I couldn't find {query or 'a window'} on {self.monitor_label(mon)}.", "NOT_FOUND")
+        return self.pick_window(hits) or hits[0]
 
     def _activate(self, w: WindowInfo) -> WindowInfo:
         query = w.title
@@ -636,8 +657,12 @@ class DesktopController:
             return fg
         if len(visible) == 1:
             return visible[0]
-        if config.get("desktop.multi_window_policy", "ask") == "recent" and visible:
+        policy = config.get("desktop.multi_window_policy", "smart")
+        if policy == "recent" and visible:
             return visible[0]                  # z-order: most recently used
+        if policy == "smart":
+            from modules.desktop.focus_history import smart_pick
+            return smart_pick(candidates, visible)
         return None
 
     def open_app(self, name: str, wait: bool = True, new_window: bool = False, hint: str = "") -> dict:

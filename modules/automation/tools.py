@@ -437,6 +437,14 @@ def _register_default_tools(registry: ToolRegistry):
     for tool in tools:
         registry.register(tool)
 
+    # Voice control of SAINT's own window, and the feature packages below,
+    # register into the same registry.
+    for mod, fn in (("modules.ui_control.tools", "register_ui_tools"),):
+        try:
+            __import__(mod, fromlist=[fn]).__dict__[fn](registry)
+        except Exception:  # pragma: no cover - optional deps missing
+            log.exception("%s.register_failed", mod)
+
     # Desktop control lives in its own package but shares this registry.
     try:
         from modules.desktop.tools import register_desktop_tools

@@ -90,7 +90,8 @@ _VID = r"(?:the |this |that )?(?:video|youtube(?: video)?|clip)"
 
 def parse_speed(text: str) -> Optional[float]:
     t = text.lower()
-    if re.search(r"\b(normal|regular|default|standard|1x|one x)\s+speed\b|\bspeed (?:back )?to normal\b", t):
+    if re.search(r"\b(normal|regular|default|standard|1x|one x)\s+speed\b|\bspeed (?:back )?to normal\b|"
+                 r"\b(?:one|1) ?times? speed\b|\bback (?:to|at) (?:normal|regular|one ?x|1 ?x|one times?)\b", t):
         return 1.0
     if re.search(r"\bdouble speed\b|\btwice as fast\b|\b2x\b|\btwo x\b", t):
         return 2.0
@@ -166,7 +167,14 @@ def parse(text: str, youtube_context: bool = False) -> Optional[Tuple[str, objec
     if re.search(r"\b(?:theater|theatre|cinema|wide) mode\b", t):
         return "theater", None
     if re.search(r"\bmini ?player\b", t):
-        return "miniplayer", None
+        # "the mini player" alone is SAINT's own now-playing widget; it means
+        # YouTube's only when YouTube is named / being watched, and never when
+        # the user says "SAINT's" / "your" mini player.
+        if re.search(r"\b(saint'?s?|your)\b", t):
+            return None
+        if youtube_context or re.search(r"\b(youtube|video|clip)\b", t):
+            return "miniplayer", None
+        return None
     if re.match(r"^(?:(?:turn|switch|put|show|hide|enable|disable|toggle|remove|get rid of)\s+)?(?:on\s+|off\s+)?"
                 r"(?:the\s+)?(?:closed\s+)?(?:captions?|subtitles?|cc)(?:\s+(?:on|off))?(?:\s+please)?$", t):
         if re.search(r"\b(off|disable|hide|remove|stop|no)\b", t):

@@ -94,6 +94,33 @@ def app_name(process: str, title: str = "") -> str:
     return (process or "").replace(".exe", "") or (title.split(" - ")[-1] if title else "an app")
 
 
+_BROWSER_STEMS = ("opera", "chrome", "msedge", "firefox", "brave", "vivaldi", "arc", "zen")
+
+
+def app_label(r: Dict[str, Any]) -> str:
+    """What to call a window in a spoken reply.
+
+    Browsers: the site ("YouTube" for "Some video - YouTube - Opera"), not the
+    browser's name. Other apps: the app ("Spotify"), not its title — Spotify's
+    window title is the song playing ("Otis")."""
+    r = r or {}
+    title = re.sub(r"^\(\d+\)\s*", "", str(r.get("title") or r.get("window") or ""))
+    proc = str(r.get("process") or "").lower().replace(".exe", "")
+    parts = [p.strip() for p in re.split(r"\s+[-\u2013\u2014]\s+", title) if p.strip()]
+    if proc and any(proc.startswith(b) for b in _BROWSER_STEMS):
+        if len(parts) >= 3:
+            return parts[-2][:40]
+        if len(parts) == 2:
+            first = parts[0].split(" | ")[0].strip()
+            return first[:40] if first else app_name(proc)
+        return app_name(proc)
+    if proc:
+        return app_name(proc, title)
+    if r.get("app"):
+        return str(r["app"])
+    return parts[-1][:50] if parts else "it"
+
+
 def _window_dict(w) -> Dict[str, Any]:
     return {"title": w.title, "app": app_name(w.process, w.title), "process": w.process, "monitor": w.monitor,
             "rect": [w.left, w.top, w.width, w.height], "minimized": w.minimized, "maximized": w.maximized,

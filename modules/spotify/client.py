@@ -131,8 +131,10 @@ class SpotifyClient:
             return response.json(), elapsed_ms
         except ValueError:
             # 200/2xx with a non-JSON body: treat as empty rather than crashing.
-            logger.warning("spotify.api non-JSON 2xx body on %s %s: %r",
-                           method, path, body_preview)
+            # Player commands routinely answer with a bare snapshot id — that's
+            # success, not worth a warning on every skip.
+            log = logger.debug if path.startswith("/me/player") else logger.warning
+            log("spotify.api non-JSON 2xx body on %s %s: %r", method, path, body_preview)
             return None, elapsed_ms
 
     @staticmethod
