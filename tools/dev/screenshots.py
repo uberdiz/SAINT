@@ -23,7 +23,7 @@ os.environ["SAINT_DATA_DIR"] = str(DATA)
 OUT = ROOT / "docs" / "screenshots"
 
 (DATA / "config.json").write_text(json.dumps({
-    "config_version": 6,
+    "config_version": 7,
     "ai": {"provider": "mock", "model": "llama3.1"},
     "modules": {"ai": True, "voice": False, "automation": True, "vision": False, "memory": True,
                 "spotify": False, "desktop": False},
@@ -48,13 +48,24 @@ def seed():
             ("hotword", "louder", "Volume 70%.", [("spotify.volume_step", 150)]),
             ("voice", "what's the weather tomorrow", "Sunny, 24 degrees.", []),
             ("scene", "Focus mode", "", [])]
+    # A synthetic year for the History heatmap: busier weekends and evenings,
+    # a quiet stretch, a few failures. Kept under history.max_entries.
     with open(DATA / "history.jsonl", "w", encoding="utf-8") as f:
-        for day in range(30):
-            for _ in range(rnd.randint(2, 14) if day % 6 else rnd.randint(0, 3)):
+        for day in range(364, -1, -1):
+            weekday = time.localtime(now - day * 86400).tm_wday
+            if 150 < day < 163 or rnd.random() < 0.12:        # a holiday, and some days off
+                continue
+            ramp = 0.35 + 0.65 * (1 - day / 365)               # SAINT gets used more over the year
+            busy = rnd.randint(1, 6) + (rnd.randint(2, 8) if weekday >= 5 else 0)
+            for _ in range(max(0, int(busy * ramp * (1.6 if day < 30 else 1)))):
                 src, user, reply, tools = rnd.choice(asks)
-                ts = now - day * 86400 - rnd.randint(0, 36000)
+                hour = rnd.choice([8, 9, 12, 13, 17, 18, 19, 20, 21, 21, 22, 22, 23])
+                ts = now - day * 86400 - (now % 86400) + hour * 3600 + rnd.randint(0, 3599)
+                if ts > now:
+                    continue
+                ok = rnd.random() > 0.06
                 f.write(json.dumps({"ts": ts, "source": src, "user": user, "reply": reply, "ms": rnd.randint(700, 2600),
-                                    "tools": [{"tool": t, "ok": True, "ms": ms} for t, ms in tools]}) + "\n")
+                                    "tools": [{"tool": t, "ok": ok, "ms": ms} for t, ms in tools]}) + "\n")
     (DATA / "scenes.json").write_text(json.dumps([
         {"id": "a1", "name": "Focus mode", "phrase": "focus time", "steps": ["play lofi beats", "set volume to 35"],
          "schedule": "", "automation_id": "", "last_run": 0},

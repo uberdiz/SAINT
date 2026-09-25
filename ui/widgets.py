@@ -584,6 +584,176 @@ class Bars(QWidget):
         g.end()
 
 
+class Heatmap(QWidget):
+    """A year of activity as day squares (GitHub / Claude style): one column
+    per week, Sunday at the top, darker = more requests. Hover shows the day."""
+
+    GAP = 3
+    MAX_CELL = 18
+    LEFT = 30          # weekday labels
+    TOP = 18           # month labels
+    BOTTOM = 22        # legend
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self._days = []            # [(date, count)]
+        self._thresholds = [1, 2, 3]
+        self._today = None
+        self._hover = -1
+        self.setMinimumWidth(self.LEFT + 53 * 9)
+        self._fit_height()
+
+    def _fit_height(self):
+        self.setFixedHeight(int(self.TOP + 7 * (self._cell() + self.GAP) + self.BOTTOM))
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._fit_height()           # squares stay square as the window resizes
+
+    def set_data(self, days, thresholds, today=None):
+        self._days, self._thresholds = list(days), list(thresholds)
+        self._today = today or (self._days[-1][0] if self._days else None)
+        self._fit_height()
+        self.update()
+
+    def _weeks(self) -> int:
+        if not self._days:
+            return 53
+        first = self._days[0][0]
+        return (len(self._days) + (first.weekday() + 1) % 7 + 6) // 7
+
+    def _cell(self) -> float:
+        weeks = self._weeks()
+        return max(6.0, min(self.MAX_CELL, (self.width() - self.LEFT) / weeks - self.GAP))
+
+    def _pos(self, i):
+        """(column, row) of day i: rows are Sunday..Saturday."""
+        first = self._days[0][0]
+        offset = (first.weekday() + 1) % 7          # Sunday = 0
+        k = i + offset
+        return k // 7, k % 7
+
+    def _index_at(self, x, y):
+        if not self._days:
+            return -1
+        c = self._cell() + self.GAP
+        col, row = int((x - self.LEFT) // c), int((y - self.TOP) // c)
+        if col < 0 or not 0 <= row < 7:
+            return -1
+        first_offset = (self._days[0][0].weekday() + 1) % 7
+        i = col * 7 + row - first_offset
+        return i if 0 <= i < len(self._days) else -1
+
+    def mouseMoveEvent(self, e):
+        i = self._index_at(e.position().x(), e.position().y())
+        if i != self._hover:
+            self._hover = i
+            if i >= 0:
+                d, n = self._days[i]
+                what = "No requests" if not n else f"{n} request{'s' if n != 1 else ''}"
+                self.setToolTip(f"{what} \u00b7 {d.strftime('%a, %b')} {d.day}, {d.year}")
+            else:
+                self.setToolTip("")
+            self.update()
+
+    def leaveEvent(self, e):
+        self._hover = -1
+        self.update()
+
+    @staticmethod
+    def level_colors(p):
+        from ui.theme import _mix
+        empty = _mix(p.surface, p.border_strong, 0.75)
+        return [empty] + [_mix(p.surface2, p.accent, t) for t in (0.32, 0.55, 0.78, 1.0)]
+
+    def paintEvent(self, _):
+        from core.history_stats import level
+        p = current_palette()
+        g = QPainter(self)
+        g.setRenderHint(QPainter.Antialiasing)
+        colors = self.level_colors(p)
+        cell = self._cell()
+        step = cell + self.GAP
+        radius = max(2.0, cell * 0.22)
+        font = QFont(self.font())
+        font.setPixelSize(10)
+        g.setFont(font)
+        # weekday labels (Mon / Wed / Fri, like GitHub)
+        g.setPen(QColor(p.faint))
+        for row, name in ((1, "Mon"), (3, "Wed"), (5, "Fri")):
+            g.drawText(QRectF(0, self.TOP + row * step, self.LEFT - 6, cell), Qt.AlignRight | Qt.AlignVCenter, name)
+        last_month = None
+        for i, (d, n) in enumerate(self._days):
+            col, row = self._pos(i)
+            x, y = self.LEFT + col * step, self.TOP + row * step
+            # Month name above the first week that starts in it (skip a sliver of a month at the start).
+            if row == 0 and d.month != last_month:
+                last_month = d.month
+                if not (col == 0 and d.day > 20):
+                    g.setPen(QColor(p.faint))
+                    g.drawText(QRectF(x, 0, 40, self.TOP - 4), Qt.AlignLeft | Qt.AlignBottom, d.strftime("%b"))
+            g.setPen(Qt.NoPen)
+            g.setBrush(QColor(colors[level(n, self._thresholds)]))
+            g.drawRoundedRect(QRectF(x, y, cell, cell), radius, radius)
+            if d == self._today or i == self._hover:
+                pen = QPen(QColor(p.text if i == self._hover else p.muted))
+                pen.setWidthF(1.2)
+                g.setPen(pen)
+                g.setBrush(Qt.NoBrush)
+                g.drawRoundedRect(QRectF(x - 1, y - 1, cell + 2, cell + 2), radius + 1, radius + 1)
+        # legend: Less ■■■■■ More
+        ly = self.TOP + 7 * step + 6
+        box = min(cell, 11)
+        right = self.LEFT + self._weeks() * step - self.GAP
+        lx = right - (5 * (box + 3)) - 30
+        g.setPen(QColor(p.faint))
+        g.drawText(QRectF(lx - 34, ly - 2, 30, box + 4), Qt.AlignRight | Qt.AlignVCenter, "Less")
+        g.drawText(QRectF(right - 28, ly - 2, 30, box + 4), Qt.AlignRight | Qt.AlignVCenter, "More")
+        g.setPen(Qt.NoPen)
+        for k, c in enumerate(colors):
+            g.setBrush(QColor(c))
+            g.drawRoundedRect(QRectF(lx + k * (box + 3), ly, box, box), 2, 2)
+        g.end()
+
+
+class StackBar(QWidget):
+    """One horizontal bar split into coloured segments (e.g. requests by source)."""
+
+    def __init__(self, height: int = 10, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(height)
+        self.setMouseTracking(True)
+        self._parts = []           # [(label, value, color)]
+
+    def set_data(self, parts):
+        self._parts = [(lab, v, c) for lab, v, c in parts if v > 0]
+        total = sum(v for _, v, _ in self._parts) or 1
+        self.setToolTip("  \u00b7  ".join(f"{lab} {round(100 * v / total)}%" for lab, v, _ in self._parts))
+        self.update()
+
+    def paintEvent(self, _):
+        p = current_palette()
+        g = QPainter(self)
+        g.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        g.setPen(Qt.NoPen)
+        g.setBrush(QColor(p.border_strong))
+        g.drawRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
+        total = sum(v for _, v, _ in self._parts)
+        if total:
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
+            g.setClipPath(path)
+            x = 0.0
+            for _lab, v, c in self._parts:
+                seg = w * v / total
+                g.setBrush(QColor(c))
+                g.drawRect(QRectF(x, 0, seg + 0.5, h))
+                x += seg
+        g.end()
+
+
 # ---------------------------------------------------------------------- #
 # Album covers (shared cache; downloads off the GUI thread)
 # ---------------------------------------------------------------------- #

@@ -1,8 +1,10 @@
 """
 ui/pages/history.py
 
-Your past usage of SAINT: totals, a 30-day chart, most-used tools, and a
-searchable timeline. Read from data/history.jsonl, which never leaves this PC.
+Your past usage of SAINT: a year of activity as day squares (like GitHub /
+the Claude app), streaks, success rate and speed, when and how you ask, the
+tools used most, and a searchable timeline. Read from data/history.jsonl and
+its per-day summary, which never leave this PC.
 """
 
 import json
@@ -19,7 +21,8 @@ from ui import icons
 from ui.pages.home import tool_label
 from ui.reactive import ui_bus
 from ui.theme import current_palette
-from ui.widgets import Bars, Card, ElidedLabel, IconButton, Page, Segmented, chip, clear_layout, run_async
+from ui.widgets import (Bars, Card, ElidedLabel, Heatmap, IconButton, Page, Segmented, StackBar, chip, clear_layout,
+                        run_async)
 
 SOURCES = {"voice": ("mic", "Voice"), "typed": ("keyboard", "Typed"), "hotword": ("radio", "Hot-word"),
            "scene": ("zap", "Scene"), "automation": ("clock", "Scheduled")}
@@ -110,11 +113,20 @@ class HistoryPage(Page):
 
         stats = QGridLayout()
         stats.setSpacing(12)
-        self.s_total, self.s_today, self.s_week, self.s_free = (Stat("Requests"), Stat("Today"), Stat("Last 7 days"),
-                                                                Stat("Hands-free"))
-        for i, s in enumerate((self.s_total, self.s_today, self.s_week, self.s_free)):
+        self.s_total, self.s_today, self.s_streak, self.s_success, self.s_free = (
+            Stat("Requests"), Stat("Today"), Stat("Streak"), Stat("Success"), Stat("Hands-free"))
+        for i, s in enumerate((self.s_total, self.s_today, self.s_streak, self.s_success, self.s_free)):
             stats.addWidget(s, 0, i)
         body.addLayout(stats)
+
+        # A year of activity, one square per day
+        heat = Card("Activity")
+        self.heatmap = Heatmap()
+        heat.body.addWidget(self.heatmap)
+        self.heat_summary = ElidedLabel("")
+        self.heat_summary.setObjectName("Faint")
+        heat.body.addWidget(self.heat_summary)
+        body.addWidget(heat)
 
         charts = QHBoxLayout()
         charts.setSpacing(16)
@@ -125,13 +137,41 @@ class HistoryPage(Page):
         self.chart_note.setObjectName("Faint")
         chart.body.addWidget(self.chart_note)
         charts.addWidget(chart, 3)
+        hours = Card("Time of day")
+        self.hour_bars = Bars(96)
+        hours.body.addWidget(self.hour_bars)
+        hour_axis = QHBoxLayout()
+        for label in ("12 AM", "6 AM", "12 PM", "6 PM", "11 PM"):
+            lab = QLabel(label)
+            lab.setObjectName("Faint")
+            hour_axis.addWidget(lab)
+            if label != "11 PM":
+                hour_axis.addStretch()
+        hours.body.addLayout(hour_axis)
+        charts.addWidget(hours, 2)
+        body.addLayout(charts)
+
+        lower = QHBoxLayout()
+        lower.setSpacing(16)
         top = Card("Most used")
         self.top_list = QVBoxLayout()
         self.top_list.setSpacing(8)
         top.body.addLayout(self.top_list)
         top.body.addStretch()
-        charts.addWidget(top, 2)
-        body.addLayout(charts)
+        lower.addWidget(top, 3)
+        how = Card("How you ask")
+        self.source_bar = StackBar(10)
+        how.body.addWidget(self.source_bar)
+        self.source_list = QVBoxLayout()
+        self.source_list.setSpacing(6)
+        how.body.addLayout(self.source_list)
+        self.week_note = QLabel("")
+        self.week_note.setObjectName("Faint")
+        self.week_note.setWordWrap(True)
+        how.body.addWidget(self.week_note)
+        how.body.addStretch()
+        lower.addWidget(how, 2)
+        body.addLayout(lower)
 
         frow = QHBoxLayout()
         self.filter = Segmented(["All", "Voice", "Typed", "Hot-words", "Scenes & schedules"])
@@ -154,6 +194,7 @@ class HistoryPage(Page):
         body.addStretch()
 
         self._rows, self._shown, self._dirty, self._last_day = [], 0, True, None
+        self._daily = {}
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.timeout.connect(lambda: self._render_list(reset=True))
@@ -174,38 +215,98 @@ class HistoryPage(Page):
     def reload(self):
         from core.history import history
         self._dirty = False
-        run_async(history.read, self.set_rows)
+        run_async(lambda: (history.read(), history.daily()), lambda res: self.set_rows(*res))
 
-    def set_rows(self, rows):
+    def set_rows(self, rows, daily=None):
+        from core.history import add_to_day
         self._rows = sorted(rows, key=lambda r: r.get("ts", 0))
+        if daily is None:                      # e.g. tests / export: build it from the rows
+            daily = {}
+            for r in self._rows:
+                add_to_day(daily, r)
+        self._daily = daily
         self._render_stats()
         self._render_list(reset=True)
 
     # ------------------------------------------------------------------ #
     def _render_stats(self):
-        rows, now = self._rows, time.time()
-        midnight = datetime.combine(datetime.now().date(), datetime.min.time()).timestamp()
-        today = sum(1 for r in rows if r.get("ts", 0) >= midnight)
-        week = sum(1 for r in rows if r.get("ts", 0) >= now - 7 * 86400)
-        free = sum(1 for r in rows if r.get("source") in ("voice", "hotword"))
-        first = datetime.fromtimestamp(rows[0]["ts"]).strftime("since %b %d") if rows else ""
-        self.s_total.set(f"{len(rows):,}", first)
-        self.s_today.set(today, datetime.now().strftime("%A"))
-        self.s_week.set(week, f"{week / 7:.1f} a day")
-        self.s_free.set(f"{round(100 * free / len(rows)) if rows else 0}%", "by voice or hot-word")
+        from core import history_stats as hs
+        rows, daily = self._rows, self._daily
+        today = datetime.now().date()
+        tot = hs.totals(daily)
+        n_today = (daily.get(today.isoformat()) or {}).get("n", 0)
+        week = sum((daily.get((today - timedelta(days=i)).isoformat()) or {}).get("n", 0) for i in range(7))
+        first = min(daily) if daily else ""
+        since = datetime.strptime(first, "%Y-%m-%d").strftime("since %b %d, %Y") if first else ""
+        self.s_total.set(f"{tot['n']:,}", since)
+        self.s_today.set(n_today, f"{week} this week \u00b7 {week / 7:.1f} a day")
+        cur, longest = hs.streaks(daily)
+        self.s_streak.set(f"{cur} day{'s' if cur != 1 else ''}", f"longest {longest} day{'s' if longest != 1 else ''}")
+        lat = hs.percentile([r.get("ms") for r in rows if r.get("source") in ("voice", "typed", "hotword")], 0.5)
+        if tot["success"] is None:
+            self.s_success.set("\u2014", "no actions yet")
+        else:
+            self.s_success.set(f"{round(100 * tot['success'])}%",
+                               f"typical reply {lat / 1000:.1f}s" if lat else "of actions worked")
+        free = tot["by_source"]["voice"] + tot["by_source"]["hotword"]
+        self.s_free.set(f"{round(100 * free / tot['n']) if tot['n'] else 0}%", "by voice or hot-word")
 
-        days = [(datetime.now().date() - timedelta(days=29 - i)) for i in range(30)]
-        counts = Counter(datetime.fromtimestamp(r.get("ts", 0)).date() for r in rows)
-        self.bars.set_data([counts.get(d, 0) for d in days], [d.strftime("%a %b %d") for d in days], highlight=29)
-        hours = Counter(datetime.fromtimestamp(r.get("ts", 0)).hour for r in rows)
-        if hours:
-            h = hours.most_common(1)[0][0]
-            self.chart_note.setText(f"Most active around {datetime(2000, 1, 1, h).strftime('%I %p').lstrip('0')}")
+        # heatmap: the last year
+        days = hs.calendar(daily, weeks=53, today=today)
+        self.heatmap.set_data(days, hs.level_thresholds([c for _, c in days]), today)
+        active = sum(1 for _, c in days if c)
+        year = sum(c for _, c in days)
+        best = hs.busiest_day(daily)
+        best_txt = f" \u00b7 busiest {best[0].strftime('%b')} {best[0].day} ({best[1]})" if best else ""
+        self.heat_summary.setText(f"{year:,} requests on {active} days in the last year{best_txt}")
+
+        days30 = [(today - timedelta(days=29 - i)) for i in range(30)]
+        self.bars.set_data([(daily.get(d.isoformat()) or {}).get("n", 0) for d in days30],
+                           [d.strftime("%a %b %d") for d in days30], highlight=29)
+        hours = tot["hours"]
+        self.hour_bars.set_data(hours, [datetime(2000, 1, 1, h).strftime("%I %p").lstrip("0") for h in range(24)],
+                                highlight=max(range(24), key=lambda h: hours[h]) if any(hours) else -1)
+        if any(hours):
+            h = max(range(24), key=lambda i: hours[i])
+            wd = tot["weekdays"]
+            busiest_wd = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")[
+                max(range(7), key=lambda i: wd[i])]
+            self.chart_note.setText(f"Most active around {datetime(2000, 1, 1, h).strftime('%I %p').lstrip('0')}"
+                                    f" \u00b7 busiest on {busiest_wd}s")
         else:
             self.chart_note.setText("No activity yet.")
 
+        # how you ask
+        p = current_palette()
+        from ui.theme import _mix
+        colors = {"voice": p.accent, "hotword": _mix(p.info, p.danger, 0.55), "typed": p.info,
+                  "scene": p.success, "automation": p.muted}
+        names = {"voice": "Voice", "hotword": "Hot-words", "typed": "Typed", "scene": "Scenes",
+                 "automation": "Scheduled"}
+        parts = [(names[s], tot["by_source"][s], colors[s]) for s in names]
+        self.source_bar.set_data(parts)
+        clear_layout(self.source_list)
+        total = sum(v for _, v, _ in parts) or 1
+        for label, v, color in parts:
+            if not v:
+                continue
+            row = QHBoxLayout()
+            dot = QLabel()
+            dot.setFixedSize(8, 8)
+            dot.setStyleSheet(f"background: {color}; border-radius: 4px;")
+            row.addWidget(dot)
+            row.addWidget(QLabel(label), 1)
+            pct = QLabel(f"{round(100 * v / total)}%  \u00b7  {v:,}")
+            pct.setObjectName("Faint")
+            row.addWidget(pct)
+            self.source_list.addLayout(row)
+        fails = tot["fail"]
+        self.week_note.setText(f"{fails:,} request{'s' if fails != 1 else ''} hit a problem \u2014 search the "
+                               f"timeline below to see which." if fails else "")
+
         clear_layout(self.top_list)
-        tools = Counter(t.get("tool", "") for r in rows for t in (r.get("tools") or []))
+        # Counted by what the tool does ("Working with Spotify"), so related tools share a row.
+        tools = Counter(tool_label(t.get("tool", "")) for r in rows for t in (r.get("tools") or []))
         top = tools.most_common(5)
         if not top:
             lab = QLabel("Tools SAINT uses for you will rank here.")
@@ -216,7 +317,7 @@ class HistoryPage(Page):
             row = QVBoxLayout()
             row.setSpacing(3)
             head = QHBoxLayout()
-            head.addWidget(ElidedLabel(tool_label(name)), 1)
+            head.addWidget(ElidedLabel(name), 1)
             cnt = QLabel(str(n))
             cnt.setObjectName("Faint")
             head.addWidget(cnt)

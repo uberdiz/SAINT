@@ -10,6 +10,10 @@ git-ignored) and powers the History page. Turn it off with history.enabled.
      "ms": 1840}
 
 source: voice | typed | hotword | scene | automation
+
+The log keeps the newest history.max_entries requests. A per-day summary
+(data/history_daily.json: counts per source, successes, latency, hour of
+day) is never trimmed, so the History page's year heatmap stays complete.
 """
 
 import json
@@ -23,6 +27,32 @@ from core.events import event_bus, EventType
 from core.paths import data_path
 
 log = logging.getLogger("saint.history")
+
+SOURCES = ("voice", "typed", "hotword", "scene", "automation")
+
+
+def day_key(ts: float) -> str:
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
+
+
+def add_to_day(daily: dict, rec: dict):
+    """Fold one history record into the per-day summary."""
+    ts = float(rec.get("ts") or time.time())
+    d = daily.setdefault(day_key(ts), {"n": 0, "ok": 0, "fail": 0, "ms_sum": 0, "ms_n": 0,
+                                       "hours": [0] * 24, **{s: 0 for s in SOURCES}})
+    d["n"] += 1
+    src = rec.get("source") if rec.get("source") in SOURCES else "voice"
+    d[src] = d.get(src, 0) + 1
+    tools = rec.get("tools") or []
+    if tools:
+        if all(t.get("ok") for t in tools):
+            d["ok"] += 1
+        else:
+            d["fail"] += 1
+    if rec.get("ms"):
+        d["ms_sum"] += int(rec["ms"])
+        d["ms_n"] += 1
+    d["hours"][time.localtime(ts).tm_hour] += 1
 
 
 class History:
@@ -38,6 +68,10 @@ class History:
     @property
     def path(self) -> Path:
         return self._path or data_path("history.jsonl")
+
+    @property
+    def daily_path(self) -> Path:
+        return self.path.with_name(self.path.stem + "_daily.json")
 
     # ------------------------------------------------------------------ #
     def _on_event(self, ev):
@@ -77,12 +111,15 @@ class History:
         rec.setdefault("ts", time.time())
         line = json.dumps(rec, ensure_ascii=False)
         with self._lock:
+            daily = self._load_daily()      # before the new line, so a rebuild doesn't count it twice
             try:
                 with open(self.path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
             except OSError as e:
                 log.warning("history.write_failed %s", e)
                 return
+            add_to_day(daily, rec)
+            self._save_daily(daily)
             if self._count is None:
                 self._count = len(self._read_lines())
             else:
@@ -119,12 +156,49 @@ class History:
                 continue
         return out
 
+    # ------------------------------------------------------------------ #
+    # Per-day summary (never trimmed)
+    # ------------------------------------------------------------------ #
+    def daily(self) -> dict:
+        """{"2026-09-24": {"n", "ok", "fail", "voice", ..., "ms_sum", "ms_n", "hours": [24]}}"""
+        with self._lock:
+            return self._load_daily()
+
+    def _load_daily(self) -> dict:
+        try:
+            with open(self.daily_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (OSError, ValueError):
+            pass
+        # First run (or the summary was lost): rebuild from what the log still holds.
+        daily: dict = {}
+        for line in self._read_lines():
+            try:
+                add_to_day(daily, json.loads(line))
+            except (ValueError, TypeError, AttributeError):
+                continue
+        if daily:
+            self._save_daily(daily)
+        return daily
+
+    def _save_daily(self, daily: dict):
+        try:
+            tmp = str(self.daily_path) + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(daily, f, separators=(",", ":"))
+            Path(tmp).replace(self.daily_path)
+        except OSError as e:
+            log.warning("history.daily_write_failed %s", e)
+
     def clear(self):
         with self._lock:
-            try:
-                self.path.unlink()
-            except FileNotFoundError:
-                pass
+            for p in (self.path, self.daily_path):
+                try:
+                    p.unlink()
+                except FileNotFoundError:
+                    pass
             self._count = 0
         event_bus.emit_event(EventType.HISTORY_APPENDED, {"cleared": True})
 
