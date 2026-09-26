@@ -46,17 +46,54 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
-**Latest — SAINT learns what it can't do yet:**
+**Latest — SAINT remembers what just happened:**
+
+- **Short-term memory.** SAINT keeps track of what it did, made or found in the last half hour — the
+  screenshot it took, the folder it extracted, what a junk check found, the app it opened, the playlist it
+  played. So you can follow up naturally: "delete that screenshot", "open that folder", "move it to my C:
+  games folder", "rename it to TheLoop", "copy the path", "what did you find?", "delete it", "the other old
+  installers too", "go to my most recent download and delete it". Removing or moving anything still asks
+  first, and only ever uses the Recycle Bin. The language model is given the same list as facts, so it
+  answers "what did you find?" from what really happened instead of guessing a path.
+- **Corrections that name only the thing.** "I meant my moe playlist", "I said Claude" (after "switch to
+  Glod"), "no, the folder you just made" — SAINT fits the right thing into your last request. Spelled
+  letters work too: "…spelled M-O-E". A correction also answers an open "Did you mean …?" question.
+- **Files by voice.** "Make a new folder in my games folder called The Loop", "move it to the D drive",
+  "rename it", "show it in Explorer", "open the screenshot". Spoken places like "my C: games folder" or
+  "games/the loop" resolve to real folders.
+- **Storage page.** A new sidebar page: drive space, what's using it, and **What you can clear** — a chart
+  by category (graphics shader caches, Spotify/Discord caches, browser caches, old temp files, crash dumps,
+  developer caches, duplicate downloads, old installers, Windows Update leftovers, what's already in the
+  Recycle Bin) and a list you tick. The junk check now looks in far more places.
+- **Learning you can edit.** Automations → Learned has an editor: change what a phrase does, or add your
+  own ("gaming time" → open Steam, open Discord). By voice: "save that as game time" right after something
+  worked, or "make a shortcut called gaming time that opens Steam and Discord". "Switch back", "delete it"
+  and other pointing phrases are never saved as recipes.
+- **Watching asks first.** After something fails SAINT asks "Want to show me?" — only "yes" starts watching,
+  so it no longer records the wrong thing at the wrong time. More ways to say it ("watch me do it", "I'm
+  going to do it now, watch"), more ways to finish ("I'm all done"), and it notices windows moved to
+  another screen or maximized. Programs it sees you start that it couldn't find by name (taskbar-only apps
+  like Bloxstrap) are added to its app list; things an app starts by itself aren't recorded as steps.
+- **Fixes from the 2026-09-25 evening log.** Spotify no longer needs reconnecting at every launch (a test
+  had been wiping the saved login; a Spotify hiccup no longer forgets it either). Scrolling really scrolls
+  (it was moving 1/20 of a wheel notch) and "scroll more" / "keep scrolling" go further each time.
+  One-word answers ("Yeah.") and short commands ("Press enter.") aren't dropped as low-confidence speech.
+  "Delete …" never means "forget a memory". "The loop layer" isn't YouTube's loop. "Close that window"
+  names the window it means. The planner can't click things you never named or press Delete on its own.
+  Opening the Steam library when Steam is closed waits for Steam, then opens it. Apps pinned only to the
+  taskbar or the desktop are found by name ("open Bloxstrap", "block strap").
+
+**Earlier — SAINT learns what it can't do yet:**
 
 - **It tries harder.** When a request isn't one SAINT knows ("hop over to Discord", "open disk, clean up")
   or what it tried fails ("I couldn't find a window for all my windows"), the local model rewrites the
   request as commands SAINT *does* know ("switch to discord"; "show the desktop" then "double click the
   recycle bin"). Every step is checked before anything runs, so the model only ever picks real,
   permission-checked commands. If it works, SAINT remembers: next time it's instant.
-- **"No, I meant …" teaches it.** "Play my kpop playlist" → "no, I meant play my yuh playlist" plays yuh
-  *and* remembers that's what "my kpop playlist" means. "No, close the finals" answers a question and does
+- **"No, I meant …" teaches it.** "Play my gym playlist" → "no, I meant play my moe playlist" plays moe
+  *and* remembers that's what "my gym playlist" means. "No, close the finals" answers a question and does
   it.
-- **Show it once.** If SAINT still can't work it out, it says so and watches (a pill shows "Watching how you
+- **Show it once.** If SAINT still can't work it out, it offers to watch (a pill shows "Watching how you
   do it"). Do it yourself, say "done", and SAINT turns what you did into steps it can repeat — apps you
   opened, buttons and icons you clicked (by name), shortcuts you pressed. It never records what you type.
   "Let me show you how to …" starts a lesson any time.
@@ -67,7 +104,7 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
   windows", "right click the desktop on my main screen", "double left click", "the recycling bin" (the
   desktop icon, not text on screen), "close the finals" / "close to area" (finds the game by its Steam
   folder or a misheard name and asks with the real name; offers a force quit if it won't close), "take a
-  screenshot of Claude", "turn down Spotify", "open YouTube and fullscreen it", "my kpop playlist" never
+  screenshot of Claude", "turn down Spotify", "open YouTube and fullscreen it", "my gym playlist" never
   silently becomes a stranger's playlist, "never play that playlist again", a repeated request isn't
   dropped as a loop, and the model can't ban artists or record dislikes from a chat reply anymore.
 - **Voicemeeter.** "Mute" / "unmute" / "mute my mic" mute Voicemeeter's mic strip; "switch my audio to my
@@ -89,7 +126,7 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
   folder". Duplicate downloads, archives you've already extracted, temp files, shader caches and old
   recordings are found for you. Games, emulators, ROMs and Steam libraries are never suggested. Anything
   removed goes to the Recycle Bin **after you say yes** — SAINT never deletes permanently and refuses
-  anything the Recycle Bin couldn't hold. The System page has a Storage card with every drive, a scan and
+  anything the Recycle Bin couldn't hold. The Storage page has every drive, a scan and
   the biggest folders.
 - **WinRAR.** "Go to my Downloads folder, click the first download and extract it using WinRAR to my games
   folder" is one action: the newest archive, into its own folder, with a free-space check, progress, no
@@ -184,7 +221,7 @@ A ground-up rewrite of the interface:
 | **Music** — cover-tinted player, hands-free words, queue | **History** — a year of activity, streaks and timeline |
 | ![Automations](docs/screenshots/automations.png) | ![System](docs/screenshots/system.png) |
 | **Scenes** — one phrase, many actions | **System** — health, storage, latency, modules |
-| ![Learned](docs/screenshots/automations-learned.png) | |
+| ![Learned](docs/screenshots/automations-learned.png) | ![Storage](docs/screenshots/storage.png) |
 | **Learned** — what SAINT worked out, was corrected on, or was shown | |
 
 <sub>Screenshots are generated by `tools/dev/screenshots.py` from synthetic demo data (fictional tracks
@@ -246,7 +283,7 @@ That live run fed synthesized speech into SAINT's voice loop in place of the mic
 | Music hot-words ("skip", "pause", "louder" with no wake word while music plays) | ✅ Tested end-to-end through the voice loop with synthetic audio. ⚠️ One-word hot-words were fixed after a live run (Whisper scores single words near zero confidence) and need a live re-check. |
 | Scenes (voice phrase, "run …", UI, schedule) and History | ✅ Covered by automated tests. |
 | Steam: installed games, sizes, library/store, launch | ✅ Game list and sizes verified live against this PC's libraries. ⚠️ Launching and uninstalling by voice need a live check. |
-| Drive space, biggest folders, junk report, Storage card | ✅ Verified live, read-only (a 500 GB drive with 1.9 M files scans in under a minute). ⚠️ Recycling and moving are covered by tests with a simulated Windows file operation; try them on a test folder first. |
+| Drive space, biggest folders, junk report, Storage page | ✅ Verified live, read-only (a 500 GB drive with 1.9 M files scans in under a minute). ⚠️ Recycling and moving are covered by tests with a simulated Windows file operation; try them on a test folder first. |
 | WinRAR extraction and compression | ✅ Verified with the installed WinRAR against test archives. |
 | Windows controls (lock, power, mic, per-app volume, output device, brightness) | ✅ Audio devices and sessions read live. ⚠️ Changing them by voice needs a live check. |
 | Stop / silent mode / whisper replies / "what are you doing?" | ✅ Covered by tests. ⚠️ Whisper loudness needs a live check. |
@@ -721,7 +758,7 @@ permanently: removals go to the Recycle Bin, and SAINT checks the Recycle Bin ca
 
 **Files and storage** (`modules/files`) — drive overview, background scans (cached for
 `files.scan_cache_hours`), a junk report, and cleanup that asks before anything moves. "My games folder" is
-`files.games_dir` (default `D:\Games`); name more folders in `files.known`. Never touched: Windows, Program
+`files.games_dir` (default `D:\Games` — set it in Settings); name more folders in `files.known`. Never touched: Windows, Program
 Files, ProgramData, drive roots, your profile folder itself, code repositories and SAINT. Never suggested:
 Steam libraries, your games folder, emulators and ROMs.
 
@@ -755,6 +792,22 @@ announced; apps in `notifications.deny` never are. "Read my notifications" works
 
 **Aliases** — "when I say X, I mean Y" (`data/aliases.json`); "what aliases do I have", "forget the alias X".
 
+**Storage page** — drive space and the biggest folders on top; below, **What you can clear**: *Check for
+junk* looks through Downloads (duplicates, archives you've already extracted, old installers, big downloads
+untouched for months), temp files older than `files.temp_age_days`, graphics shader caches, browser caches
+(Chrome, Edge, Brave, Opera, Firefox), Discord / Spotify / VS Code caches, crash dumps, developer caches
+(pip, uv, npm, Yarn — shown, never pre-ticked), old game recordings, Windows Update leftovers and old
+Windows installs, plus what's already in the Recycle Bin. A stacked bar and a per-category chart show where
+the space is; the list below is ticked for what's safe. *Move ticked to Recycle Bin* asks once more, then
+uses Windows' own Recycle Bin (never a permanent delete). Checks started by voice show up here too.
+
+**Short-term memory** (`modules/agent/recent.py`) — every tool result and finished background task leaves
+a note for 30 minutes: a screenshot taken, a folder extracted, made, moved or renamed, a junk check's
+findings, an app opened, a playlist played. "It" / "that" on their own only reach back 5 minutes; a named
+reference ("that screenshot", "the folder you just extracted") reaches the full 30. Removing ("delete it")
+only ever points at something SAINT made or found — never at a folder it merely opened — and still asks.
+The same notes go to the language model as facts, so it doesn't invent results. Nothing is saved to disk.
+
 ---
 
 ## Learning
@@ -766,7 +819,7 @@ request ─► learned skill? ─► run its steps
         └► router ─► ok ─► done
                   └► not known / "couldn't find…" ─► planner (local model)
                                                     ├─ steps SAINT understands? ─► run, verify ─► learn
-                                                    └─ no plan ─► "if you do it now, I'll watch and learn"
+                                                    └─ no plan ─► "want to show me?" ─► yes ─► watch
 "no, I meant X" ─► run X ─► learn it for the request before
 ```
 
@@ -774,16 +827,24 @@ request ─► learned skill? ─► run its steps
   route), the open windows, and what SAINT already learned, and answers with JSON steps. A step is only
   run if the router understands it and it's grounded in what you said (no "this window" unless you said
   it, no typing you didn't dictate, the monitor you named, no "…but YouTube" you never mentioned). Steps go
-  through the normal router, permission checks and confirmations.
+  through the normal router, permission checks and confirmations. It may only click something that
+  sounds like what you said, and only press keys if you asked it to press something.
 * **Skills** (`skills.py`, `data/skills.json`) — request → commands, learned three ways (worked out,
   corrected, shown). Matched before the router so a learned fix beats the old guess; close speech-to-text
-  variants match too. A skill that fails three times in a row is dropped.
+  variants match too. A skill that fails three times in a row is dropped (unless you wrote or edited it).
+  Requests that point at something ("switch back", "delete it", "open that folder") are never learned. Edit
+  or add skills on **Automations → Learned**, or say "save that as …" / "make a shortcut called … that …".
 * **Corrections** (`corrections.py`) — "no, I meant …", "I meant for you to …", "that's not what I asked
-  for, …" within 2½ minutes of a request.
+  for, …" within 2½ minutes of a request. A correction that names only the thing ("I meant my moe
+  playlist", "I said Claude") is fitted into the last request: the same kind of thing is swapped, or the
+  word that sounds most like it, or the same action is done on it. Letters spelled out ("M-O-E") are joined.
 * **Watch and learn** (`demonstration.py`) — polls the mouse buttons, keyboard *shortcuts* and the window
   list while a lesson runs (up to 2 minutes, ends 15 s after your last action or when you say "done").
   Clicks are named with Windows' accessibility info; Start-menu and taskbar clicks that only opened an app
-  become "open X". Plain typing is never recorded, only that it happened. Nothing is kept but the commands.
+  become "open X". A program another program started by itself isn't a step; windows moved to another
+  screen, maximized or minimized are. Programs SAINT couldn't find by name are added to `desktop.apps` with
+  the .exe that ran. Plain typing is never recorded, only that it happened. Nothing is kept but the
+  commands. After a failure SAINT only *offers* to watch; "yes" starts it.
 * Settings: `learning.planner`, `planner_timeout_sec`, `watch_and_learn`, `watch_after_failure`,
   `watch_max_sec`, `watch_idle_sec`.
 
@@ -937,7 +998,7 @@ core/
   logger.py, device.py, analytics.py, state.py, setup.py
 modules/
   voice/                mic capture, VAD, wake word (ONNX), STT, TTS
-  agent/                intent router, confirmations, LLM tool calling
+  agent/                intent router, confirmations, LLM tool calling, short-term memory (recent.py)
   automation/           tool registry, scheduler, time parser, scenes, background tasks
   spotify/              OAuth PKCE, API client, tools, listening memory
   memory/               SQLite store + structured memory service
@@ -955,7 +1016,7 @@ modules/
   ai/                   providers (Ollama/OpenAI-compatible/mock), context
 ui/
   main_window.py        shell: sidebar, pages, tray, hotkey, palette, toasts
-  pages/                home, music (+ NowPlaying), automations, history, memory, activity, system
+  pages/                home, music (+ NowPlaying), automations, history, memory, activity, storage, system
   halo.py, overlay.py   screen-edge Halo + edge tab, Steam-style overlay
   spotify_widget.py     floating mini player
   palette.py, toast.py, demo.py

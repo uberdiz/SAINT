@@ -9,6 +9,8 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 
 ## Voice
 
+I still cant give 1 word answers!!!!
+
 | | Test | Expected |
 |---|---|---|
 | ✅ | "SAINT" (bare), then wait, then "what time is it" | Chime after "SAINT"; answers the time |
@@ -154,9 +156,9 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 |---|---|---|
 | Y | Start a long multi-step request or a scene, then "stop" | It stops before the next step; no keys left held down |
 | Y | "Be quiet for 5 minutes", then "skip" / "what time is it" / "open blahblah" | Acts silently on the first two (reply shown on screen), still says the error for the third |
-| 🔲 fixed — was: *not quieter* | Whisper "Hey SAINT, what time is it" (after a few normal requests) | Answer is noticeably quieter — a whisper is now judged against how loud you usually talk |
+| ⚠️ known limit — was: *doesn't listen to me at all when I whisper* | Talk *softly* (not a whisper): "Hey SAINT, what time is it" | Quieter answer. A true whisper is below what the speech and wake-word detectors hear; loosening them brings back random speech, so it's left alone |
 | Y | During a long request: "what are you doing?" | Names the current step without cancelling it |
-| 🔲 | In a follow-up window, talk to someone else ("OK, why not?") | Ignored |
+| Y | In a follow-up window, talk to someone else ("OK, why not?") | Ignored |
 
 ## Steam
 
@@ -164,8 +166,8 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 |---|---|---|
 | ✅ | "What games do I have" · "what are my biggest games" · "how big is Apex Legends" | Lists from Steam's files (verified live) |
 | Y | "Launch Terraria" · "start cs2" | Game starts through Steam |
-| 🔲 still not registered — was: *I added my games folder and it won't open it* | "Launch Apex Legends" (D:\SteamLibrary) | Steam's library list (steamapps\libraryfolders.vdf) still only has C:. In Steam → Settings → Storage → "+", pick the **D:** drive (Steam finds D:\SteamLibrary), not D:\Games |
-| 🔲 | "Open my Steam library and search how many dudes" | Opens the library, then "you don't have it" + store search |
+| 🔲 fixed — was: *"open my games folder" had SAINT unzipped into it; Apex won't launch* | "Open my games folder" · "launch Apex Legends" | Opens **C:\Games** (your games folder is now C:\Games; the SAINT-main folder in D:\Games came from an earlier "extract the latest download" test — delete it yourself if you like). Apex still needs D: added in Steam → Settings → Storage → "+" |
+| 🔲 fixed — was: *I had to open Steam myself* | With Steam **closed**: "Open my Steam library and search how many dudes" | "Starting Steam — I'll open your library as soon as it's up", then the library (and store search) opens by itself |
 
 ## Files, storage and WinRAR (try removals on a test folder first)
 
@@ -173,23 +175,40 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 |---|---|---|
 | ✅ | "How much space is left on E" · "how full are my drives" | Real numbers (verified live) |
 | ✅ | "What's taking up space on E" | Announces the biggest folders when the background scan ends (E: ≈ 50 s) |
-| 🔲 | Put a file and an identical "file (1)" copy in Downloads → "clean up my Downloads" → "yes" | The copy goes to the Recycle Bin; restore it from there |
-| 🔲 improved — was: *works; wants visual feedback / percent* | "What can I delete on E", then "what are you doing?" | A pill at the bottom of the screen fills up with the percent; "what are you doing?" says "about N% done" |
-| 🔲 | "Empty the recycle bin" | Refuses, opens the Recycle Bin |
-| 🔲 | Download a .rar → "go to my Downloads folder, click the first download and extract it using WinRAR to my games folder" | Progress, then "Extracted … to D:\Games\…"; nothing overwritten |
-| 🔲 | "Unzip the latest download and delete it afterwards" → "yes" | Extracts, then asks, then recycles the archive |
-| 🔲 | "Move this folder to the D drive" (a test folder selected in Explorer) → "yes" | Windows' own move with progress; Ctrl+Z in Explorer undoes it |
-| 🔲 | System page → Storage → Scan / Check for junk | Bars, biggest folders with Open, junk summary |
+| 🔲 fixed — was: *follow-up questions didn't know what I meant* | "Clean up my Downloads" → "no" → "what did you find?" → "delete the old installers too" | Answers from the real result (no invented paths), then asks to recycle just the installers |
+| Y improved — was: *works; wants visual feedback / percent* | "What can I delete on E", then "what are you doing?" | A pill at the bottom of the screen fills up with the percent; "what are you doing?" says "about N% done" |
+| Y | "Empty the recycle bin" | Refuses, opens the Recycle Bin |
+| 🔲 fixed — was: *should go to C:\Games; couldn't move it from D: to C:* | "Extract the latest download to my games folder" → "open that folder" → "move it to the D drive" → "yes" → "move it back to my C: games folder" | Extracts into C:\Games\…, opens that folder, moves it (asks first) and back |
+| Y | "Unzip the latest download and delete it afterwards" → "yes" | Extracts, then asks, then recycles the archive |
+| 🔲 fixed — was: *Nah* | Select a test folder in Explorer → "move this folder to the D drive" → "yes" · or right after SAINT made/extracted a folder: "move it to the D drive" | Windows' own move; Ctrl+Z in Explorer undoes it. If Explorer's selection can't be read (Windows 11 tabs), use the second form and tell me |
+| 🔲 new — was: *no visual for the junk; didn't find much; could be its own tab* | Sidebar → **Storage** → *Check for junk* | A chart by category (shader caches, Spotify/Discord/browser caches, temp, crash dumps, dev caches, installers, Windows Update, Recycle Bin…) and a ticked list; on this PC it should find ~20 GB+. *Move ticked to Recycle Bin* asks first |
 
 ## Windows controls
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 fixed — was: *should mute Voicemeeter Stereo Input 1 / B1, and bare "mute" should work* | "Mute" · "unmute" · "mute my mic on voicemeeter" | Voicemeeter's Stereo Input 1 (your LCS USB mic) mutes/unmutes (audio.voicemeeter.mic_strip to change) |
+| Y fixed — was: *should mute Voicemeeter Stereo Input 1 / B1, and bare "mute" should work* | "Mute" · "unmute" · "mute my mic on voicemeeter" | Voicemeeter's Stereo Input 1 (your LCS USB mic) mutes/unmutes (audio.voicemeeter.mic_strip to change) |
 | Y | "Set Spotify to 30 percent" · "mute the game" (a game in front) | Volume mixer changes for that app only |
-| 🔲 fixed — was: *use Voicemeeter: A2 (speakers) ↔ A1 (headphones)* | "Switch my audio to my headphones" · "use my speakers" | In Voicemeeter, strips playing on A2 move to A1 (HyperX), and back |
-| 🔲 | "Restart my PC" → "yes" → "cancel the shutdown" | Windows shows the 60 s warning, then it's cancelled |
-| 🔲 fixed — was: *"take a screenshot of Claude" captured both screens* | "Take a screenshot of Claude" · "take a screenshot of my left screen" | Only that window / screen in Pictures\Screenshots |
+| Y fixed — was: *use Voicemeeter: A2 (speakers) ↔ A1 (headphones)* | "Switch my audio to my headphones" · "use my speakers" | In Voicemeeter, strips playing on A2 move to A1 (HyperX), and back |
+| Y | "Restart my PC" → "yes" → "cancel the shutdown" | Windows shows the 60 s warning, then it's cancelled |
+| 🔲 fixed — was: *couldn't delete the screenshot afterwards* | "Take a screenshot of Claude" → "delete that screenshot" → "yes" | It goes to the Recycle Bin |
+
+## Short-term memory ("it", "that folder", "what did you find?")
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | "Clean up my D drive" → wait for the result → "what did you find?" → "is that safe to delete?" → "delete it" | Talks about what it really found (e.g. D:\WUDownloadCache), then asks before recycling (Windows Update files in Windows itself → opens Disk Cleanup instead) |
+| 🔲 | "Take a screenshot of my left screen" → "open it" → "show it in Explorer" → "rename it to test shot" | Opens the picture, selects it in Explorer, renames it (keeps .png) |
+| 🔲 | "Make a new folder in my games folder called The Loop" → "copy the path" → paste somewhere | C:\Games\The Loop exists; the path is on the clipboard |
+| 🔲 | "Go to my most recent download and delete it" → "yes" | The newest finished download goes to the Recycle Bin (asks first; never presses Delete for you) |
+| 🔲 | "Open that folder" with nothing made in the last minutes | "I haven't made or opened a folder in the last few minutes…" — no "couldn't find an app called that folder" |
+| 🔲 | "Switch to Glod" (a mishearing) → "I said Claude btw" | Switches to Claude |
+| 🔲 | "Close that window" right after "open disk cleanup" | "Do you want me to close Disk Cleanup?" |
+| 🔲 | "Scroll down" → "scroll more" → "keep scrolling" | Each one moves further; plain "scroll down" now moves a real amount |
+| 🔲 | "Click on the loop layer" (a page link) | Clicks it — never turns on YouTube's loop, never clicks something else |
+| 🔲 | Automations → Learned → select a row → change it → Save; *New* → "gaming time" / "open Steam" + "open Discord" → Save → say "gaming time" | Edits stick; the new one runs both |
+| 🔲 | Do something that works, then "save that as game time" → say "game time" | Repeats it |
+| 🔲 | Restart SAINT twice | Spotify stays connected (no Connect click) |
 
 ## Learning (SAINT working things out)
 
@@ -198,19 +217,19 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 | "Minimize all my windows and double left click the recycling bin" | Every window minimizes, then the Recycle Bin opens |
-| 🔲 | "Open disk, clean up" (odd phrasing) | Opens Disk Cleanup; the next time it's instant |
-| 🔲 | Something it doesn't know: "hop over to Discord" · "get Spotify onto my left monitor" | It works it out ("switch to discord"), does it, and says it'll remember |
-| 🔲 | "Play my kpop playlist" → "no, I meant play my yuh playlist" → later "play my kpop playlist" | Plays yuh, says it'll remember; the third time plays yuh straight away |
-| 🔲 | "Play my kpop playlist" when none of yours is called that (and memory doesn't say) | "You don't have a playlist called kpop. Want me to play a public one?" — never plays a stranger's silently |
-| 🔲 | Something it can't do: it says "I'll watch and learn" → do it yourself (e.g. open Disk Cleanup from Start) → say "done" | "Got it. Next time you say … I'll open Disk Cleanup." A pill shows "Watching how you do it" while it watches |
-| 🔲 | "Let me show you how to open the recycle bin" → double-click it → "done" | Learns "double click Recycle Bin on the desktop" |
-| 🔲 | "Forget that" right after it learned something | That request goes back to how it was |
-| 🔲 | "Close the finals" / "close to area" (misheard) with the game running | "Do you want me to close THE FINALS / Terraria?" (the real name) → "yes" closes it; if the game ignores it, offers to force it to quit |
-| 🔲 | "No, close the finals" while SAINT asks something else | Answers the question *and* closes it |
-| 🔲 | "Never play that playlist again" while a playlist plays | Pauses; that playlist is skipped from then on |
-| 🔲 | Play a YouTube video out loud (no wake word), talk to someone in the room | Nothing is treated as a request (the follow-up check now also covers the window after actions and talking over SAINT) |
-| 🔲 | "Turn off the mini-player… Hey SAINT, turn off the mini-player" | Turns it off (a repeated request isn't dropped as a loop anymore) |
+| Y | "Minimize all my windows and double left click the recycling bin" | Every window minimizes, then the Recycle Bin opens |
+| 🔲 fixed — was: *I can't give 1-word answers* | "Close Disk Cleanup" → just "Yeah." · "press enter" as a follow-up | Both are heard (they used to be dropped as low-confidence speech) |
+| Y | Something it doesn't know: "hop over to Discord" · "get Spotify onto my left monitor" | It works it out ("switch to discord"), does it, and says it'll remember |
+| 🔲 fixed — was: *it just played my liked songs* | "Play my gym playlist" → "no, I meant my moe playlist" (or "…spelled M-O-E") → later "play my gym playlist" (use your own names) | Plays it and remembers; the old wrong "liked songs" lesson was removed |
+| 🔲 check — was: *it asked but didn't play it* | "Play my party playlist" (none of yours) → "yes" within 30 s | Says "You don't have a playlist called party" and plays a public one after yes. (The log only showed you answering "no, I meant…" — tell me if yes fails) |
+| 🔲 changed — was: *sometimes it watches the wrong thing at the wrong time* | Something it can't do → it asks "Want to show me?" → "yes" → do it → "I'm all done" | Only starts watching after yes; "I'm all done" finishes it |
+| 🔲 fixed — was: *showed it how to open Bloxstrap, it didn't remember* | "Open Bloxstrap" · "open block strap" · "let me show you how to put Claude on my right screen" → drag it → "done" | Bloxstrap opens (taskbar pins are now known apps); the lesson becomes "move Claude to my right screen" |
+| Y | "Forget that" right after it learned something | That request goes back to how it was |
+| Y | "Close the finals" / "close to area" (misheard) with the game running | "Do you want me to close THE FINALS / Terraria?" (the real name) → "yes" closes it; if the game ignores it, offers to force it to quit |
+| Y | "No, close the finals" while SAINT asks something else | Answers the question *and* closes it |
+| Y | "Never play that playlist again" while a playlist plays | Pauses; that playlist is skipped from then on |
+| Y | Play a YouTube video out loud (no wake word), talk to someone in the room | Nothing is treated as a request (the follow-up check now also covers the window after actions and talking over SAINT) |
+| Y | "Turn off the mini-player… Hey SAINT, turn off the mini-player" | Turns it off (a repeated request isn't dropped as a loop anymore) |
 
 ## Watching, workspaces, clipboard, notifications, developer mode
 
@@ -231,9 +250,9 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 | Skip a song in the Spotify app itself | One `skips` row with source `app` within ~2 s |
-| 🔲 | Say "skip" | Exactly one `skips` row, source `voice` |
-| 🔲 | "More energetic" · "more like the last song" · "no more of this artist" | Picks change accordingly; the artist stops appearing |
+| Y | Skip a song in the Spotify app itself | One `skips` row with source `app` within ~2 s |
+| Y | Say "skip" | Exactly one `skips` row, source `voice` |
+| Y | "More energetic" · "more like the last song" · "no more of this artist" | Picks change accordingly; the artist stops appearing |
 
 ## History
 
