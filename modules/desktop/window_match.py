@@ -36,6 +36,20 @@ def skeleton(s: str) -> str:
     return re.sub(r"(.)\1+", r"\1", s[0] + re.sub(r"[aeiouhwy]", "", s[1:]))
 
 
+_SOUND = str.maketrans({"c": "k", "q": "k", "g": "k", "b": "p", "d": "t", "v": "f", "z": "s", "x": "k"})
+
+
+def sounds_like(a: str, b: str) -> float:
+    """How alike two words sound to speech-to-text (0..1): 'Glod' ~ 'Claude',
+    'clawed' ~ 'Claude', 'MO' ~ 'moe'. Voiced/unvoiced pairs count as one."""
+    sa, sb = skeleton(a).translate(_SOUND), skeleton(b).translate(_SOUND)
+    if not sa or not sb:
+        return 0.0
+    if sa == sb:
+        return 1.0 if min(len(_simple(a)), len(_simple(b))) > 2 or sa[0] == sb[0] else 0.8
+    return difflib.SequenceMatcher(None, sa, sb).ratio() * 0.9
+
+
 def score(query: str, name: str) -> float:
     q, n = _simple(query), _simple(name)
     if not q or not n:

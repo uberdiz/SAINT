@@ -199,12 +199,13 @@ class AIModule(BaseModule):
             if self._cancel_flag.is_set() or info.get("expects_reply") or \
                     any(c.get("success") for c in info.get("tool_calls", [])) or not planner.worth_planning(prompt):
                 return ""
-            if not config.get("learning.watch_after_failure", True) or not demonstration.watch_for(prompt):
+            if not config.get("learning.watch_after_failure", True) or not demonstration.offer(prompt):
                 return ""
         except Exception:
             logging.getLogger("saint.ai").exception("ai.offer_to_learn_failed")
             return ""
-        extra = " I don't know how to do that yet — if you do it now, I'll watch and learn it."
+        self.expects_reply = True
+        extra = " I don't know how to do that yet. Want to show me? Say yes, do it, then say “done”."
         on_token(extra)
         return extra
 
@@ -352,6 +353,19 @@ class AIModule(BaseModule):
         except Exception:
             pass
         grounding += self._memory_messages(prompt)
+        try:
+            # Short-term memory: what SAINT really did or found a moment ago, so
+            # "what did you find?" / "delete it" aren't answered with invented paths.
+            from modules.agent.recent import recent
+            happened = recent.describe()
+            if happened:
+                grounding.append({"role": "system", "content": (
+                    "What you (SAINT) actually did or found in the last few minutes, newest first. These are real "
+                    "results: when the user says \"it\" or \"that\", or asks what you found, they mean one of "
+                    "these. Never invent files, folders, paths, sizes or results that aren't listed here.\n"
+                    + happened)})
+        except Exception:
+            pass
         memory_msgs = grounding[1:]
         insert_at = 1 if messages and messages[0]["role"] == "system" else 0
         messages[insert_at:insert_at] = grounding

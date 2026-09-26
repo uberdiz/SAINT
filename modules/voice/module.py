@@ -1030,7 +1030,7 @@ class VoiceModule(BaseModule):
     _CHATTER = re.compile(
         r"^(?:(?:ok(?:ay)?|oh|ah|yeah|yep|nah|no|wow|lol|damn|shit|fuck|dude|bro|man|huh|hmm|what|"
         r"why not|oh my god|omg|see|look|nice|cool|great|right|sure|well)[\s.,!?]*){1,6}$"
-        r"|^(?:see how|i can'?t believe|that'?s (?:so|crazy|funny|wild)|you'?re (?:so )?(?:right|good))",
+        r"|^(?:see how|i can'?t believe|that'?s (?:so|crazy|funny|wild)|you'?re (?:so )?(?:right|good))\b",
         re.IGNORECASE)
 
     @staticmethod
@@ -1039,6 +1039,15 @@ class VoiceModule(BaseModule):
         try:
             from core.module_manager import module_manager
             return bool(getattr(module_manager.get("ai"), "expects_reply", False))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _question_pending() -> bool:
+        """SAINT asked a yes/no or pick-one question that is still open."""
+        try:
+            from modules.agent.confirm import choices, confirmations
+            return confirmations.pending is not None or choices.pending is not None
         except Exception:
             return False
 
@@ -1101,14 +1110,17 @@ class VoiceModule(BaseModule):
 
         if re.search(r"\b(alexa|hey google|ok(ay)? google|siri|hey siri|cortana)\b", lower):
             return False, "foreign_wake_word"
+        # An answer to SAINT's own question ("Yeah." after "Close Disk Cleanup?")
+        # is never a hallucination, however short or low-scored.
+        answering = self._ai_expects_reply() or self._question_pending()
         hallucinations = {"you", "thank you", "thanks for watching", "bye", "okay", "ok",
                           "yeah", "so", "uh", "um", "hmm", "the"}
-        if lower.strip(".!?, ") in hallucinations and confidence < short_conf:
+        if lower.strip(".!?, ") in hallucinations and confidence < short_conf and not answering:
             return False, "likely_hallucination"
-        # Whisper scores short commands low ("Click it." came back at 0.13), so a
-        # follow-up SAINT recognises as a command gets a lower confidence floor.
-        command = follow_up and (bool(self._MUSIC_FOLLOWUP_OK.match(stripped.strip(".!? ")))
-                                 or self._is_command(stripped))
+        # Whisper scores short commands low ("Click it." came back at 0.13, "Press
+        # enter." at 0.08), so something SAINT recognises as a command gets a
+        # lower confidence floor — in a follow-up window or in open listening.
+        command = bool(self._MUSIC_FOLLOWUP_OK.match(stripped.strip(".!? "))) or self._is_command(stripped)
         command_conf = float(config.get("voice.followup_command_min_confidence", 0.1))
         # One-word follow-ups ("Pause.") come back at confidence 0.00; a word
         # SAINT recognises as a command is trusted, anything else isn't.
@@ -1130,8 +1142,8 @@ class VoiceModule(BaseModule):
                 return False, "followup_no_intent"
         if follow_up:
             min_conf = min(min_conf, float(config.get("voice.followup_min_confidence", 0.25)))
-            if command:
-                min_conf = 0.0 if len(words) <= 2 else min(min_conf, command_conf)
+        if command:
+            min_conf = 0.0 if len(words) <= 3 else min(min_conf, command_conf)
         if confidence > 0 and confidence < min_conf:
             return False, f"low_confidence_{confidence:.2f}"
         return True, ""

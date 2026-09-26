@@ -205,8 +205,14 @@ def extract(archive: str, dest_parent: str, progress: Optional[Callable] = None,
                 "summary": f"Stopped extracting {os.path.basename(archive)}; what finished is in {dest}."}
     from modules.files.scan import human
     name = os.path.basename(archive)
-    return {"archive": archive, "dest": dest, "size": info["size"], "files": sum(1 for e in info["entries"]
-                                                                                 if not e["dir"]),
+    # The folder the files are in: the archive's own top folder when it had one.
+    folder = dest
+    top = list(info["top"])
+    if os.path.normpath(dest) == os.path.normpath(dest_parent) and len(top) == 1 and \
+            os.path.isdir(os.path.join(dest_parent, top[0])):
+        folder = os.path.join(dest_parent, top[0])
+    return {"archive": archive, "dest": dest, "folder": folder, "size": info["size"],
+            "files": sum(1 for e in info["entries"] if not e["dir"]),
             "seconds": round(time.time() - t0, 1), "via": how,
             "summary": f"Extracted {name} to {dest}" + (f" ({human(info['size'])})." if info["size"] else ".")}
 

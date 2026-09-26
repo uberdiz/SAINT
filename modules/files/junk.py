@@ -28,7 +28,51 @@ _INSTALLER = (".exe", ".msi", ".msix", ".appx", ".appinstaller")
 CATEGORY_NAMES = {"temp": "old temp files", "shader_cache": "graphics shader caches",
                   "duplicate": "duplicate downloads", "extracted": "archives you've already extracted",
                   "old_installer": "old installers", "recordings": "old game recordings",
-                  "windows_update": "Windows Update leftovers", "old_windows": "an old Windows installation"}
+                  "windows_update": "Windows Update leftovers", "old_windows": "an old Windows installation",
+                  "browser_cache": "browser caches", "app_cache": "app caches", "crash_dumps": "crash dumps",
+                  "dev_cache": "developer caches", "big_download": "big old downloads",
+                  "recycle_bin": "files already in the Recycle Bin"}
+
+# App caches that rebuild themselves: (folder under LOCALAPPDATA / APPDATA, what it is, category).
+# Browsers and apps that are open keep some files locked; those are simply skipped.
+_APP_CACHES = [
+    ("LOCALAPPDATA", r"Google\Chrome\User Data\*\Cache", "Chrome's cache", "browser_cache"),
+    ("LOCALAPPDATA", r"Google\Chrome\User Data\*\Code Cache", "Chrome's code cache", "browser_cache"),
+    ("LOCALAPPDATA", r"Microsoft\Edge\User Data\*\Cache", "Edge's cache", "browser_cache"),
+    ("LOCALAPPDATA", r"Microsoft\Edge\User Data\*\Code Cache", "Edge's code cache", "browser_cache"),
+    ("LOCALAPPDATA", r"BraveSoftware\Brave-Browser\User Data\*\Cache", "Brave's cache", "browser_cache"),
+    ("LOCALAPPDATA", r"Opera Software\Opera Stable\Cache", "Opera's cache", "browser_cache"),
+    ("LOCALAPPDATA", r"Opera Software\Opera GX Stable\Cache", "Opera GX's cache", "browser_cache"),
+    ("LOCALAPPDATA", r"Mozilla\Firefox\Profiles\*\cache2", "Firefox's cache", "browser_cache"),
+    ("APPDATA", r"discord\Cache", "Discord's cache", "app_cache"),
+    ("APPDATA", r"discord\Code Cache", "Discord's code cache", "app_cache"),
+    ("LOCALAPPDATA", r"Spotify\Data", "Spotify's streaming cache", "app_cache"),
+    ("APPDATA", r"Code\Cache", "VS Code's cache", "app_cache"),
+    ("APPDATA", r"Code\CachedData", "VS Code's cached data", "app_cache"),
+    ("LOCALAPPDATA", r"CrashDumps", "crash dumps from apps that crashed", "crash_dumps"),
+    ("LOCALAPPDATA", r"pip\cache", "pip's download cache — re-downloaded when needed", "dev_cache"),
+    ("LOCALAPPDATA", r"uv\cache", "uv's package cache — re-downloaded when needed", "dev_cache"),
+    ("LOCALAPPDATA", r"npm-cache", "npm's cache — re-downloaded when needed", "dev_cache"),
+    ("APPDATA", r"npm-cache", "npm's cache — re-downloaded when needed", "dev_cache"),
+    ("LOCALAPPDATA", r"Yarn\Cache", "Yarn's cache", "dev_cache"),
+]
+
+
+def recycle_bin_size() -> int:
+    """Bytes already sitting in the Recycle Bin (all drives)."""
+    try:
+        import ctypes
+
+        class _Info(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_ulong), ("i64Size", ctypes.c_longlong),
+                        ("i64NumItems", ctypes.c_longlong)]
+        info = _Info()
+        info.cbSize = ctypes.sizeof(_Info)
+        if ctypes.windll.shell32.SHQueryRecycleBinW(None, ctypes.byref(info)) == 0:
+            return int(info.i64Size)
+    except Exception:
+        pass
+    return 0
 
 
 def _size(path: str) -> int:
@@ -115,6 +159,16 @@ def downloads_findings(folder: str) -> List[Dict]:
                 not any(f["path"] == e.path for f in out):
             out.append({"category": "old_installer", "path": e.path, "size": e.stat().st_size,
                         "reason": f"an installer downloaded {int(_age_days(e.path))} days ago", "action": "review"})
+    # big files you haven't touched in months
+    for e in files:
+        try:
+            size = e.stat().st_size
+        except OSError:
+            continue
+        if size > 500e6 and _age_days(e.path) > 60 and not any(f["path"] == e.path for f in out):
+            out.append({"category": "big_download", "path": e.path, "size": size,
+                        "reason": f"downloaded {int(_age_days(e.path))} days ago and not touched since",
+                        "action": "review"})
     return [f for f in out if _ok(f["path"])]
 
 
@@ -161,6 +215,25 @@ def cache_findings() -> List[Dict]:
                 out.append({"category": "shader_cache", "path": p, "size": size,
                             "reason": f"{what} — rebuilt automatically (games may stutter briefly the first time)",
                             "action": "recycle"})
+    import glob
+    for env, pattern, what, cat in _APP_CACHES:
+        base = os.environ.get(env, "")
+        if not base:
+            continue
+        for p in glob.glob(os.path.join(base, pattern)):
+            if not os.path.isdir(p) or not _ok(p):
+                continue
+            size = _size(p)
+            if size > (100e6 if cat == "dev_cache" else 30e6):
+                # Dev caches cost a re-download: shown, but only cleared when you pick them.
+                out.append({"category": cat, "path": p, "size": size,
+                            "reason": what if cat in ("dev_cache", "crash_dumps") else f"{what} — rebuilt automatically",
+                            "action": "review" if cat == "dev_cache" else "recycle"})
+    bin_size = recycle_bin_size()
+    if bin_size > 50e6:
+        out.append({"category": "recycle_bin", "path": "shell:RecycleBinFolder", "size": bin_size,
+                    "reason": "already deleted — empty the Recycle Bin yourself to get this space back",
+                    "action": "info"})
     for root in fixed_drives():
         for sub in ("WUDownloadCache", r"Windows\SoftwareDistribution\Download"):
             p = os.path.join(root, sub)

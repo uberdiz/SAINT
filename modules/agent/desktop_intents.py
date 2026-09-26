@@ -219,6 +219,21 @@ def _explain_screen(question: str) -> Reply:
 _ON_SCREEN = re.compile(rf"\s+(?:on|in)\s+(?:my|the)\s+({_WHICH_MON})\s+{_SCREEN}$", re.I)
 
 
+# (direction, notches, when): "scroll more" continues the last scroll, further each time.
+_last_scroll = ("down", 5, 0.0)
+
+
+def _scroll_intent(direction: str, notches: int) -> Intent:
+    def run():
+        global _last_scroll
+        amount = -notches if direction == "down" else notches
+        reply = run_tool("desktop.scroll", f"scroll {direction}", lambda r: f"Scrolled {direction}.", amount=amount)
+        if reply.ok:
+            _last_scroll = (direction, notches, time.time())
+        return reply
+    return Intent("desktop.scroll", run, "desktop")
+
+
 def split_monitor(target: str):
     """'recycle bin on my main screen' -> ('recycle bin', 'main')."""
     m = _ON_SCREEN.search(target or "")
@@ -451,10 +466,18 @@ def parse(text: str) -> Optional[Intent]:
             return Intent("desktop.scroll", lambda: run_tool("desktop.press_keys", f"press {key}",
                                                              lambda r: f"Scrolled to the {'bottom' if d == 'down' else 'top'}.",
                                                              keys=key), "desktop")
-        n = {"a lot": 15, "a little": 3, "a bit": 3, "more": 8, "some": 6, "further": 8}.get(amt, 6)
-        amount = -n if d == "down" else n
-        return Intent("desktop.scroll", lambda: run_tool("desktop.scroll", f"scroll {d}",
-                                                         lambda r: f"Scrolled {d}.", amount=amount), "desktop")
+        n = {"a lot": 15, "a little": 2, "a bit": 2, "more": 8, "some": 4, "further": 8}.get(amt, 5)
+        if amt in ("more", "further") and _last_scroll[0] == d and time.time() - _last_scroll[2] < 60:
+            n = min(30, max(n, round(_last_scroll[1] * 1.6)))
+        return _scroll_intent(d, n)
+    # "scroll more" / "keep scrolling" / "more" / "further": the same way, a bit further each time.
+    m = re.match(r"^(?:scroll\s+)?(?:(?:some|a lot|a bit|even|much)\s+)?(?:more|further)(?:\s+(down|up))?$|"
+                 r"^keep\s+(?:scrolling|going)(?:\s+(down|up))?$|^(?:scroll|do it) again$|^again$", t)
+    if m and time.time() - _last_scroll[2] < 90:
+        d = m.group(1) or m.group(2) or _last_scroll[0]
+        grow = 2.2 if re.search(r"\b(?:a lot|much)\b", t) else 0.6 if "a bit" in t else 1.6
+        n = max(2, min(30, round(_last_scroll[1] * grow)))
+        return _scroll_intent(d, n)
     if re.match(r"^(?:scroll|go) to the (top|bottom)(?: of the page)?$", t):
         top = "top" in t
         return Intent("desktop.scroll", lambda: run_tool("desktop.press_keys", "scroll", lambda r:

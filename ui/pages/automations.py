@@ -341,22 +341,25 @@ class ScheduledView(QWidget):
             self.refresh()
 
 
-_HOW = {"planned": "Worked out", "corrected": "You corrected me", "shown": "You showed me"}
+_HOW = {"planned": "Worked out", "corrected": "You corrected me", "shown": "You showed me",
+        "saved": "You saved it", "edited": "You wrote it"}
 
 
 class LearnedView(QWidget):
     """Requests SAINT has learned (modules/learning): what it now does for each,
-    and how it learned it. Forget anything it got wrong."""
+    and how it learned it. Select one to change it, add your own, or forget
+    anything it got wrong."""
 
     def __init__(self):
         super().__init__()
+        self._editing = None                 # skill id being edited (None = a new one)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(16)
         card = Card("Learned")
         hint = QLabel("When SAINT can't do something, it works it out with commands it knows, learns from "
-                      "“no, I meant …”, or watches you do it once. Say “what have you learned” or "
-                      "“forget that”.")
+                      "“no, I meant …”, or watches you do it once. Say “what have you learned”, “forget that”, "
+                      "or “save that as …” right after something worked.")
         hint.setObjectName("Faint")
         hint.setWordWrap(True)
         card.body.addWidget(hint)
@@ -367,27 +370,47 @@ class LearnedView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        card.body.addWidget(self.table)
+        self.table.itemSelectionChanged.connect(self._load_selected)
+        card.body.addWidget(self.table, 1)
+
+        # ---- editor --------------------------------------------------------------------
+        self.phrase = QLineEdit()
+        self.phrase.setPlaceholderText("When I say…   e.g. gaming time")
+        self.steps = QPlainTextEdit()
+        self.steps.setPlaceholderText("SAINT does… one command per line, e.g.\nopen Steam\nopen Discord\n"
+                                      "play my focus playlist")
+        self.steps.setFixedHeight(96)
+        card.body.addWidget(self.phrase)
+        card.body.addWidget(self.steps)
         btns = QHBoxLayout()
+        new = QPushButton("New")
+        new.clicked.connect(self._new)
+        save = QPushButton("Save")
+        save.setObjectName("Primary")
+        save.clicked.connect(self._save)
         run = QPushButton("Try it")
         run.clicked.connect(self._run)
         forget = QPushButton("Forget")
         forget.setObjectName("Danger")
         forget.clicked.connect(self._forget)
-        btns.addWidget(run)
-        btns.addWidget(forget)
+        for b in (new, save, run, forget):
+            btns.addWidget(b)
         btns.addStretch()
         self.status = QLabel("")
         self.status.setObjectName("Faint")
-        btns.addWidget(self.status)
+        self.status.setWordWrap(True)
+        btns.addWidget(self.status, 1)
         card.body.addLayout(btns)
         lay.addWidget(card, 1)
 
     def refresh(self):
         from modules.learning.skills import skills
+        keep = self._editing
 
         def show(items):
+            self.table.blockSignals(True)
             self.table.setRowCount(0)
             for s in sorted(items, key=lambda s: s.created, reverse=True):
                 r = self.table.rowCount()
@@ -398,17 +421,69 @@ class LearnedView(QWidget):
                     it = QTableWidgetItem(str(v))
                     it.setData(Qt.UserRole, s.id)
                     self.table.setItem(r, c, it)
-            self.status.setText("" if items else "Nothing learned yet.")
+                if s.id == keep:
+                    self.table.selectRow(r)
+            self.table.blockSignals(False)
+            if not items:
+                self.status.setText("Nothing learned yet — add your own with New.")
         run_async(skills.all, show)
 
     def _selected(self):
         rows = self.table.selectionModel().selectedRows()
         return self.table.item(rows[0].row(), 0).data(Qt.UserRole) if rows else None
 
-    def _run(self):
+    def _skill(self, sid):
         from modules.learning.skills import skills
-        sid = self._selected()
-        s = next((x for x in skills.all() if x.id == sid), None) if sid else None
+        return next((x for x in skills.all() if x.id == sid), None) if sid else None
+
+    def _load_selected(self):
+        s = self._skill(self._selected())
+        if s is None:
+            return
+        self._editing = s.id
+        self.phrase.setText(s.said or s.phrase)
+        self.steps.setPlainText("\n".join(s.steps))
+        self.status.setText("")
+
+    def _new(self):
+        self._editing = None
+        self.table.clearSelection()
+        self.phrase.clear()
+        self.steps.clear()
+        self.phrase.setFocus()
+        self.status.setText("Type what you'll say and what SAINT should do, then Save.")
+
+    def _save(self):
+        from modules.learning.planner import understood
+        from modules.learning.skills import skills
+        phrase = self.phrase.text().strip()
+        steps = [line.strip() for line in self.steps.toPlainText().splitlines() if line.strip()]
+        if not phrase or not steps:
+            self.status.setText("Fill in both: what you'll say, and at least one command.")
+            return
+        sid = self._editing
+
+        def check():
+            return [s for s in steps if not understood(s)]
+
+        def done(bad):
+            if bad:
+                self.status.setText(f"SAINT doesn't know how to “{bad[0]}” yet — say it another way (try it in "
+                                    f"chat first), or show it: “let me show you how to {bad[0]}”.")
+                return
+            s = skills.update(sid, phrase, steps)
+            if s is None:
+                self.status.setText("That phrase is too short or too common to use.")
+                return
+            self._editing = s.id
+            self.status.setText(f"Saved. Saying “{phrase}” now runs {len(steps)} "
+                                f"step{'s' if len(steps) != 1 else ''}.")
+            self.refresh()
+        self.status.setText("Checking the commands…")
+        run_async(check, done)
+
+    def _run(self):
+        s = self._skill(self._selected())
         if s is None:
             return
         from modules.agent.agent import agent
@@ -420,6 +495,9 @@ class LearnedView(QWidget):
         sid = self._selected()
         if sid:
             gone = skills.forget(sid)
+            self._editing = None
+            self.phrase.clear()
+            self.steps.clear()
             self.status.setText(f"Forgot “{gone.said or gone.phrase}”." if gone else "")
             self.refresh()
 

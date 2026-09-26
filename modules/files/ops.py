@@ -17,6 +17,7 @@ Nothing here deletes permanently:
 
 import logging
 import os
+import re
 import shutil
 from typing import Dict, List, Optional
 
@@ -214,3 +215,89 @@ def explorer_selection() -> Dict:
         return best or {"folder": None, "selected": []}
     finally:
         pythoncom.CoUninitialize()
+
+
+# ---------------------------------------------------------------------- #
+# New folders, renaming, opening one file
+# ---------------------------------------------------------------------- #
+_BAD_NAME = re.compile(r'[<>:"/\|?*\x00-\x1f]')
+_RESERVED = re.compile(r"^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$", re.I)
+
+
+def clean_name(name: str) -> str:
+    """A spoken name as a safe file/folder name ("the loop" -> "The Loop")."""
+    n = _BAD_NAME.sub("", (name or "").strip().strip("\"'")).strip(" .")
+    if n and n == n.lower() and not os.path.splitext(n)[1]:
+        n = " ".join(w[:1].upper() + w[1:] for w in n.split(" "))   # spoken lowercase -> Title Case
+    if not n or _RESERVED.match(n):
+        raise ToolError(f"“{name}” can't be a file name.", "INVALID")
+    return n[:120]
+
+
+def make_folder(parent: str, name: str) -> Dict:
+    parent = os.path.normpath(parent)
+    if not os.path.isdir(parent):
+        raise ToolError(f"{parent} doesn't exist.", "NOT_FOUND")
+    why = denied(os.path.join(parent, "x"))
+    if why:
+        raise ToolError(f"I won't make folders there: {why}", "DENIED")
+    path = os.path.join(parent, clean_name(name))
+    if os.path.exists(path):
+        return {"path": path, "existed": True}
+    os.makedirs(path)
+    return {"path": path, "existed": False}
+
+
+def rename(path: str, new_name: str) -> Dict:
+    path = os.path.normpath(path)
+    if not os.path.exists(path):
+        raise ToolError(f"I can't find {path}.", "NOT_FOUND")
+    why = denied(path)
+    if why:
+        raise ToolError(f"I won't rename that: {why}", "DENIED")
+    from modules.files.paths import steam_library_roots, _under
+    if any(_under(path, lib) for lib in steam_library_roots()):
+        raise ToolError("That's part of a Steam game — renaming it would break the game.", "USE_STEAM")
+    name = clean_name(new_name)
+    old_ext = os.path.splitext(path)[1]
+    if os.path.isfile(path) and old_ext and not os.path.splitext(name)[1]:
+        name += old_ext                  # "rename it to holiday" keeps .png
+    target = os.path.join(os.path.dirname(path), name)
+    if os.path.exists(target):
+        raise ToolError(f"There's already a {name} there; I won't overwrite it.", "EXISTS")
+    os.rename(path, target)
+    return {"path": target, "old": path}
+
+
+def open_path(path: str) -> Dict:
+    """Open one file with its usual app (a folder opens in Explorer)."""
+    path = os.path.normpath(path)
+    if not os.path.exists(path):
+        raise ToolError(f"{path} doesn't exist anymore.", "NOT_FOUND")
+    if os.path.isfile(path) and os.path.splitext(path)[1].lower() in (
+            ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".js", ".msi", ".scr", ".com", ".lnk", ".reg"):
+        # Never run a program just because it was mentioned — show it instead.
+        return open_in_explorer(path, select=True)
+    os.startfile(path)  # type: ignore[attr-defined]
+    return {"opened": path}
+
+
+def newest_download(folder: Optional[str] = None) -> Optional[str]:
+    """The newest finished download (file or folder) in Downloads."""
+    from modules.files.paths import known_folder
+    folder = folder or known_folder("downloads")
+    if not folder or not os.path.isdir(folder):
+        return None
+    best, best_t = None, 0.0
+    for e in os.scandir(folder):
+        n = e.name.lower()
+        if n in ("desktop.ini",) or n.endswith((".crdownload", ".part", ".partial", ".tmp", ".download", ".opdownload")):
+            continue
+        try:
+            st = e.stat()
+        except OSError:
+            continue
+        t = max(st.st_mtime, st.st_ctime)
+        if t > best_t:
+            best, best_t = e.path, t
+    return best

@@ -250,7 +250,9 @@ def _cleanup(scope: str) -> Reply:
 
 _CATS = {"duplicate": r"duplicates?|copies", "extracted": r"extracted|archives?|zips?|rars?",
          "old_installer": r"installers?|setups?", "temp": r"temp(?:orary)?(?: files)?",
-         "shader_cache": r"shader|caches?"}
+         "shader_cache": r"shaders?(?: caches?)?", "browser_cache": r"browser(?: caches?)?|chrome|edge|opera|firefox",
+         "app_cache": r"app caches?|discord|spotify|vs code", "crash_dumps": r"crash(?: dumps?)?|dumps?",
+         "dev_cache": r"(?:developer|dev) caches?|pip|npm|uv|yarn", "big_download": r"big (?:old )?(?:downloads|files)"}
 
 
 def _plan_followup(t: str) -> Optional[Intent]:

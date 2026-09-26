@@ -298,6 +298,11 @@ class ToolRegistry:
             ms = round((time.perf_counter() - started) * 1000, 1)
             event_bus.emit_event(EventType.TOOL_COMPLETED, {"tool": name, "duration_ms": ms})
             log.info("tool.ok %s (%.0f ms)", name, ms)
+            try:     # short-term memory: "delete that screenshot", "open that folder"
+                from modules.agent.recent import recent
+                recent.note_tool(name, args, result)
+            except Exception:
+                pass
             return ToolResult(True, result=result, tool=name, args=args, duration_ms=ms)
         except ToolError as e:
             ms = round((time.perf_counter() - started) * 1000, 1)

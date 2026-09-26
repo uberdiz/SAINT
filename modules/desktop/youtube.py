@@ -135,8 +135,13 @@ def parse(text: str, youtube_context: bool = False) -> Optional[Tuple[str, objec
     if re.search(r"\bauto ?play\b", t):
         return ("autoplay_off" if re.search(r"\b(off|disable|stop|no more|turn off|don'?t)\b", t) else
                 "autoplay_on"), None
-    if (re.search(r"\bloop(?:ing)?\b", t) or ctx and re.search(r"\brepeat (?:this|the) video\b|\bon repeat\b", t)) \
-            and not re.search(r"\b(song|track|playlist|album|spotify|music)\b", t):
+    # Only loop *the video* — "click on the loop layer" / "a folder for the loop" name something else.
+    if (re.search(r"^(?:(?:turn|switch|put|set|start|stop|keep)\s+)?(?:on\s+|off\s+)?(?:the\s+)?(?:video\s+)?"
+                  r"(?:loop(?:ing)?|un-?loop)\b(?:\s+(?:it|this|that|the video|this video|on|off|mode))*$|"
+                  r"^(?:loop|unloop|stop looping|keep looping)\s+(?:it|this|that|the video|this video)$|"
+                  r"\b(?:on|to) loop\b|\bloop(?:ing)? (?:on|off)\b|\bturn (?:on|off) (?:the )?loop(?:ing)?\b", t)
+            or ctx and re.search(r"\brepeat (?:this|the) video\b|\bon repeat\b", t)) \
+            and not re.search(r"\b(song|track|playlist|album|spotify|music|folder|file|layer)\b", t):
         return ("loop_off" if re.search(r"\b(stop|off|don'?t|no longer|unloop|disable)\b", t) else "loop_on"), None
     m = re.search(r"\bsleep timer\b(?:.*?\b(\d+|off|end of (?:the )?video)\b\s*(minutes?|mins?|hours?)?)?", t)
     if m:

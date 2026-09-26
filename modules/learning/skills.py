@@ -5,7 +5,7 @@ Things SAINT has learned to do: a spoken request -> the commands that did it.
 
     "minimize all my windows"   -> ["show the desktop"]
     "open disk clean up"        -> ["open disk cleanup"]
-    "play my kpop playlist"     -> ["play my yuh playlist"]
+    "play my gym playlist"     -> ["play my moe playlist"]
 
 A skill is learned three ways (``how``):
 
@@ -41,6 +41,9 @@ _TAIL = re.compile(r"\s+(?:please|for me|now|thanks|thank you)$", re.I)
 # Too generic to ever be a skill of their own.
 _NEVER = re.compile(r"^(?:yes|no|yeah|nope|ok(?:ay)?|stop|done|thanks|thank you|cancel|never ?mind|it|that|this|"
                     r"do it|again|what|why|how|hello|hi|hey)$")
+# "Switch back", "delete it", "open that folder" mean something different every
+# time — what they point at — so they're never saved as a fixed recipe.
+_DEICTIC = re.compile(r"\b(?:it|its|that|this|these|those|them|there|here|back|again|same|previous|the other)\b")
 
 
 def norm(text: str) -> str:
@@ -112,7 +115,7 @@ class SkillStore:
     @staticmethod
     def learnable(phrase: str, steps: List[str]) -> bool:
         p = norm(phrase)
-        if not p or _NEVER.match(p) or len(p) < 4 or not steps:
+        if not p or _NEVER.match(p) or _DEICTIC.search(p) or len(p) < 4 or not steps:
             return False
         # Learning "X means X" teaches nothing.
         return [norm(s) for s in steps] != [p]
@@ -177,6 +180,26 @@ class SkillStore:
             event_bus.emit_event(EventType.AUTOMATION_CANCELLED, {"id": skill_id, "skill": True})
         return gone
 
+    def update(self, skill_id: Optional[str], phrase: str, steps: List[str]) -> Optional[Skill]:
+        """Edit a skill (or add one when ``skill_id`` is None) from the
+        Automations page. Returns None if the phrase can't be a command."""
+        steps = [s.strip() for s in steps if s and s.strip()]
+        key = norm(phrase)
+        if not key or _NEVER.match(key) or len(key) < 3 or not steps:
+            return None
+        with self._lock:
+            skills = self._load()
+            old = next((s for s in skills if s.id == skill_id), None) if skill_id else None
+            skills = [s for s in skills if s.id != skill_id and s.phrase != key]
+            skill = Skill(key, steps, "edited", said=phrase.strip()[:200])
+            if old is not None:
+                skill.id, skill.created, skill.uses, skill.last_used = old.id, old.created, old.uses, old.last_used
+            skills.append(skill)
+            self._write(skills)
+        log.info("learning.edited phrase=%r steps=%r", key, steps)
+        event_bus.emit_event(EventType.AUTOMATION_UPDATED, {"id": skill.id, "title": key, "skill": True})
+        return skill
+
     def note_result(self, skill: Skill, ok: bool):
         """Count uses; a skill that fails three times in a row is dropped."""
         with self._lock:
@@ -187,9 +210,10 @@ class SkillStore:
                         s.uses, s.last_used, s.fails = s.uses + 1, time.time(), 0
                     else:
                         s.fails += 1
-            broken = [s for s in skills if s.fails >= 3]
+            # Ones the user wrote or edited stay (they can fix them on the Automations page).
+            broken = [s for s in skills if s.fails >= 3 and s.how not in ("edited", "saved")]
             if broken:
-                skills = [s for s in skills if s.fails < 3]
+                skills = [s for s in skills if s not in broken]
                 log.info("learning.dropped_broken %s", [s.phrase for s in broken])
             self._write(skills)
 

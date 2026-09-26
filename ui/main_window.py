@@ -19,7 +19,8 @@ from ui.theme import build_stylesheet, current_palette, qt_palette, state_color
 from ui.widgets import ElidedLabel, IconButton, Orb
 
 PAGES = [("Home", "home"), ("Music", "music"), ("Automations", "zap"), ("History", "history"),
-         ("Memory", "memory"), ("Activity", "activity"), ("System", "cpu"), ("Settings", "settings")]
+         ("Memory", "memory"), ("Activity", "activity"), ("Storage", "drive"), ("System", "cpu"),
+         ("Settings", "settings")]
 
 LOGO_PATH = "SAINT.png"       # the SAINT logo shipped in the repository root
 
@@ -212,8 +213,9 @@ class MainWindow(QMainWindow):
         self.home = HomePage(self)
         self.music = MusicPage(self)
         self.settings_ui = SettingsUI(on_appearance_changed=self.apply_appearance)
+        from ui.pages.storage import StoragePage
         self.pages = [self.home, self.music, AutomationsPage(), HistoryPage(), MemoryPage(), ActivityPage(),
-                      SystemPage(), self.settings_ui]
+                      StoragePage(), SystemPage(), self.settings_ui]
         for page in self.pages:
             self.stack.addWidget(page)
 

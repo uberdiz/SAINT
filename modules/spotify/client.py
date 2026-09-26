@@ -60,7 +60,7 @@ _FRIENDLY = {
 
 
 # Codes whose exception message is already written for the user.
-_PASSTHROUGH = {"NO_MATCH", "NO_PLAYLIST", "NO_HISTORY", "VOLUME_UNSUPPORTED", "NO_PLAYBACK_SEED"}
+_PASSTHROUGH = {"NO_MATCH", "NO_PLAYLIST", "NO_HISTORY", "VOLUME_UNSUPPORTED", "NO_PLAYBACK_SEED", "NOT_MINE"}
 
 
 def friendly_error(exc) -> str:

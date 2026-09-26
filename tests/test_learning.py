@@ -147,9 +147,13 @@ def test_agent_offers_to_learn_by_watching_when_it_cannot_plan(monkeypatch):
     monkeypatch.setattr(planner, "attempt", lambda text, failure="": None)
     started = []
     monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_after_failure", True)
+    monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_and_learn", True)
     monkeypatch.setattr(demonstration, "watch_for", lambda phrase: started.append(phrase) or True)
     res = agent_mod.agent.handle("open the thing with the gears")
-    assert not res.ok and "I'll watch and learn it" in res.text and started == ["open the thing with the gears"]
+    # It asks first — nothing is recorded until the user says yes.
+    assert not res.ok and res.expects_reply and "Want to show me?" in res.text and started == []
+    assert "watching" in agent_mod.agent.handle("yes").text
+    assert started == ["open the thing with the gears"]
 
 
 def test_spotify_not_connected_is_not_retried(monkeypatch):
@@ -163,19 +167,19 @@ def test_spotify_not_connected_is_not_retried(monkeypatch):
 
 # ---------------------------------------------------------------- corrections
 @pytest.mark.parametrize("said,cmd", [
-    ('i dont like that song, i meant for you to play my "yuh" playlist on spotify',
-     "play my yuh playlist on spotify"),
+    ('i dont like that song, i meant for you to play my "moe" playlist on spotify',
+     "play my moe playlist on spotify"),
     ("No, I meant open disk cleanup", "open disk cleanup"),
     ("no, close the finals", "close the finals"),
     ("that's not what I asked for, switch to spotify", "switch to spotify"),
 ])
 def test_corrections_are_detected(said, cmd):
-    corr_mod.corrections.note("play my kpop playlist", "spotify.play_playlist", True)
+    corr_mod.corrections.note("play my party playlist", "spotify.play_playlist", True)
     assert corr_mod.corrections.detect(said) == cmd
 
 
 def test_not_a_correction():
-    corr_mod.corrections.note("play my kpop playlist", "spotify.play_playlist", True)
+    corr_mod.corrections.note("play my party playlist", "spotify.play_playlist", True)
     assert corr_mod.corrections.detect("no, it's fine") is None
     assert corr_mod.corrections.detect("play some jazz") is None
     corr_mod.corrections.clear()
@@ -192,10 +196,10 @@ def test_correction_teaches_the_previous_request(monkeypatch, _isolated):
             return Intent("spotify.play_playlist", lambda: played.append(q) or Reply(f"Playing {q}."), "spotify")
         return None
     monkeypatch.setattr(agent_mod, "route", fake_route)
-    agent_mod.agent.handle("play my kpop playlist")
-    res = agent_mod.agent.handle('i dont like that song, i meant for you to play my "yuh" playlist on spotify')
-    assert "next time you say “play my kpop playlist”" in res.text
-    assert _isolated.match("play my kpop playlist").steps == ["play my yuh playlist on spotify"]
+    agent_mod.agent.handle("play my party playlist")
+    res = agent_mod.agent.handle('i dont like that song, i meant for you to play my "moe" playlist on spotify')
+    assert "next time you say “play my party playlist”" in res.text
+    assert _isolated.match("play my party playlist").steps == ["play my moe playlist on spotify"]
 
 
 def test_no_plus_command_answers_a_pending_question(monkeypatch):
@@ -431,7 +435,7 @@ def sp(tmp_path):
 
     class Client(FakeClient):
         def playlists(self, limit=50, offset=0):
-            return {"items": [{"id": "yuh", "uri": "spotify:playlist:yuh", "name": "yuh", "owner": {"id": "me"}},
+            return {"items": [{"id": "moe", "uri": "spotify:playlist:moe", "name": "moe", "owner": {"id": "me"}},
                               {"id": "gym", "uri": "spotify:playlist:gym", "name": "Gym Hits", "owner": {"id": "me"}}]}
 
         def me(self):
@@ -444,7 +448,7 @@ def sp(tmp_path):
 def test_my_playlist_is_never_a_strangers(sp):
     from modules.spotify.client import SpotifyAPIError
     with pytest.raises(SpotifyAPIError) as e:
-        sp.play_query("kpop", "playlist", own_only=True)
+        sp.play_query("party", "playlist", own_only=True)
     assert e.value.code == "NOT_MINE"
 
 
@@ -454,14 +458,14 @@ def test_my_playlist_found_through_memory_and_remembered(sp, monkeypatch):
     class R:
         def __init__(self, c):
             self.entry = type("E", (), {"content": c})()
-    monkeypatch.setattr(service.memory_service, "recall", lambda *a, **k: [R("yuh playlist is my KPOP playlist")])
-    r = sp.play_query("kpop", "playlist", own_only=True)
-    assert r["name"] == "yuh" and r["owned"]
-    assert sp.memory.resolve_playlist_alias("kpop")["playlist_name"] == "yuh"
+    monkeypatch.setattr(service.memory_service, "recall", lambda *a, **k: [R("moe playlist is my PARTY playlist")])
+    r = sp.play_query("party", "playlist", own_only=True)
+    assert r["name"] == "moe" and r["owned"]
+    assert sp.memory.resolve_playlist_alias("party")["playlist_name"] == "moe"
 
 
 def test_quoted_names_resolve(sp):
-    assert sp.play_query("'yuh'", "playlist", own_only=True)["name"] == "yuh"
+    assert sp.play_query("'moe'", "playlist", own_only=True)["name"] == "moe"
 
 
 def test_banned_playlists_are_skipped(sp):
@@ -511,7 +515,7 @@ def test_code_style_tool_calls_are_parsed_and_never_shown():
 
 
 @pytest.mark.parametrize("text,claim", [
-    ("Playing your 'yuh' playlist on Spotify.", True),
+    ("Playing your 'moe' playlist on Spotify.", True),
     ("Disk Cleanup is open.", True),
     ("Spotify volume increased.", True),
     ("Nothing is playing right now.", False),
@@ -550,16 +554,19 @@ def test_no_plan_hands_over_to_the_model_then_offers_to_learn(monkeypatch):
     monkeypatch.setattr(planner, "attempt", lambda text, failure="": None)
     monkeypatch.setitem(config._data["ai"], "provider", "ollama")
     monkeypatch.setitem(config._data["ai"], "tool_calling", True)
-    assert agent_mod.agent.handle("add this song to my gym playlist") is None      # the model's tools try next
+    assert agent_mod.agent.handle("add this song to my party playlist") is None      # the model's tools try next
     from modules.ai.module import AIModule
     ai = AIModule.__new__(AIModule)
     import threading
     ai._cancel_flag = threading.Event()
     said = []
     monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_after_failure", True)
+    monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_and_learn", True)
     monkeypatch.setattr(demonstration, "watch_for", lambda p: True)
-    extra = ai._offer_to_learn("add this song to my gym playlist", {"tool_calls": []}, said.append)
-    assert "watch and learn" in extra and said == [extra]
-    assert ai._offer_to_learn("add this song to my gym playlist",
+    extra = ai._offer_to_learn("add this song to my party playlist", {"tool_calls": []}, said.append)
+    assert "Want to show me?" in extra and said == [extra] and ai.expects_reply
+    from modules.agent.confirm import confirmations
+    confirmations.clear()
+    assert ai._offer_to_learn("add this song to my party playlist",
                               {"tool_calls": [{"tool": "spotify.add_current_to_playlist", "success": True}]},
                               said.append) == ""

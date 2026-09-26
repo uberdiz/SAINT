@@ -64,6 +64,9 @@ class Agent:
             log.info("agent.intent learning.done")
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.done", "text": text[:80]})
             return AgentResult(demonstration.finish(), "learning.done")
+        if learning.is_done(text) and demonstration.just_finished():
+            # It had already stopped (15 quiet seconds) and saved what it saw.
+            return AgentResult("I'd already stopped watching. " + demonstration.just_finished(), "learning.done")
 
         # Commands about SAINT itself (stop, "what are you doing?", silent
         # mode) never wait for the lock a running plan holds.
@@ -91,11 +94,14 @@ class Agent:
             return AgentResult(greeting, "dictation.start", expects_reply=True)
 
         from modules.learning.corrections import corrections
-        if confirmations.pending is not None:
-            # "No, close the finals" answers the question *and* says what to do instead.
+        from modules.agent.confirm import choices
+        if confirmations.pending is not None or choices.pending is not None:
+            # "No, close the finals" / "no, I meant the folder you just made" answers
+            # the question *and* says what to do instead.
             fixed = corrections.detect(text)
             if fixed:
                 confirmations.clear("corrected")
+                choices.clear()
                 return self._corrected(text, fixed)
         answer = confirmations.resolve(text)
         if answer is not None:
@@ -103,7 +109,6 @@ class Agent:
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "confirmation", "text": text[:80]})
             return AgentResult(answer, "confirmation")
 
-        from modules.agent.confirm import choices
         with self._lock:
             chosen = choices.resolve(text)
         if chosen is not None:
@@ -225,13 +230,15 @@ class Agent:
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "llm", "text": text[:80]})
             corrections.note(text, "llm", None)
             return None
-        # Couldn't work it out: learn it from the user instead.
+        # Couldn't work it out: offer to learn it from the user. Only a "yes"
+        # starts watching, so SAINT never records whatever happens next by itself.
         lead = failure or (out.reply.text if out is not None else "")
         lead = (lead.rstrip(". ") + ". ") if lead else ""
-        if config.get("learning.watch_after_failure", True) and demonstration.watch_for(text):
-            msg = lead + "I don't know how to do that yet — if you do it now, I'll watch and learn it."
-        else:
-            msg = lead + "I don't know how to do that yet."
+        if config.get("learning.watch_after_failure", True) and demonstration.offer(text):
+            msg = lead + "I don't know how to do that yet. Want to show me? Say yes, do it, then say “done”."
+            return self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False, expects_reply=True),
+                                t0)
+        msg = lead + "I don't know how to do that yet."
         return self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False), t0)
 
     @staticmethod
@@ -290,7 +297,7 @@ class Agent:
             from modules.learning.skills import skills
             if skills.match(text) is not None or corrections.detect(text) or learning.parse(text) is not None:
                 return True
-            if demonstration.recorder.active and learning.is_done(text):
+            if (demonstration.recorder.active or demonstration.just_finished()) and learning.is_done(text):
                 return True
             intent = route(text)
         except Exception:

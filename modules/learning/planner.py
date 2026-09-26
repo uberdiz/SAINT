@@ -87,7 +87,35 @@ def grounded(step: str, request: str) -> bool:
     m = re.search(r"\b(?:but|except)\s+(?:the\s+|my\s+)?(.+)$", s)
     if m and not all(w in r for w in m.group(1).split()):
         return False
+    # Clicking something the user never named ("click Settings" for "click on
+    # the loop layer") — the target must sound like something they said.
+    m = re.match(r"^(?:double |right |middle )?click(?:\s+on)?\s+(?:the\s+)?(.+?)(?:\s+on\s+(?:my\s+|the\s+)?"
+                 r"\w+\s+(?:screen|monitor|display))?$", s)
+    if m and not _mentioned(m.group(1), r):
+        return False
+    # Keys the user didn't ask for ("press delete", "press enter" after opening a folder).
+    m = re.match(r"^(?:press|hit)\s+(.+)$", s)
+    if m and not re.search(r"\b(?:press|hit|key|shortcut)\b", r):
+        return False
     return True
+
+
+def _mentioned(target: str, request: str) -> bool:
+    """Does ``target`` sound like something in ``request``?"""
+    import difflib
+    from modules.desktop.window_match import sounds_like
+    t_words = [w for w in re.findall(r"[a-z0-9]+", target.lower())
+               if w not in ("the", "a", "my", "on", "button", "icon", "link", "tab", "desktop", "video")]
+    if not t_words:
+        return True
+    said = re.findall(r"[a-z0-9]+", request.lower())
+    said += [a + b for a, b in zip(said, said[1:])]          # "loop layer" ~ "Loopler"
+    hits = 0
+    for w in t_words:
+        if any(w == x or difflib.SequenceMatcher(None, w, x).ratio() >= 0.75 or
+               (len(w) > 3 and sounds_like(w, x) >= 0.9) for x in said):
+            hits += 1
+    return hits >= max(1, (len(t_words) + 1) // 2)
 
 
 def clean(text: str) -> str:

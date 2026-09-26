@@ -49,17 +49,25 @@ _ALONE_OK = {"enter", "escape", "delete", "tab", "printscreen"} | {f"f{i}" for i
 
 @dataclass
 class Event:
-    kind: str                 # launch | focus | click | keys | typed
+    kind: str                 # launch | focus | click | keys | moved | state
     at: float
     app: str = ""             # display name of the app / window
     exe: str = ""             # process stem, e.g. "cleanmgr"
     name: str = ""            # clicked element's name
     button: str = "left"
     clicks: int = 1
-    where: str = "window"     # window | desktop | taskbar | start
+    where: str = "window"     # window | desktop | taskbar | start   (moved: "left"/"right"/... screen)
     keys: str = ""
     x: int = 0
     y: int = 0
+    path: str = ""            # launch: the program's .exe (so "open X" can find it next time)
+    title: str = ""           # click: the window's title (a click on the title itself isn't a step)
+
+
+# Names of whole areas, not buttons: clicking them only focuses the window.
+_CONTAINER = re.compile(r"^(?:items view|shell folder view|folder ?view|content|workspace|document|pane|panel|client|"
+                        r"grouping|list|tree|scroll ?bar|vertical|horizontal|main|window|chrome legacy window|"
+                        r"desktop \d*|shell_defview|running applications)$", re.I)
 
 
 # ---------------------------------------------------------------------- #
@@ -82,29 +90,55 @@ def _step_for_click(e: Event) -> Optional[str]:
             return "right click the desktop" if e.button == "right" else None
         verb = "right click" if e.button == "right" else "double click" if e.clicks >= 2 else "click"
         return f"{verb} {name} on the desktop"
-    if not name or len(name) > 60:
+    if not name or len(name) > 60 or _CONTAINER.match(name):
         return None
+    if e.title and (name == e.title or name in e.title and len(name) > 12):
+        return None                          # the title bar / tab strip: a focus, not a button
     verb = "right click" if e.button == "right" else "double click" if e.clicks >= 2 else "click"
     return f"{verb} {name}"
 
 
 def _how_it_opened(e: Event) -> bool:
     """Start-menu / taskbar clicks and keys that were only the way to open an app."""
-    return (e.kind == "click" and e.where in ("start", "taskbar")) or         (e.kind == "keys" and (e.exe in _SHELL_START or e.keys.startswith("win")))
+    return (e.kind == "click" and e.where in ("start", "taskbar")) or \
+        (e.kind == "keys" and (e.exe in _SHELL_START or e.keys.startswith("win")))
+
+
+def _is_user_input(e: Event) -> bool:
+    """Something the user did (not something an app did by itself)."""
+    return e.kind in ("click", "keys")
 
 
 def summarize(events: List[Event]) -> List[str]:
     """What the user did, as commands SAINT can repeat (unrepeatable bits dropped)."""
     steps: List[tuple] = []                     # (command, event)
     pending_start: Optional[Event] = None       # a Start-menu click waiting to see what it opens
+    last_launch: Optional[Event] = None
+    input_since_launch = False                  # did the user click / press anything named since?
     for e in events:
         if e.kind == "launch":
             name = pending_start.name if pending_start and pending_start.name else e.app
+            # Started by the app just opened (Bloxstrap starting Roblox, an updater
+            # restarting itself) — not a step the user took.
+            if last_launch is not None and not input_since_launch and pending_start is None \
+                    and e.at - last_launch.at < 15:
+                continue
             while steps and _how_it_opened(steps[-1][1]):
                 steps.pop()
             pending_start = None
-            if name:
+            last_launch, input_since_launch = e, False
+            if name and not any(s.lower() == f"open {name}".lower() for s, _ in steps):
                 steps.append((f"open {name}", e))
+            continue
+        if _is_user_input(e) and (e.kind == "keys" or e.name or e.where != "window"):
+            input_since_launch = True
+        if e.kind == "moved" and e.app:
+            s = f"move {e.app} to my {e.where} screen"
+            steps = [x for x in steps if not x[0].startswith(f"move {e.app} to ")]   # only where it ended up
+            steps.append((s, e))
+            continue
+        if e.kind == "state" and e.app:
+            steps.append((f"{e.name} {e.app}", e))     # "maximize Spotify"
             continue
         if e.kind == "click" and e.where == "start":
             pending_start = e
@@ -244,8 +278,15 @@ class Recorder:
             except Exception:
                 return ""
 
-        base = {w.hwnd for w in desktop.list_windows()}
-        running = {w.process.lower().replace(".exe", "") for w in desktop.list_windows()}
+        start_wins = desktop.list_windows()
+        base = {w.hwnd for w in start_wins}
+        running = {w.process.lower().replace(".exe", "") for w in start_wins}
+        # Where each window is, to notice "moved Claude to my right screen" / "maximized Spotify".
+        placed = {w.hwnd: (w.monitor, w.maximized, w.minimized) for w in start_wins}
+        try:
+            screen_name = {m.index: m.position for m in desktop.monitors()}
+        except Exception:
+            screen_name = {}
         fg = user32.GetForegroundWindow()
         held = {vk: bool(user32.GetAsyncKeyState(vk) & 0x8000) for vk in list(_KEYS) + list(_MODS) + [1, 2]}
         press_pos = {}
@@ -333,7 +374,26 @@ class Recorder:
                     new_app = stem not in running
                     running.add(stem)
                     if new_app or not recent_act:
-                        self._add(Event("launch", now, app=_app_name_for(stem, w.title), exe=stem))
+                        self._add(Event("launch", now, app=_app_name_for(stem, w.title), exe=stem,
+                                        path=_exe_path(w.hwnd)))
+                        last_act = now
+                for w in wins:
+                    if desktop._is_own(w):
+                        continue
+                    was = placed.get(w.hwnd)
+                    placed[w.hwnd] = (w.monitor, w.maximized, w.minimized)
+                    if was is None or not (w.foreground or was[2] != w.minimized):
+                        continue
+                    from modules.vision.screen import app_label
+                    label = app_label({"title": w.title, "process": w.process})
+                    if was[0] != w.monitor and not w.minimized and screen_name.get(w.monitor):
+                        self._add(Event("moved", now, app=label, exe=w.process, where=screen_name[w.monitor]))
+                        last_act = now
+                    elif not was[1] and w.maximized:
+                        self._add(Event("state", now, app=label, name="maximize"))
+                        last_act = now
+                    elif not was[2] and w.minimized:
+                        self._add(Event("state", now, app=label, name="minimize"))
                         last_act = now
                 cur = user32.GetForegroundWindow()
                 if cur != fg:
@@ -394,7 +454,16 @@ class Recorder:
         except Exception:
             pass
         return Event("click", time.time(), app=_app_name_for(exe, title) if where == "window" else "",
-                     exe=exe, name=name, button=button, where=where, x=x, y=y)
+                     exe=exe, name=name, button=button, where=where, x=x, y=y, title=title)
+
+
+def _exe_path(hwnd: int) -> str:
+    try:
+        import psutil
+        import win32process
+        return psutil.Process(win32process.GetWindowThreadProcessId(hwnd)[1]).exe()
+    except Exception:
+        return ""
 
 
 recorder = Recorder()
@@ -412,10 +481,34 @@ def announce(text: str, speak: bool = True):
                                                "status": "done", "description": "watching how you do it"})
 
 
-def learn_from(phrase: str, steps: List[str]) -> str:
+def _remember_programs(steps: List[str], events: List[Event]):
+    """'open Bloxstrap' must work next time even though Bloxstrap is only pinned
+    to the taskbar: programs seen starting that SAINT can't find by name are
+    added to its app list (desktop.apps) with the .exe that ran."""
+    try:
+        from modules.desktop.apps import app_catalog
+        known = dict(config.get("desktop.apps", {}) or {})
+        added = False
+        for e in events:
+            if e.kind != "launch" or not e.app or not e.path or f"open {e.app}".lower() not in \
+                    [s.lower() for s in steps]:
+                continue
+            if app_catalog.resolve(e.app) is None and os.path.isfile(e.path):
+                known[e.app] = e.path
+                added = True
+                log.info("learning.watch.app_added %r -> %s", e.app, e.path)
+        if added:
+            config.set("desktop.apps", known)
+    except Exception:
+        log.exception("learning.watch.app_add_failed")
+
+
+def learn_from(phrase: str, steps: List[str], events: Optional[List[Event]] = None) -> str:
     """Save what was seen as a skill and say what was learned."""
     from modules.learning.planner import understood
     from modules.learning.skills import skills
+    if events:
+        _remember_programs(steps, events)
     good = [s for s in steps if understood(s)]
     if not good:
         return "I didn't see anything I know how to repeat, so I haven't learned that one."
@@ -424,13 +517,45 @@ def learn_from(phrase: str, steps: List[str]) -> str:
         return "Okay."
     what = ", then ".join(good)
     note = " Some of what you did I can't repeat, so I left it out." if len(good) < len(steps) else ""
-    return (f"Got it. Next time you say “{skill.said or phrase}”, I'll {what}.{note} "
+    text = (f"Got it. Next time you say “{skill.said or phrase}”, I'll {what}.{note} "
             "Say “forget that” if I got it wrong.")
+    global _last_result
+    _last_result = (time.time(), text)
+    return text
+
+
+_last_result = (0.0, "")
+
+
+def just_finished(within: float = 90) -> str:
+    """What SAINT said when it stopped watching on its own a moment ago (so a
+    late "I'm all done" gets an answer instead of going to the chat model)."""
+    at, text = _last_result
+    return text if text and time.time() - at < within else ""
 
 
 def watch_for(phrase: str) -> bool:
     """Start watching the user do ``phrase``; announces the result when it ends on its own."""
-    return recorder.start(phrase, on_done=lambda steps: announce(learn_from(phrase, steps)))
+    def done(steps):
+        with recorder._lock:
+            events = list(recorder.events)
+        announce(learn_from(phrase, steps, events))
+    return recorder.start(phrase, on_done=done)
+
+
+def offer(phrase: str) -> bool:
+    """After a failure: *ask* to watch ("want to show me?") instead of starting
+    to record whatever the user does next. "Yes" starts watching."""
+    if os.name != "nt" or not config.get("learning.watch_and_learn", True):
+        return False
+    from modules.agent.confirm import PendingAction, confirmations
+
+    def run():
+        if not watch_for(phrase):
+            return "I can't watch the screen on this computer."
+        return "Okay, I'm watching. Do it now, then say “done”."
+    confirmations.ask(PendingAction(description="watch you do it", run=run, tool="learning.watch"))
+    return True
 
 
 def finish() -> str:
@@ -438,6 +563,8 @@ def finish() -> str:
     phrase = recorder.phrase
     recorder._on_done = None
     steps = recorder.stop("user")
-    text = learn_from(phrase, steps)
+    with recorder._lock:
+        events = list(recorder.events)
+    text = learn_from(phrase, steps, events)
     announce(text, speak=False)             # the reply says it; this only closes the pill
     return text

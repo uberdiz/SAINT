@@ -942,8 +942,11 @@ class DesktopController:
         if x is not None and y is not None:
             self._check_point(x, y)
             pyautogui.moveTo(x, y, duration=0.05)
-        pyautogui.scroll(int(amount))
-        return {"scrolled": int(amount)}
+        # ``amount`` is in wheel notches. pyautogui passes it to Windows as-is,
+        # where one notch is 120 — so scroll(6) used to move 1/20 of a notch.
+        notches = max(-40, min(40, int(amount)))
+        pyautogui.scroll(notches * 120)
+        return {"scrolled": notches}
 
 
 class AmbiguousWindow(ToolError):

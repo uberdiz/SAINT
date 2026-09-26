@@ -93,6 +93,36 @@ def resolve_folder(spoken: str) -> Optional[str]:
     p = known_folder(low)
     if p and os.path.exists(p):
         return p
+    # "games/TheLoop", "downloads\\mods": a known folder plus a sub-folder.
+    parts = re.split(r"\s*[\\/]\s*", low, maxsplit=1)
+    if len(parts) == 2 and parts[1]:
+        base = resolve_folder(parts[0])
+        if base:
+            return _existing_child(base, parts[1])
+    # "C games", "C: Games", "the games folder on my C drive": a folder on a drive.
+    m = re.match(r"^([a-z])(?::|\s+drive)?\s+(.+)$", low) or \
+        re.match(r"^(?P<rest>.+?)(?:\s+folder)?\s+on\s+(?:my\s+|the\s+)?(?P<d>[a-z])(?::|\s+drive)?$", low)
+    if m:
+        letter, rest = (m.group("d"), m.group("rest")) if m.groupdict() else (m.group(1), m.group(2))
+        rest = re.sub(r"^(?:the|my)\s+", "", re.sub(r"\s+(?:folder|directory)$", "", rest)).strip()
+        root = f"{letter.upper()}:\\"
+        if rest and os.path.exists(root):
+            return _existing_child(root, rest)
+    return None
+
+
+def _existing_child(parent: str, spoken: str) -> Optional[str]:
+    """``parent``'s sub-folder called ``spoken`` ("the loop" matches TheLoop /
+    The-Loop / the_loop), or None."""
+    want = re.sub(r"[^a-z0-9]", "", spoken.lower())
+    if not want:
+        return None
+    try:
+        for e in os.scandir(parent):
+            if e.is_dir() and re.sub(r"[^a-z0-9]", "", e.name.lower()) == want:
+                return e.path
+    except OSError:
+        pass
     return None
 
 

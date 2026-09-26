@@ -8,7 +8,10 @@ Everything goes through Steam's own steam:// links, so Steam does the work
 (and shows its own confirmation for uninstalling).
 """
 
+import logging
 import os
+import threading
+import time
 import urllib.parse
 
 from modules.automation.tools import P, PermissionLevel, Tool, ToolError
@@ -24,6 +27,48 @@ def _open(uri: str):
         os.startfile(uri)
     except OSError as e:
         raise ToolError(f"Windows couldn't open Steam: {e.strerror or e}", "LAUNCH_FAILED")
+
+
+log = logging.getLogger("saint.steam")
+
+
+def _steam_running() -> bool:
+    try:
+        import psutil
+        return any((p.info.get("name") or "").lower() == "steam.exe" for p in psutil.process_iter(["name"]))
+    except Exception:
+        return True          # can't tell: behave as before
+
+
+def _steam_window_up() -> bool:
+    try:
+        from modules.desktop.controller import desktop
+        return any(w.process.lower().startswith(("steamwebhelper", "steam")) and w.title and not w.minimized
+                   for w in desktop.list_windows())
+    except Exception:
+        return False
+
+
+def _open_in_steam(uri: str) -> bool:
+    """Open a steam:// page. When Steam isn't running, launching it with the
+    link starts Steam but drops the page ("I had to open Steam myself"), so the
+    link is sent again once Steam's window is up. Returns True if Steam was
+    starting."""
+    starting = not _steam_running()
+    _open(uri)
+    if starting:
+        def again():
+            deadline = time.time() + 45
+            while time.time() < deadline and not _steam_window_up():
+                time.sleep(1.0)
+            time.sleep(2.5)                    # let the client finish loading its pages
+            try:
+                _open(uri)
+                log.info("steam.reopened %s", uri.split("?")[0])
+            except Exception:
+                pass
+        threading.Thread(target=again, daemon=True, name="steam-nav").start()
+    return starting
 
 
 def _gb(n: int) -> str:
@@ -58,14 +103,14 @@ def launch(name: str):
 
 
 def open_library():
-    _open("steam://nav/games")
-    return {"opened": "library"}
+    starting = _open_in_steam("steam://nav/games")
+    return {"opened": "library", "starting": starting}
 
 
 def store_search(query: str):
     url = "https://store.steampowered.com/search/?term=" + urllib.parse.quote_plus(query)
-    _open("steam://openurl/" + url)
-    return {"searched": query}
+    starting = _open_in_steam("steam://openurl/" + url)
+    return {"searched": query, "starting": starting}
 
 
 def uninstall(name: str):

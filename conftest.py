@@ -37,5 +37,40 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
     }, f)
 
 
+class _MemoryKeyring:
+    """Tests must never read or delete the real Spotify login in Windows'
+    Credential Manager (a smoke test once refreshed it with an empty client
+    ID, got a 400, and wiped it)."""
+    priority = 1
+
+    def __init__(self):
+        self._data = {}
+
+    def get_password(self, service, user):
+        return self._data.get((service, user))
+
+    def set_password(self, service, user, password):
+        self._data[(service, user)] = password
+
+    def delete_password(self, service, user):
+        self._data.pop((service, user), None)
+
+    def get_credential(self, service, user):
+        return None
+
+
+try:
+    import keyring
+    import keyring.backend
+
+    class _Backend(_MemoryKeyring, keyring.backend.KeyringBackend):
+        pass
+    keyring.set_keyring(_Backend())
+except Exception:
+    import types
+    sys.modules["keyring"] = types.SimpleNamespace(**{k: getattr(_MemoryKeyring(), k) for k in
+                                                      ("get_password", "set_password", "delete_password")})
+
+
 def pytest_sessionfinish(session, exitstatus):
     shutil.rmtree(_TMP, ignore_errors=True)

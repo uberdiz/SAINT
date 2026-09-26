@@ -51,8 +51,10 @@ def parse_steam(text: str) -> Optional[Intent]:
     # ---- the library ----------------------------------------------------------------------
     if re.match(r"^(?:open|show(?: me)?|go to|bring up|pull up|switch to)\s+(?:up\s+)?(?:my\s+|the\s+)?"
                 r"(?:steam\s+(?:library|games)|games? library in steam|library (?:in|on) steam)$", t):
-        return Intent("steam.open_library", lambda: run_tool("steam.open_library", "open your Steam library",
-                                                             lambda r: "Opened your Steam library."), "steam")
+        return Intent("steam.open_library", lambda: run_tool(
+            "steam.open_library", "open your Steam library",
+            lambda r: "Starting Steam — I'll open your library as soon as it's up." if r.get("starting")
+            else "Opened your Steam library."), "steam")
 
     # ---- the store -----------------------------------------------------------------------------
     m = re.match(r"^(?:search|look up|find|look for)\s+(?:the\s+)?steam(?:\s+store)?\s+for\s+(.+)$", t) or \

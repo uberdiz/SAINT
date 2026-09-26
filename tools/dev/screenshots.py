@@ -154,9 +154,34 @@ def main():
     for old in ("dashboard.png", "memory.png", "settings-appearance.png", "settings-wake-word.png"):
         (OUT / old).unlink(missing_ok=True)
     shots = {"home": "Home", "music": "Music", "automations": "Automations", "history": "History",
-             "system": "System", "settings": "Settings"}
+             "storage": "Storage", "system": "System", "settings": "Settings"}
+    # Made-up junk for the Storage page's cleanup card (never this PC's real files).
+    import modules.agent.recent  # noqa: F401
+    import os as _os
+    _os.path.exists = (lambda real: lambda path: True if str(path).startswith("X:") else real(path))(_os.path.exists)
+    fake_junk = {"scope": "all", "findings": [
+        {"category": c, "path": "X:\\" + pth, "size": sz * GB, "reason": why, "action": act}
+        for c, pth, sz, why, act in (
+            ("shader_cache", "Users\\alex\\AppData\\Local\\NVIDIA\\DXCache", 6.8,
+             "NVIDIA shader cache — rebuilt automatically", "recycle"),
+            ("app_cache", "Users\\alex\\AppData\\Local\\Spotify\\Data", 3.9,
+             "Spotify's streaming cache — rebuilt automatically", "recycle"),
+            ("dev_cache", "Users\\alex\\AppData\\Local\\pip\\cache", 2.7,
+             "pip's download cache — re-downloaded when needed", "review"),
+            ("temp", "Users\\alex\\AppData\\Local\\Temp\\scoped_dir_1", 1.6,
+             "temporary, untouched for 12 days", "recycle"),
+            ("old_installer", "Users\\alex\\Downloads\\GameSetup.exe", 1.1,
+             "an installer downloaded 94 days ago", "review"),
+            ("windows_update", "D:\\WUDownloadCache", 1.2,
+             "Windows Update downloads — Disk Cleanup removes these safely", "cleanmgr"),
+            ("browser_cache", "Users\\alex\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache",
+             0.4, "Chrome's cache — rebuilt automatically", "recycle"),
+            ("duplicate", "Users\\alex\\Downloads\\photos (1).zip", 0.3, "an identical copy of photos.zip",
+             "recycle"))]}
     for fname, page in shots.items():
         w.navigate(page, animate=False)
+        if page == "Storage":
+            w.stack.currentWidget().cleanup.show_report(fake_junk)
         settle(900)
         if page == "Automations":
             w.stack.currentWidget().scenes.list.setCurrentRow(0)

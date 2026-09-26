@@ -341,6 +341,8 @@ def test_cleanup_subset_after_a_plan(monkeypatch, tmp_path):
     from modules.agent.confirm import confirmations
     from modules.agent.router import route
     from modules.files import tools as ft
+    (tmp_path / "a (1).zip").write_bytes(b"x" * 10)
+    (tmp_path / "setup.exe").write_bytes(b"x" * 20)
     ft._remember_plan({"findings": [
         {"category": "duplicate", "path": str(tmp_path / "a (1).zip"), "size": 10, "action": "recycle", "id": 1},
         {"category": "old_installer", "path": str(tmp_path / "setup.exe"), "size": 20, "action": "review", "id": 2}],

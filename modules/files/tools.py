@@ -149,11 +149,17 @@ def _report_speech(rep: Dict) -> str:
 
 def _ask_to_recycle(rep: Dict, only: Optional[List[str]] = None):
     """Park "move those to the Recycle Bin?" as a yes/no question."""
-    from modules.agent.confirm import PendingAction, confirmations
     # Old installers are only "worth a look" — they go when you ask for them by name.
     items = [f for f in rep["findings"]
              if (f["action"] == "recycle" or only and f["category"] == "old_installer")
              and (not only or f["category"] in only)]
+    return ask_to_recycle_findings(items)
+
+
+def ask_to_recycle_findings(items: List[Dict]):
+    """Ask before recycling these cleanup findings (ones already gone are skipped)."""
+    from modules.agent.confirm import PendingAction, confirmations
+    items = [f for f in items if f.get("path") and os.path.exists(f["path"])]
     if not items:
         return None
     size = sum(f["size"] for f in items)
@@ -334,6 +340,34 @@ def _walk(root: str, max_depth: int, cancel):
         yield dirpath, dirs, files
 
 
+def make_folder(name: str, parent: str = ""):
+    where = _folder(parent) if parent else known_folder("desktop")
+    res = ops.make_folder(where, name)
+    verb = "There's already a folder called" if res["existed"] else "Made a new folder called"
+    return dict(res, summary=f"{verb} {os.path.basename(res['path'])} in {where}.")
+
+
+def rename(path: str, new_name: str):
+    res = ops.rename(path, new_name)
+    return dict(res, summary=f"Renamed {os.path.basename(res['old'])} to {os.path.basename(res['path'])}.")
+
+
+def open_path(path: str):
+    res = ops.open_path(path)
+    return dict(res, summary=f"Opened {os.path.basename(path) or path}.")
+
+
+def show_in_explorer(path: str):
+    res = ops.open_in_explorer(path, select=True)
+    return dict(res, summary=f"Here's {os.path.basename(path) or path} in File Explorer.")
+
+
+def copy_path(path: str):
+    from modules.desktop.clipboard import write_text
+    write_text(path)
+    return {"path": path, "summary": f"Copied {path}."}
+
+
 def disk_cleanup(drive: str = "C"):
     import subprocess
     letter = (drive or "C").strip().rstrip(":\\")[:1].upper()
@@ -386,6 +420,21 @@ def register_file_tools(registry):
              PermissionLevel.LOW, disk_cleanup, parameters={"drive": P("string", required=False, default="C")},
              llm_exposed=True, category="files"),
         # Always ask first (ALWAYS_CONFIRM) and never offered to the LLM.
+        Tool("files.make_folder", "Make a new folder (in a named folder such as games, downloads or a drive)",
+             {"name": "string"}, PermissionLevel.MEDIUM, make_folder,
+             parameters={"name": P("string", "the new folder's name"),
+                         "parent": P("string", "where: games, downloads, documents, D drive, or a path",
+                                     required=False)},
+             category="files", llm_exposed=True),
+        Tool("files.open_path", "Open a file with its usual app", {"path": "string"}, PermissionLevel.MEDIUM,
+             open_path, parameters={"path": P("string")}, category="files", llm_exposed=False),
+        Tool("files.show_in_explorer", "Show a file or folder in File Explorer", {"path": "string"},
+             PermissionLevel.LOW, show_in_explorer, parameters={"path": P("string")}, category="files",
+             llm_exposed=False),
+        Tool("files.copy_path", "Copy a file or folder's path to the clipboard", {"path": "string"},
+             PermissionLevel.LOW, copy_path, parameters={"path": P("string")}, category="files", llm_exposed=False),
+        Tool("files.rename", "Rename a file or folder", {"path": "string"}, PermissionLevel.MEDIUM, rename,
+             parameters={"path": P("string"), "new_name": P("string")}, category="files", llm_exposed=False),
         Tool("files.recycle", "Move files or folders to the Recycle Bin (never deletes permanently)",
              {"paths": "array"}, PermissionLevel.HIGH, recycle,
              parameters={"paths": P("array", items={"type": "string"})}, category="files"),

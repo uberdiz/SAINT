@@ -451,6 +451,15 @@ class SpotifyTools:
             remembered = self._playlist_from_memory(q_clean, mine)
             if remembered:
                 return remembered
+            # Misheard short names: "my MO playlist" is "moe", "my what playlist" may be "wut".
+            if q_core and len(q_core.split()) <= 2:
+                from modules.desktop.window_match import sounds_like
+                alike = [p for p in mine if owned(p) and len(p.get("name", "").split()) <= 3 and
+                         sounds_like(q_core, p.get("name", "")) >= 0.9]
+                if len(alike) == 1:
+                    p = alike[0]
+                    return {"kind": "playlist", "uri": p["uri"], "name": p["name"], "id": p["id"], "context": True,
+                            "owned": True}
         if not allow_public or not q_clean:
             return None
         banned = self.memory.banned_playlists()
@@ -464,7 +473,7 @@ class SpotifyTools:
                 "artist": (best.get("owner") or {}).get("display_name", "")}
 
     def _playlist_from_memory(self, q: str, mine: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """'play my kpop playlist' when SAINT was told "yuh playlist is my KPOP
+        """'play my gym playlist' when SAINT was told "moe playlist is my GYM
         playlist": find the other name in memory, match it to one of the
         user's playlists and remember the nickname for next time."""
         try:
@@ -531,7 +540,7 @@ class SpotifyTools:
 
     def resolve(self, query: str, kind: str = "auto", own_only: bool = False) -> Optional[Dict[str, Any]]:
         q = re.sub(r"\s+on spotify$", "", query.strip(), flags=re.I).strip(" .!?")
-        q = re.sub(r"(?<!\w)['\"“”]|['\"“”](?!\w)", "", q).strip()        # "'yuh'" -> "yuh"
+        q = re.sub(r"(?<!\w)['\"“”]|['\"“”](?!\w)", "", q).strip()        # "'moe'" -> "moe"
         if kind == "track":
             return self._resolve_track(q)
         if kind == "artist":
@@ -595,7 +604,7 @@ class SpotifyTools:
     def play_query(self, query, kind="auto", own_only=False):
         ent = self.resolve(query, kind, own_only=bool(own_only))
         if ent is None and own_only:
-            # "My kpop playlist": never swap in a stranger's playlist without asking.
+            # "My gym playlist": never swap in a stranger's playlist without asking.
             raise SpotifyAPIError(f"You don't have a playlist called {query}.", status=404, code="NOT_MINE")
         if ent is None:
             raise SpotifyAPIError(f"Nothing found for {query}", status=404, code="NO_MATCH")

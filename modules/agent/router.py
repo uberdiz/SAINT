@@ -67,9 +67,31 @@ def run_tool(tool: str, describe: str, on_ok: Callable[[object], str], **kwargs)
 
 
 # "right" is only filler as "Right, ..." — "right click the desktop" is a command.
-_FILLERS = re.compile(r"^(?:oh my (?:gosh|god|goodness)|actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|also|wait|"
-                      r"alright|right(?=[,.!])|yes|yeah|yep|sure|just|wow|dude|bro)[,.!\s]+",
+_FILLERS = re.compile(r"^(?:oh my (?:gosh|god|goodness)|all right|actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|"
+                      r"also|wait|alright|right(?=[,.!])|yes|yeah|yep|sure|just|wow|dude|bro)[,.!\s]+",
                       re.I)
+
+
+def spell_out(text: str) -> str:
+    """Letters spelled out loud: "M-O-E" -> "moe", and "open my MO playlist,
+    spelled M-O-E" -> "open my moe playlist" (the spelled word replaces the
+    misheard one)."""
+    t = re.sub(r"\b[A-Za-z](?:-[A-Za-z]){1,}\b", lambda m: m.group(0).replace("-", "").lower(), text or "")
+    t = re.sub(r"\bspelled\s+((?:[A-Za-z]\s+){1,}[A-Za-z])\b",
+               lambda m: "spelled " + m.group(1).replace(" ", "").lower(), t, flags=re.I)
+    m = re.search(r"[,.;!?]?\s*(?:(?:it'?s|that'?s|which is|pronounced|pronoun\w*)\s+(?:\w+\s+)?)?spelled\s+"
+                  r"([a-z0-9]+)[.!?]*\s*$", t, re.I)
+    if not m:
+        return t
+    import difflib
+    word, rest = m.group(1).lower(), t[:m.start()].rstrip(" ,.;")
+    skip = {"open", "play", "my", "the", "a", "an", "i", "meant", "no", "to", "switch", "start", "launch", "close",
+            "playlist", "folder", "app", "song", "window", "on", "in", "put", "said"}
+    cands = [w for w in re.findall(r"[A-Za-z0-9']+", rest) if w.lower() not in skip]
+    if not cands:
+        return rest
+    best = max(cands, key=lambda w: (w[0].lower() == word[0], difflib.SequenceMatcher(None, w.lower(), word).ratio()))
+    return re.sub(rf"\b{re.escape(best)}\b", word, rest, count=1)
 
 
 def _clean(text: str) -> str:
@@ -81,6 +103,7 @@ def _clean(text: str) -> str:
     t = re.sub(r"\brecycl(?:ing|ed)\s+bin\b", "recycle bin", t, flags=re.I)
     t = re.sub(r"\bdisk,?\s+clean[\s-]?up\b", "disk cleanup", t, flags=re.I)
     t = re.sub(r"\b(?:voice\s?meeter|voice\s?meter|voicemeter)\b", "voicemeeter", t, flags=re.I)
+    t = spell_out(t)
     for _ in range(3):   # "Actually, um, what time is it?"
         t2 = _FILLERS.sub("", t)
         if t2 == t:
@@ -164,6 +187,11 @@ def parse_memory(text: str) -> Optional[Intent]:
     m = re.match(r"^(?:forget|delete|erase|remove)\s+(?:that\s+|about\s+|the fact that\s+)?(.+)$", t)
     if m and m.group(1).strip() in ("it", "that", "this", "about it"):
         m = None                       # "forget it" is a dismissal, not a memory deletion
+    # "Delete the other installers" is about files. Only "forget ..." or an
+    # explicit "... from your memory" removes a memory.
+    if m and not t.startswith("forget") and not re.search(
+            r"\b(?:from (?:your |my )?memor(?:y|ies)|what you (?:know|remember)|that i told you|you remember)\b", t):
+        m = None
     if m and not re.search(r"\b(reminder|timer|alarm|automation|song|track|playlist|window|app|workspace|layout|"
                            r"alias|file|folder|files|archive|download|downloads|zip|rar|game|screenshot)s?\b", t):
         target = m.group(1).strip()
@@ -879,8 +907,11 @@ def parse_desktop(text: str) -> Optional[Intent]:
     m = re.match(r"^(?:open|launch|start|run|fire up|boot up)\s+(?:up\s+)?(?:the\s+|my\s+)?(.+?)(?:\s+app(?:lication)?)?$", t)
     if m and not re.search(r"\b(timer|reminder|playlist|song|music)\b", t):
         name = m.group(1)
-        if name in ("it", "that", "this") or not _looks_like_app_name(name):
-            return None
+        if name in ("it", "that", "this") or not _looks_like_app_name(name) or \
+                re.match(r"^(?:that|this|those|these)\s+(?:folder|file|screenshot|picture|download|archive|one)s?\b",
+                         name) or \
+                re.search(r"\byou (?:just )?(?:made|created|extracted|took|moved|downloaded|found)\b", name):
+            return None      # "open that folder" is about something SAINT did (refer_intents)
 
         def ok(r):
             if r.get("reused"):
@@ -1067,8 +1098,24 @@ def close_window(name: str) -> Reply:
     fail on a misheard name; a game that ignores the close request is
     offered a force quit."""
     from modules.vision.screen import app_label
-    target, label = name, "this window" if name in ("this", "it", "that", "this window", "the window") else name
-    if label != "this window":
+    deictic = name in ("this", "it", "that", "this window", "that window", "the window", "this app", "that app",
+                       "this one", "that one")
+    target, label = name, "this window" if deictic else name
+    if deictic:
+        # Name the window "that" means before asking: the one SAINT just opened
+        # or worked in, else the one in front ("Close Disk Cleanup?").
+        try:
+            from modules.desktop.controller import desktop
+            from modules.agent.context import desktop_context
+            hwnd = desktop_context.window(max_age=120)
+            w = next((x for x in desktop.list_windows() if x.hwnd == hwnd), None) if hwnd else None
+            w = w or desktop.target_window()
+            if w is not None and not desktop._is_own(w):
+                label = app_label({"title": w.title, "process": w.process}) or "this window"
+                target = f"hwnd:{w.hwnd}"
+        except Exception:
+            pass
+    else:
         try:
             from modules.desktop.controller import desktop
             w = desktop.find_for_close(name)
@@ -1388,7 +1435,11 @@ def route(text: str) -> Optional[Intent]:
     # answered, not scheduled.
     # parse_files_task: "go to Downloads, click the first download and extract it
     # to my games folder" is ONE extraction, not three unrelated steps.
-    for parser in (parse_web, parse_files_task, parse_automation, parse_memory):
+    # parse_refer: "delete it" / "open that folder" about something SAINT just
+    # made or found (modules/agent/recent.py) — before memory, so "delete the
+    # junk" never means "forget a memory".
+    from modules.agent.refer_intents import parse_refer
+    for parser in (parse_web, parse_files_task, parse_refer, parse_automation, parse_memory):
         try:
             intent = parser(text)
         except Exception:

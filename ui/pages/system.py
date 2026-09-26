@@ -65,9 +65,6 @@ class SystemPage(Page):
             grid.addWidget(self.t[n], i // 4, i % 4)
         body.addLayout(grid)
 
-        from ui.pages.storage import StorageCard
-        self.storage = StorageCard()
-        body.addWidget(self.storage)
 
         lat = Card("Voice pipeline latency")
         lg = QGridLayout()
@@ -109,7 +106,6 @@ class SystemPage(Page):
     def showEvent(self, e):
         super().showEvent(e)
         self.refresh()
-        self.storage.refresh()
         self.timer.start(3000)
 
     def hideEvent(self, e):

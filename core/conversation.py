@@ -192,6 +192,12 @@ class ConversationController:
             return
         from modules.voice.output_policy import output_policy
         speak = output_policy.should_speak(text, source)
+        try:
+            # Part of the conversation: "what did you find?" right after a scan
+            # finished must see what SAINT announced.
+            self._ai.context.add_assistant_turn(text)
+        except Exception:
+            pass
 
         def run():
             deadline = time.monotonic() + (30 if wait else 0)

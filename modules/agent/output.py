@@ -164,16 +164,20 @@ _ACTION_CLAIM = re.compile(
     r"(closed|opened|moved|played|paused|skipped|clicked|launched|started|stopped|turned|set|searched|typed|"
     r"minimi[sz]ed|maximi[sz]ed|deleted|sent|scrolled|switched|muted|resumed|queued|created|scheduled|"
     r"navigated|pressed|increased|decreased|raised|lowered|adjusted|hid|unmuted|enabled|disabled|"
-    r"removed|added|restored|shuffled)\b", re.I)
+    r"removed|added|restored|shuffled|renamed|copied|extracted|unzipped|downloaded|installed|uninstalled|"
+    r"emptied|freed|recycled|trashed)\b|"
+    r"^\W*(?:(?:ok(?:ay)?|sure|done|alright)[,.!]?\s*)?(?:i(?:'ve| have| just)?\s+)?made\s+(?:you\s+)?(?:a|an|the|your)\s+"
+    r"(?:new\s+)?(?:folder|file|playlist|shortcut|automation|copy|backup|reminder)\b", re.I)
 
 
-# "Playing your 'yuh' playlist", "Disk Cleanup is open.", "Spotify volume increased."
+# "Playing your 'moe' playlist", "Disk Cleanup is open.", "Spotify volume increased."
 _ACTION_CLAIM_MORE = re.compile(
     r"^\W*(?:(?:ok(?:ay)?|sure|done|alright|got it)[,.!]?\s*)?(?:i'?m\s+)?(?:now\s+)?"
     r"(?:playing|opening|closing|launching|starting|switching|skipping|pausing|muting|unmuting|turning|setting|"
     r"moving|clicking|typing|searching|minimi[sz]ing|maximi[sz]ing|stopping)\b|"
     r"^[\w'’ .-]{1,40}?\s+(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:open(?:ed)?|closed|playing|paused|"
-    r"muted|unmuted|on|off|launched|started|switched|minimi[sz]ed|maximi[sz]ed|skipped|banned)\b|"
+    r"muted|unmuted|on|off|launched|started|switched|minimi[sz]ed|maximi[sz]ed|skipped|banned|deleted|removed|"
+    r"created|made|moved|renamed|saved|extracted|recycled|emptied|cleared|installed)\b|"
     r"^[\w'’ .-]{1,40}?\s+(?:volume\s+)?(?:increased|decreased|raised|lowered|switched|turned (?:up|down|on|off)|"
     r"muted|unmuted|opened|closed|launched)\b", re.I)
 

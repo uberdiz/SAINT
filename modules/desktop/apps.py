@@ -82,6 +82,14 @@ _START_MENU_DIRS = [
     os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs"),
 ]
 
+# Apps pinned to the taskbar or with a desktop shortcut but no Start-menu entry
+# (Bloxstrap installs only a taskbar pin). Scanned one level deep.
+_EXTRA_SHORTCUT_DIRS = [
+    os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"),
+    os.path.join(os.path.expanduser("~"), "Desktop"),
+    os.path.join(os.environ.get("PUBLIC", r"C:\Users\Public"), "Desktop"),
+]
+
 _IGNORED_SHORTCUTS = re.compile(r"\b(uninstall|readme|help|documentation|release notes|website|license)\b", re.I)
 
 
@@ -130,6 +138,20 @@ class AppCatalog:
                     key = _norm(name)
                     entries.setdefault(key, AppEntry(name, "path", os.path.join(root, f), "start_menu",
                                                      process_hint=key.split(" ")[0]))
+        for base in _EXTRA_SHORTCUT_DIRS:
+            try:
+                files = os.listdir(base) if base and os.path.isdir(base) else []
+            except OSError:
+                files = []
+            for f in files:
+                if not f.lower().endswith((".lnk", ".url")):
+                    continue
+                name = os.path.splitext(f)[0]
+                if _IGNORED_SHORTCUTS.search(name):
+                    continue
+                key = _norm(name)
+                entries.setdefault(key, AppEntry(name, "path", os.path.join(base, f), "shortcut",
+                                                 process_hint=key.split(" ")[0]))
 
     def _scan_start_apps(self, entries: Dict[str, AppEntry]):
         if os.name != "nt":
@@ -197,6 +219,11 @@ class AppCatalog:
             if hits:
                 return entries[min(hits, key=len)]
         close = difflib.get_close_matches(query, list(entries), n=1, cutoff=0.82)
+        if not close and " " in query:
+            # "block strap" -> Bloxstrap: speech-to-text split one word in two.
+            squashed = {k.replace(" ", ""): k for k in entries}
+            hit = difflib.get_close_matches(query.replace(" ", ""), list(squashed), n=1, cutoff=0.82)
+            close = [squashed[hit[0]]] if hit else []
         if close:
             return entries[close[0]]
 

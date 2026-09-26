@@ -4,6 +4,7 @@ import base64
 import hashlib
 import http.server
 import json
+import logging
 import secrets
 import threading
 import time
@@ -19,6 +20,13 @@ from core.config import config
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 DEFAULT_REDIRECT_URI = "http://127.0.0.1:8888/callback"
+
+log = logging.getLogger("saint.spotify")
+
+# Refresh errors that mean the saved login is really gone (revoked, or the
+# refresh token was already used). Anything else — no network yet at boot,
+# a Spotify outage, rate limiting — keeps the login and tries again later.
+_DEAD_LOGIN = {"invalid_grant", "invalid_token", "unauthorized_client"}
 
 
 @dataclass
@@ -66,7 +74,7 @@ class SpotifyAuth:
             import keyring
             keyring.set_password("SAINT", "spotify", json.dumps(self._token.__dict__))
         except Exception:
-            pass
+            log.warning("spotify.token.save_failed", exc_info=True)
 
     def clear(self):
         self._token = None
@@ -82,30 +90,42 @@ class SpotifyAuth:
                 self._load_saved()
             if self._token and not self._token.expired:
                 return self._token.access_token
-            if self._token and self._token.refresh_token:
+            if self._token and self._token.refresh_token and self.is_configured():
                 self._refresh()
                 return self._token.access_token
             return None
 
     def _refresh(self):
-        response = requests.post(
-            TOKEN_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": self._token.refresh_token,
-                "client_id": self.client_id,
-            },
-            timeout=15,
-        )
+        try:
+            response = requests.post(
+                TOKEN_URL,
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": self._token.refresh_token,
+                    "client_id": self.client_id,
+                },
+                timeout=15,
+            )
+        except requests.RequestException as e:
+            log.warning("spotify.refresh.network %s", e)
+            raise RuntimeError("Couldn't reach Spotify to renew the login.") from e
         if response.status_code >= 400:
-            self.clear()
+            try:
+                err = (response.json() or {}).get("error", "")
+            except ValueError:
+                err = ""
+            log.warning("spotify.refresh.failed status=%s error=%s", response.status_code, err or "?")
+            # Only a definite "this login is dead" answer forgets it; a 5xx or
+            # 429 must not make the user reconnect.
+            if response.status_code in (400, 401) and err in _DEAD_LOGIN:
+                self.clear()
             raise RuntimeError(f"Spotify token refresh failed ({response.status_code})")
         try:
             data = response.json()
         except ValueError as e:
             # Never let an empty/non-JSON refresh body surface as a raw
             # "Expecting value" JSONDecodeError to the tool/AI layer.
-            self.clear()
+            log.warning("spotify.refresh.bad_body")
             raise RuntimeError("Spotify token refresh returned an invalid response.") from e
         self._token = SpotifyToken(
             access_token=data["access_token"],
