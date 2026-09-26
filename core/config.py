@@ -287,6 +287,32 @@ DEFAULT_CONFIG = {
     },
 
     # ------------------------------------------------------------------
+    # Learning (modules/learning): SAINT working out what it can't do yet,
+    # learning from "no, I meant ..." and from watching the user do it once.
+    # Learned requests live in data/skills.json ("what have you learned",
+    # "forget that").
+    # ------------------------------------------------------------------
+    "learning": {
+        "planner": True,                  # ask the local model to plan unknown/failed requests
+        "planner_timeout_sec": 25,
+        "watch_and_learn": True,          # may watch the user show it how (announced, time-limited)
+        "watch_after_failure": True,      # start watching by itself after "I don't know how yet"
+        "watch_max_sec": 120,
+        "watch_idle_sec": 15,             # stop 15 s after the last thing the user did
+    },
+
+    # ------------------------------------------------------------------
+    # Sound: Voicemeeter and the bare "mute" command
+    # ------------------------------------------------------------------
+    "audio": {
+        "bare_mute": "mic",               # "mute" / "unmute" alone: "mic" or "system"
+        "voicemeeter": {
+            "enabled": "auto",            # auto (when running) / on / off
+            "mic_strip": -1,              # -1 = the input strip with a microphone on it
+        },
+    },
+
+    # ------------------------------------------------------------------
     # Developer mode (modules/dev)
     # ------------------------------------------------------------------
     "dev": {

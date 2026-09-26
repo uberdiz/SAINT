@@ -118,7 +118,9 @@ class SpotifyTools:
                  {"query": "string", "kind": "string"}, L, self.play_query,
                  parameters={"query": P("string", "what to play, e.g. 'Blinding Lights by The Weeknd', 'jazz'"),
                              "kind": P("string", "what the query refers to", required=False, default="auto",
-                                       enum=kinds)},
+                                       enum=kinds),
+                             "own_only": P("boolean", "only the user's own playlists ('my X playlist')",
+                                           required=False, default=False)},
                  llm_exposed=True),
             Tool("spotify.play", "Resume playback, or play a Spotify URI", {"uri": "string (optional)"}, L, self.play,
                  parameters={"uri": P("string", "spotify: URI", required=False)}, llm_exposed=True),
@@ -153,8 +155,7 @@ class SpotifyTools:
                                          enum=["voice", "ui"])}, llm_exposed=True),
             Tool("spotify.ban_artist", "Stop recommending an artist ('no more of this artist')",
                  {"name": "string (optional)"}, L, self.ban_artist,
-                 parameters={"name": P("string", "artist; blank = the one playing", required=False, default="")},
-                 llm_exposed=True),
+                 parameters={"name": P("string", "artist; blank = the one playing", required=False, default="")}),
             Tool("spotify.unban_artist", "Allow a banned artist in recommendations again",
                  {"name": "string"}, L, self.unban_artist, parameters={"name": P("string")}),
             Tool("spotify.previous", "Go back to the previous track", {}, L, self.previous,
@@ -201,7 +202,11 @@ class SpotifyTools:
             Tool("spotify.feedback", "Record that the user likes or dislikes the current track",
                  {"signal": "float"}, L, self.feedback,
                  parameters={"signal": P("number", "1 = like, -1 = dislike", minimum=-1, maximum=1),
-                             "reason": P("string", required=False, default="")}, llm_exposed=True),
+                             "reason": P("string", required=False, default="")}),
+            # Bans and feedback change what SAINT plays for good: only from the
+            # user's own words (the router), never guessed by the model.
+            Tool("spotify.ban_playlist", "Never play the playlist that's playing again", {}, L, self.ban_playlist,
+                 parameters={}),
             Tool("spotify.playlist_alias", "Remember a nickname for a playlist",
                  {"alias": "string", "playlist": "string"}, L, self.playlist_alias,
                  parameters={"alias": P("string"), "playlist": P("string", "playlist name")}),
@@ -443,15 +448,71 @@ class SpotifyTools:
             if chosen:
                 return {"kind": "playlist", "uri": chosen["uri"], "name": chosen["name"], "id": chosen["id"],
                         "context": True, "owned": owned(chosen)}
+            remembered = self._playlist_from_memory(q_clean, mine)
+            if remembered:
+                return remembered
         if not allow_public or not q_clean:
             return None
-        pls = _items(self.client.search(q_clean, "playlist", limit=5), "playlist")
+        banned = self.memory.banned_playlists()
+        pls = [p for p in _items(self.client.search(q_clean, "playlist", limit=8), "playlist")
+               if p.get("uri") not in banned]
         if not pls:
             return None
         best = max(pls, key=lambda p: _sim(q_clean, p.get("name", "")))
         return {"kind": "playlist", "uri": best["uri"], "name": best["name"], "id": best.get("id"),
                 "context": True, "owned": False,
                 "artist": (best.get("owner") or {}).get("display_name", "")}
+
+    def _playlist_from_memory(self, q: str, mine: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """'play my kpop playlist' when SAINT was told "yuh playlist is my KPOP
+        playlist": find the other name in memory, match it to one of the
+        user's playlists and remember the nickname for next time."""
+        try:
+            from modules.memory.service import memory_service
+            facts = [r.entry.content for r in memory_service.recall(f"{q} playlist", limit=5, min_score=0.3,
+                                                                     strict=False)]
+        except Exception:
+            return None
+        qn = _pnorm(q)
+        for fact in facts:
+            if qn not in _pnorm(fact):
+                continue
+            names = re.findall(r"[\"“']([^\"”']{1,60})[\"”']", fact)
+            names += [m.group(1) for m in re.finditer(r"(?:^|\bmy\s+|\bthe\s+|\bis\s+)([\w'&.\- ]{1,40}?)\s+playlist\b",
+                                                      fact, re.I)]
+            for name in names:
+                n = _pnorm(re.sub(r"^(?:my|the)\s+", "", name.strip(), flags=re.I))
+                if not n or n == qn:
+                    continue
+                hit = next((p for p in mine if _pnorm(p.get("name", "")) == n), None) or next(
+                    (p for p in mine if difflib.SequenceMatcher(None, n, _pnorm(p.get("name", ""))).ratio() >= 0.85),
+                    None)
+                if hit:
+                    self.memory.set_playlist_alias(q, hit["id"], hit["name"], confidence=0.9)
+                    logger.info("spotify.playlist_from_memory %r -> %r (fact %r)", q, hit["name"], fact[:60])
+                    return {"kind": "playlist", "uri": hit["uri"], "name": hit["name"], "id": hit["id"],
+                            "context": True, "owned": True}
+        return None
+
+    def ban_playlist(self):
+        """'Never play that playlist again': the playlist playing now."""
+        st = self._state(force=True)
+        uri = st.get("context_uri") or ""
+        if not uri.startswith("spotify:playlist:"):
+            raise SpotifyAPIError("What's playing isn't from a playlist.", status=404, code="NO_MATCH")
+        name = ""
+        try:
+            name = (self.client.request("GET", f"/playlists/{uri.split(':')[-1]}", params={"fields": "name"})
+                    or {}).get("name", "")
+        except Exception:
+            pass
+        self.memory.ban_playlist(uri, name)
+        if st.get("is_playing"):
+            try:
+                self.pause()
+            except Exception:
+                pass
+        return {"banned": name or "that playlist", "uri": uri}
 
     def _resolve_genre(self, genre: str) -> Optional[Dict[str, Any]]:
         g = re.sub(r"\s+music$", "", genre.strip(), flags=re.I)
@@ -468,8 +529,9 @@ class SpotifyTools:
                     "first": f"{tracks[0]['name']} by {_artists(tracks[0])}"}
         return None
 
-    def resolve(self, query: str, kind: str = "auto") -> Optional[Dict[str, Any]]:
+    def resolve(self, query: str, kind: str = "auto", own_only: bool = False) -> Optional[Dict[str, Any]]:
         q = re.sub(r"\s+on spotify$", "", query.strip(), flags=re.I).strip(" .!?")
+        q = re.sub(r"(?<!\w)['\"“”]|['\"“”](?!\w)", "", q).strip()        # "'yuh'" -> "yuh"
         if kind == "track":
             return self._resolve_track(q)
         if kind == "artist":
@@ -477,7 +539,7 @@ class SpotifyTools:
         if kind == "album":
             return self._resolve_album(q)
         if kind == "playlist":
-            return self._resolve_playlist(q)
+            return self._resolve_playlist(q, allow_public=not own_only)
         if kind == "genre":
             return self._resolve_genre(q)
         # auto: "X by Y" is a track; otherwise compare the best artist,
@@ -530,8 +592,11 @@ class SpotifyTools:
         else:
             self._with_device(lambda d: self.client.play(uris=[ent["uri"]], device_id=d))
 
-    def play_query(self, query, kind="auto"):
-        ent = self.resolve(query, kind)
+    def play_query(self, query, kind="auto", own_only=False):
+        ent = self.resolve(query, kind, own_only=bool(own_only))
+        if ent is None and own_only:
+            # "My kpop playlist": never swap in a stranger's playlist without asking.
+            raise SpotifyAPIError(f"You don't have a playlist called {query}.", status=404, code="NOT_MINE")
         if ent is None:
             raise SpotifyAPIError(f"Nothing found for {query}", status=404, code="NO_MATCH")
         self._play_entity(ent)

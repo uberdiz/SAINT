@@ -203,6 +203,10 @@ class AppCatalog:
         exe = self._app_paths(query)
         if exe:
             return AppEntry(query.title(), "path", exe, "app_paths", process_hint=query.split(" ")[0])
+        # "Windows Disk Cleanup", "Microsoft Paint": the Start menu calls them without the maker.
+        m = re.match(r"^(?:windows|microsoft|ms)\s+(.+)$", query)
+        if m:
+            return self.resolve(m.group(1))
         return None
 
     @staticmethod

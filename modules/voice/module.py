@@ -716,7 +716,7 @@ class VoiceModule(BaseModule):
             return
         wake_initiated = phase == ListenPhase.COMMAND
         with self._phase_lock:
-            follow_up = wake_initiated and self._command_reason == "follow-up"
+            follow_up = wake_initiated and self.unaddressed_window(self._command_reason)
         if wake_initiated:
             with self._phase_lock:
                 self._awaiting_stt = True
@@ -1041,6 +1041,15 @@ class VoiceModule(BaseModule):
             return bool(getattr(module_manager.get("ai"), "expects_reply", False))
         except Exception:
             return False
+
+    @staticmethod
+    def unaddressed_window(reason: str) -> bool:
+        """Speech in a follow-up window ("follow-up", "follow-up (action)") or
+        while talking over SAINT ("interruption") wasn't addressed to SAINT by
+        name: it must pass the follow-up gate, or a video playing or a
+        conversation in the room becomes a request (logged 2026-09-25)."""
+        reason = reason or ""
+        return reason.startswith("follow-up") or reason == "interruption"
 
     @staticmethod
     def _is_command(text: str) -> bool:

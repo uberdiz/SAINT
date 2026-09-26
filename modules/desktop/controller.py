@@ -472,6 +472,21 @@ class DesktopController:
         self._note(info)
         return info
 
+    def minimize_all(self) -> dict:
+        """Minimize every window (SAINT's own included, like Windows' "show
+        the desktop") — works the same on every monitor."""
+        _require("allow_window_control", "Window control")
+        hidden = 0
+        for w in self.list_windows():
+            if w.minimized:
+                continue
+            try:
+                win32gui.ShowWindow(w.hwnd, win32con.SW_MINIMIZE)
+                hidden += 1
+            except Exception as e:
+                log.debug("desktop.minimize_all_failed %s %s", w.title[:40], e)
+        return {"minimized": hidden}
+
     def minimize_others(self, keep: str) -> dict:
         """Minimize every window except those of ``keep`` ("spotify",
         "claude and discord") and SAINT's own. Nothing is touched when none of
@@ -605,7 +620,61 @@ class DesktopController:
 
     def close(self, query: str) -> dict:
         _require("allow_window_control", "Window control")
-        return self._close(self.find_window(query))
+        return self._close(self.find_for_close(query))
+
+    def find_for_close(self, query: str) -> WindowInfo:
+        """The window to close, trying harder than a title match: misheard
+        names ("close to area" -> Terraria) and running Steam games, whose
+        windows often have no title or hide from the normal window list."""
+        try:
+            return self.find_window(query)
+        except AmbiguousWindow:
+            raise
+        except ToolError as e:
+            if e.code != "NOT_FOUND":
+                raise
+        from modules.desktop import window_match
+        wins = [w for w in self.list_windows() if not self._is_own(w)]
+        w = window_match.fuzzy_window(query, wins)
+        if w is not None:
+            log.info("desktop.close.fuzzy %r -> %r", query, w.title)
+            return w
+        game = window_match.game_window(query)
+        if game is not None:
+            g, hwnds, pids = game
+            if hwnds:
+                info = self._info(hwnds[0])
+                info.title = info.title or g.name
+                return info
+            raise ToolError(f"{g.name} is running but has no window I can close.", "NO_WINDOW")
+        from modules.vision.screen import app_label
+        names = []
+        for x in wins:
+            label = app_label({"title": x.title, "process": x.process})
+            if label and label not in names:
+                names.append(label)
+        opened = f" Open right now: {', '.join(names[:8])}." if names else ""
+        raise ToolError(f"I couldn't find {query} open.{opened}", "NOT_FOUND")
+
+    def force_quit(self, query: str) -> dict:
+        """End the process behind a window that won't close (games, hung apps)."""
+        _require("allow_window_control", "Window control")
+        w = self.find_for_close(query)
+        _, pid = win32process.GetWindowThreadProcessId(w.hwnd)
+        if pid == os.getpid():
+            raise ToolError("That's me — say “quit SAINT” instead.", "INVALID")
+        if not psutil:
+            raise ToolError("Force quitting needs psutil.", "UNSUPPORTED")
+        proc = psutil.Process(pid)
+        name = proc.name()
+        if name.lower() in ("explorer.exe", "dwm.exe", "csrss.exe", "winlogon.exe", "svchost.exe", "lsass.exe"):
+            raise ToolError(f"I won't force {name} to quit — Windows needs it.", "INVALID")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            proc.kill()
+        return {"closed": True, "title": w.title, "process": w.process, "forced": True}
 
     def close_hwnd(self, hwnd: int) -> dict:
         _require("allow_window_control", "Window control")

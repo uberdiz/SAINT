@@ -53,8 +53,19 @@ _TOOL_SYSTEM = (
 _capability_cache: Dict[str, bool] = {}
 
 
+# Questions and reactions ("What are you doing on my Spotify?", "you're chill,
+# bro") get words, not actions: the model once "answered" those by banning an
+# artist and recording a dislike. Requests phrased as questions still count.
+_QUESTION = re.compile(r"^\s*(?:(?:hey\s+)?saint[,\s]+)?(?:what|why|how|who|when|where|which|is|are|was|were|did|"
+                       r"does|do you|have you|no\b|nah\b|you'?re|that'?s|it'?s)\b", re.I)
+_REQUEST = re.compile(r"^\s*(?:(?:hey\s+)?saint[,\s]+)?(?:can|could|would|will) you\b|^\s*how about\b", re.I)
+
+
 def might_need_tool(text: str) -> bool:
-    return bool(_ACTION_HINT.search(text or ""))
+    t = text or ""
+    if _QUESTION.match(t) and not _REQUEST.match(t):
+        return False
+    return bool(_ACTION_HINT.search(t))
 
 
 def model_supports_tools(model: str, base_url: str) -> bool:

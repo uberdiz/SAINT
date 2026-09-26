@@ -60,9 +60,38 @@ def collapse_repeats(text: str, keep: int = 1, min_run: int = 4) -> str:
     return " ".join(out)
 
 
+_WAKE_MID = re.compile(r"(?:^|[\s,.!?])(?:hey|hi|okay|ok|yo)[,\s]+saint\b[,.!?]*\s*", re.I)
+
+
+def repeated_unit(text: str) -> Optional[str]:
+    """'turn off the mini player turn off the mini player' -> 'turn off the
+    mini player' (a request said twice); None if it isn't one phrase repeated."""
+    words = (text or "").split()
+    toks = [re.sub(r"[^\w']", "", w).lower() for w in words]
+    n = len(toks)
+    for k in range(min(n, 6), 1, -1):            # most copies first = the smallest unit
+        if n % k:
+            continue
+        size = n // k
+        if all(toks[i * size:(i + 1) * size] == toks[:size] for i in range(k)):
+            return " ".join(words[:size]).rstrip(",")
+    return None
+
+
 def clean_transcript(text: str) -> Optional[str]:
     """Return the transcript to use, or None if it is a repetition loop."""
+    # The user repeated themselves with the wake word in the middle ("Turn off
+    # the mini-player Hey SAINT, turn off the mini-player"): what follows the
+    # last wake word is the request.
+    parts = [m for m in _WAKE_MID.finditer(text or "") if m.start() > 0]
+    if parts and len(_tokens(text[parts[-1].end():])) >= 2:
+        # Keep the wake word itself: passive listening only acts on "Hey SAINT, ...".
+        text = text[parts[-1].start():].lstrip(" ,.!?")
+    unit = repeated_unit(text)
     toks = _tokens(text)
     if len(toks) > 8 and repetition_ratio(text) >= 0.6:
-        return None
+        # A whole sentence said twice is kept once; a word looping is noise.
+        return unit if unit and len(_tokens(unit)) >= 3 else None
+    if unit:
+        return unit
     return collapse_repeats(text) if len(toks) > 3 else text

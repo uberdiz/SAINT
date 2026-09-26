@@ -110,10 +110,10 @@ def register_desktop_tools(registry: ToolRegistry):
     def scroll(amount, x=None, y=None):
         return desktop.scroll(amount, x, y)
 
-    def click_element(name, action="click"):
+    def click_element(name, action="click", monitor=""):
         from modules.desktop.controller import _require
         _require("allow_mouse", "Mouse control")
-        return uia.click_element(name, action=action)
+        return uia.click_element(name, action=action, monitor=monitor or None)
 
     def list_ui_elements(limit=60):
         return uia.list_elements(limit=limit)
@@ -177,6 +177,11 @@ def register_desktop_tools(registry: ToolRegistry):
         Tool("desktop.close_app", "Close an application window (asks for confirmation)",
              {"name": "string"}, close_permission(), close_app,
              parameters={"name": win_param}, llm_exposed=True, category="desktop"),
+        Tool("desktop.force_quit", "End the program behind a window that won't close (always asks first)",
+             {"name": "string"}, PermissionLevel.HIGH, lambda name: desktop.force_quit(name),
+             parameters={"name": win_param}, llm_exposed=False, category="desktop"),
+        Tool("desktop.minimize_all", "Minimize every window (show the desktop)", {}, PermissionLevel.LOW,
+             lambda: desktop.minimize_all(), parameters={}, llm_exposed=True, category="desktop"),
         Tool("desktop.focus_window", "Switch to / bring an application window to the front",
              {"name": "string"}, PermissionLevel.LOW, focus_window,
              parameters={"name": win_param,
@@ -217,7 +222,9 @@ def register_desktop_tools(registry: ToolRegistry):
              {"name": "string"}, PermissionLevel.MEDIUM, click_element,
              parameters={"name": P("string", "label, position or 'first result'"),
                          "action": P("string", required=False, default="click",
-                                     enum=["click", "double_click", "right_click", "middle_click", "hover"])},
+                                     enum=["click", "double_click", "right_click", "middle_click", "hover"]),
+                         "monitor": P("string", "only on this screen: main/left/right/second/1/2",
+                                      required=False, default="")},
              llm_exposed=True, category="desktop"),
         Tool("desktop.list_ui_elements", "Describe the interactive elements of the active window",
              {}, PermissionLevel.LOW, list_ui_elements,

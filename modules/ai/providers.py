@@ -61,8 +61,8 @@ class AIProvider:
 MOCK_RESPONSES = {
     "python": "Python is a high-level, interpreted programming language known for its clean syntax and vast ecosystem.",
     "lua": "Lua is a lightweight, embeddable scripting language popular in game development and embedded systems.",
-    "chrome": "Opening Chrome.",
-    "firefox": "Stopping... Opening Firefox.",
+    "chrome": "Chrome it is.",
+    "firefox": "Right — Firefox it is.",
     "default": "I understand. Let me help you with that.",
 }
 
@@ -80,10 +80,10 @@ def _pick_mock_response(messages: List[Dict]) -> str:
     if "python" in last_user:
         return "Python is a high-level programming language celebrated for its readability and massive ecosystem of libraries."
     if "firefox" in last_user:
-        prefix = "Stopping... " if has_interruption else ""
-        return prefix + "Opening Firefox."
+        prefix = "Right — " if has_interruption else ""
+        return prefix + "Firefox it is."
     if "chrome" in last_user:
-        return "Opening Chrome."
+        return "Chrome it is."
     return MOCK_RESPONSES["default"]
 
 

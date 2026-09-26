@@ -66,14 +66,21 @@ def run_tool(tool: str, describe: str, on_ok: Callable[[object], str], **kwargs)
     return Reply(res.error or f"I couldn't {describe}.", ok=False)
 
 
-_FILLERS = re.compile(r"^(?:actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|also|wait|alright|right|yes|yeah|yep|"
-                      r"sure|just)[,.!\s]+",
+# "right" is only filler as "Right, ..." — "right click the desktop" is a command.
+_FILLERS = re.compile(r"^(?:oh my (?:gosh|god|goodness)|actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|also|wait|"
+                      r"alright|right(?=[,.!])|yes|yeah|yep|sure|just|wow|dude|bro)[,.!\s]+",
                       re.I)
 
 
 def _clean(text: str) -> str:
     t = text.strip()
     t = re.sub(r"^(?:hey\s+)?saint[,.!\s]+", "", t, flags=re.I)
+    # Spoken variants of the same thing.
+    t = re.sub(r"\b(?:double[- ]left|left[- ]double)[- ]click", "double click", t, flags=re.I)
+    t = re.sub(r"^left[- ]click\b", "click", t, flags=re.I)
+    t = re.sub(r"\brecycl(?:ing|ed)\s+bin\b", "recycle bin", t, flags=re.I)
+    t = re.sub(r"\bdisk,?\s+clean[\s-]?up\b", "disk cleanup", t, flags=re.I)
+    t = re.sub(r"\b(?:voice\s?meeter|voice\s?meter|voicemeter)\b", "voicemeeter", t, flags=re.I)
     for _ in range(3):   # "Actually, um, what time is it?"
         t2 = _FILLERS.sub("", t)
         if t2 == t:
@@ -402,6 +409,9 @@ def _dj_intent(lower: str) -> Optional[SpotifyIntent]:
     m = re.match(r"^(?:unban|unblock|allow)\s+(.+?)(?:\s+again)?$", lower)
     if m and m.group(1) not in ("it", "this", "that", "notifications"):
         return SpotifyIntent("unban", "spotify.unban_artist", {"name": m.group(1)})
+    if re.match(r"^(?:no[,. ]+)?(?:nope[,. ]+)?(?:never|don'?t|do not)\s+(?:ever\s+)?play\s+(?:that|this|the)\s+playlist"
+                r"(?:\s+(?:ever\s+)?again)?(?:\s+ever(?:\s+again)?)?$|^(?:ban|block)\s+(?:that|this|the)\s+playlist$", lower):
+        return SpotifyIntent("ban_playlist", "spotify.ban_playlist", {})
     m = _NO_MORE.match(lower)
     if m:
         who = m.group(1).strip()
@@ -555,9 +565,9 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     if vol:
         return SpotifyIntent("volume_set", "spotify.volume", {"percent": max(0, min(100, int(vol.group(1))))})
     musical = has(r"\b(music|song|spotify|track|tune)\b") or desktop_context.music_is_context()
-    if musical and has(r"\b(volume up|louder|turn (it|the music|spotify|the volume|the song) up|turn up (the )?(music|volume|song)|crank it)\b"):
+    if musical and has(r"\b(volume up|louder|turn (it|the music|spotify|the volume|the song) up|turn up (the |my )?(music|volume|song|spotify)|crank it)\b"):
         return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up"})
-    if musical and has(r"\b(volume down|quieter|softer|turn (it|the music|spotify|the volume|the song) down|turn down (the )?(music|volume|song)|lower the volume)\b"):
+    if musical and has(r"\b(volume down|quieter|softer|turn (it|the music|spotify|the volume|the song) down|turn down (the |my )?(music|volume|song|spotify)|lower the volume)\b"):
         return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down"})
 
     # --- shuffle / repeat -------------------------------------------------------
@@ -602,7 +612,10 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     pm = re.match(r"^(?:my |the )?(.+?) playlist$", q_orig, re.I) or re.match(r"^(?:the )?playlist (.+)$", q_orig, re.I) \
         or re.match(r"^my (?!music$|songs$)(.+)$", q_orig, re.I)
     if pm:
-        return SpotifyIntent("play_playlist", "spotify.play_query", {"query": pm.group(1).strip(), "kind": "playlist"})
+        args = {"query": pm.group(1).strip(), "kind": "playlist"}
+        if re.match(r"^my\s", q_orig, re.I):
+            args["own_only"] = True            # "my X playlist" is one of the user's own
+        return SpotifyIntent("play_playlist", "spotify.play_query", args)
     am = re.match(r"^(?:the )?album (.+)$", q_orig, re.I) or re.match(r"^(.+?) (?:the )?album$", q_orig, re.I)
     if am:
         return SpotifyIntent("play_album", "spotify.play_query", {"query": am.group(1).strip(), "kind": "album"})
@@ -689,6 +702,8 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
         return f"Switching it up: {r['name']} by {r['artist']}, then {r['count'] - 1} more."
     if k == "ban":
         return f"Got it — no more {r['banned']}."
+    if k == "ban_playlist":
+        return f"Okay, I won't play {r['banned']} again."
     if k == "unban":
         return f"{r['unbanned']} can come back in the mix." if r.get("was_banned") else \
             f"{r['unbanned']} wasn't blocked."
@@ -775,6 +790,17 @@ def parse_spotify(text: str) -> Optional[Intent]:
                     return Reply("Spotify is already paused.")
                 if cur.success and si.kind == "resume" and cur.result.get("is_playing"):
                     return Reply("It's already playing.")
+            if res.error_code == "NOT_MINE":
+                # Offer the public playlist instead of silently playing a stranger's.
+                public = dict(si.kwargs, own_only=False)
+
+                def play_public():
+                    r2 = call(si.tool, **public)
+                    return _spotify_reply(si, r2.result) if r2.success else (r2.error or "I couldn't find one.")
+                confirmations.ask(PendingAction(f"play a public {si.kwargs['query']} playlist", play_public,
+                                                tool=si.tool))
+                return Reply(f"{res.error} Want me to play a public one? If yours has another name, say "
+                             f"“no, I meant my … playlist” and I'll remember it.", ok=True, expects_reply=True)
             return Reply(res.error, ok=False)
         reply = Reply(_spotify_reply(si, res.result))
         if si.kind == "search":
@@ -867,6 +893,16 @@ def parse_desktop(text: str) -> Optional[Intent]:
 
         def run_open():
             reply = run_tool("desktop.open_app", f"open {name}", ok, name=name)
+            many = re.search(r"Did you mean (.+,.+)\?$", reply.text) if not reply.ok else None
+            if many:
+                # "Did you mean Disk Cleanup, Windows Backup, Windows Security?" — "the first one" opens it.
+                from modules.agent.confirm import ChoiceOption, PendingChoice, choices
+                names = [n.strip() for n in re.split(r",\s*|\s+or\s+", many.group(1)) if n.strip()]
+                choices.ask(PendingChoice(reply.text, [ChoiceOption(n, n, n) for n in names],
+                                          lambda other: run_tool("desktop.open_app", f"open {other}", ok,
+                                                                 name=other).text))
+                reply.expects_reply = True
+                return reply
             guess = re.search(r"Did you mean ([^,?]+)\?$", reply.text) if not reply.ok else None
             if guess:
                 # "Did you mean Opera Browser?" is a question: "yes" opens it.
@@ -881,17 +917,8 @@ def parse_desktop(text: str) -> Optional[Intent]:
     # close
     m = re.match(r"^(?:close|quit|exit|shut down|kill)\s+(?:the\s+|my\s+)?(.+?)(?:\s+(?:app|application|window))?$", t)
     if m and not re.search(r"\b(reminder|timer|alarm)\b", t):
-        name = m.group(1)
-        label = "this window" if name in ("this", "it", "that", "this window", "the window") else name
-
-        def run_close():
-            def ok(r):
-                if r.get("closed"):
-                    from modules.vision.screen import app_label
-                    return f"Closed {app_label(r) or label}."
-                return f"I asked {label} to close, but it's still open — {r.get('note', '')}".strip()
-            return run_tool("desktop.close_app", f"close {label}", ok, name=name)
-        return Intent("desktop.close_app", run_close, "desktop")
+        name = "saint" if m.group(1) in ("yourself", "you") else m.group(1)
+        return Intent("desktop.close_app", lambda: close_window(name), "desktop")
 
     # go to a website ("go to YouTube", "navigate to github.com")
     m = re.match(r"^(?:go to|navigate to|visit|browse to)\s+(?:the\s+)?(?:website\s+)?(.+?)(?:\s+(?:website|site|page))?"
@@ -929,6 +956,17 @@ def parse_desktop(text: str) -> Optional[Intent]:
                             lambda r: f"Moved {_app_label(r)} to monitor {r['monitor']}.",
                             window=window, monitor=which)
         return Intent("desktop.move_window", run_move, "desktop")
+
+    # minimize everything ("minimize all my windows", "minimize the screen",
+    # "minimize my browser and everything else")
+    if re.match(r"^(?:minimi[sz]e|hide)\s+(?:all|everything|every window|it all|all of (?:it|them)|"
+                r"(?:all\s+(?:of\s+)?)?(?:my|the)\s+(?:windows|apps|programs|stuff|screens?|desktop)|"
+                r"all\s+(?:the\s+)?(?:windows|apps|programs))(?:\s+(?:on|off)\s+(?:my|the)\s+(?:screens?|desktop))?$", t) \
+            or re.match(r"^minimi[sz]e\s+.+?\s+and\s+(?:everything|all)(?:\s+else)?$", t):
+        return Intent("desktop.minimize_all", lambda: run_tool(
+            "desktop.minimize_all", "minimize your windows",
+            lambda r: "Minimized everything." if r.get("minimized") else "Everything was already minimized."),
+            "desktop")
 
     # arrange
     m = re.match(r"^(maximi[sz]e|minimi[sz]e|restore|center|centre)\s+(?:the\s+)?(.+?)(?:\s+window)?$", t) or \
@@ -1017,9 +1055,41 @@ def parse_desktop(text: str) -> Optional[Intent]:
         name = m.group(1)
 
         def run_click():
-            return run_tool("desktop.click_element", f"click {name}", lambda r: f"Clicked {r['clicked']}.", name=name)
+            from modules.agent.desktop_intents import _click
+            return _click(name)
         return Intent("desktop.click_element", run_click, "desktop")
     return None
+
+
+def close_window(name: str) -> Reply:
+    """Close a window the user named. The real window is found *before*
+    asking, so the question names it ("Close THE FINALS?") and "yes" can't
+    fail on a misheard name; a game that ignores the close request is
+    offered a force quit."""
+    from modules.vision.screen import app_label
+    target, label = name, "this window" if name in ("this", "it", "that", "this window", "the window") else name
+    if label != "this window":
+        try:
+            from modules.desktop.controller import desktop
+            w = desktop.find_for_close(name)
+            label = "SAINT" if desktop._is_own(w) else app_label({"title": w.title, "process": w.process}) or name
+            target = f"hwnd:{w.hwnd}"
+        except Exception as e:
+            if getattr(e, "code", "") in ("NOT_FOUND", "NO_WINDOW"):
+                return Reply(str(e), ok=False)
+            # Ambiguous or unexpected: let the tool ask / report it.
+
+    def ok(r):
+        if r.get("closed"):
+            return f"Closed {label if label != 'this window' else app_label(r) or 'it'}."
+        confirmations.ask(PendingAction(f"force {label} to quit", lambda: run_tool(
+            "desktop.force_quit", f"force {label} to quit", lambda r2: f"Forced {label} to quit.",
+            _confirmed=True, name=target).text, tool="desktop.force_quit"))
+        return f"I asked {label} to close, but it's still open. Want me to force it to quit?"
+    reply = run_tool("desktop.close_app", f"close {label}", ok, name=target)
+    if confirmations.pending is not None and confirmations.pending.tool == "desktop.force_quit":
+        reply.expects_reply = True
+    return reply
 
 
 def _app_label(r) -> str:

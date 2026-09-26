@@ -22,7 +22,8 @@ the tool after an explicit yes.
 from core.config import config
 
 
-ALWAYS_CONFIRM = frozenset({"files.recycle", "files.move", "steam.uninstall", "system.power"})
+ALWAYS_CONFIRM = frozenset({"files.recycle", "files.move", "steam.uninstall", "system.power",
+                            "desktop.force_quit"})
 
 
 class PermissionManager:

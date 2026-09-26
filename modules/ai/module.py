@@ -9,6 +9,7 @@ AI module: every user turn goes through here.
   - Short-term conversation context tracked via ConversationContext
 """
 
+import logging
 import re
 import threading
 import time
@@ -190,6 +191,23 @@ class AIModule(BaseModule):
     # ------------------------------------------------------------------ #
     # Memory context
     # ------------------------------------------------------------------ #
+    def _offer_to_learn(self, prompt: str, info: Dict, on_token) -> str:
+        """The model's tools didn't do an instruction either: say so and watch
+        the user do it once (modules/learning/demonstration.py)."""
+        try:
+            from modules.learning import demonstration, planner
+            if self._cancel_flag.is_set() or info.get("expects_reply") or \
+                    any(c.get("success") for c in info.get("tool_calls", [])) or not planner.worth_planning(prompt):
+                return ""
+            if not config.get("learning.watch_after_failure", True) or not demonstration.watch_for(prompt):
+                return ""
+        except Exception:
+            logging.getLogger("saint.ai").exception("ai.offer_to_learn_failed")
+            return ""
+        extra = " I don't know how to do that yet — if you do it now, I'll watch and learn it."
+        on_token(extra)
+        return extra
+
     def _memory_messages(self, prompt: str) -> List[Dict[str, str]]:
         if not (config.get("memory.enabled", True) and config.get("memory.inject_context", True)
                 and config.get("modules.memory", True)):
@@ -365,6 +383,7 @@ class AIModule(BaseModule):
                 full_text, info = run_with_tools(messages, model, base_url, temperature, timeout,
                                                  _safe_on_token, self._cancel_flag)
                 self.expects_reply = bool(info.get("expects_reply"))
+                full_text += self._offer_to_learn(prompt, info, _safe_on_token)
             else:
                 # Plain chat: stream prose, but hold back anything that looks
                 # like a tool call / JSON / code so it never reaches chat or TTS.

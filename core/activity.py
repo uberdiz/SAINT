@@ -4,7 +4,8 @@ core/activity.py
 What SAINT is doing right now — answers "SAINT, what are you doing?".
 
 The foreground job (a multi-step plan or a scene) reports its steps here;
-background tasks (scans, extraction) and watchers register themselves too.
+background tasks (scans, extraction) and watchers register themselves too,
+with how far along they are ("I'm checking E: for junk — about 40% done").
 Nothing here affects behaviour; it only describes it.
 """
 
@@ -23,6 +24,7 @@ class Activity:
         self._index = -1
         self._started = 0.0
         self._background: Dict[str, str] = {}   # id -> description
+        self._progress: Dict[str, float] = {}   # id -> 0..1
         self._stack: List[tuple] = []
 
     # -- foreground ------------------------------------------------------ #
@@ -58,13 +60,21 @@ class Activity:
     def remove_background(self, key: str):
         with self._lock:
             self._background.pop(key, None)
+            self._progress.pop(key, None)
         self._emit()
+
+    def set_progress(self, key: str, fraction: float):
+        """How far a background task is (0-1). Not emitted: tasks report often."""
+        with self._lock:
+            if key in self._background:
+                self._progress[key] = max(0.0, min(1.0, float(fraction or 0.0)))
 
     # -- description ----------------------------------------------------- #
     def snapshot(self) -> dict:
         with self._lock:
             return {"label": self._label, "steps": list(self._steps), "index": self._index,
-                    "started": self._started, "background": dict(self._background)}
+                    "started": self._started, "background": dict(self._background),
+                    "progress": dict(self._progress)}
 
     def describe(self) -> str:
         s = self.snapshot()
@@ -80,7 +90,10 @@ class Activity:
                 parts.append(text + ".")
             else:
                 parts.append(f"I'm working on {s['label']}.")
-        bg = list(s["background"].values())
+        bg = []
+        for key, desc in s["background"].items():
+            frac = s["progress"].get(key)
+            bg.append(f"{desc} — about {round(frac * 100)}% done" if frac and 0.01 <= frac < 1 else desc)
         if bg:
             parts.append(("In the background: " if parts else "I'm ") + _join(bg) + ".")
         return " ".join(parts) or "Nothing right now — I'm just listening."

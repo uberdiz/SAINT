@@ -16,6 +16,7 @@ Restart / shutdown / sleep always ask first; restart and shutdown also wait
 import re
 from typing import Optional
 
+from core.config import config
 from modules.agent.router import Intent, Reply, _clean, call, run_tool
 
 _PC = r"(?:(?:my|the|this)\s+)?(?:pc|computer|laptop|machine|system)"
@@ -69,6 +70,11 @@ def parse_winctl(text: str) -> Optional[Intent]:
                     if r.get("delay") else "Signing out.", action=action)
 
     # ---- microphone ---------------------------------------------------------------------------
+    t = re.sub(r"\s+(?:on|in|with|through)\s+(?:the\s+)?voicemeeter$", "", t)
+    t = re.sub(r"^(mute|unmute)\s+(?:the\s+)?voicemeeter\s+(mic|microphone)$", r"\1 my \2", t)
+    # Bare "mute" / "unmute" means the mic (audio.bare_mute = "mic"), as with a mic-control app.
+    if re.fullmatch(r"(?:un)?mute(?: me| myself)?", t) and config.get("audio.bare_mute", "mic") == "mic":
+        t = ("unmute" if t.startswith("un") else "mute") + " my mic"
     m = re.match(r"^(mute|unmute)\s+(?:my\s+|the\s+)?(?:mic|microphone)$|"
                  r"^turn\s+(on|off)\s+(?:my\s+|the\s+)?(?:mic|microphone)$|"
                  r"^turn\s+(?:my\s+|the\s+)?(?:mic|microphone)\s+(on|off)$", t)
@@ -112,7 +118,7 @@ def parse_winctl(text: str) -> Optional[Intent]:
                     lambda r: f"{app.capitalize()} at {r['percent']}%.", app=app, step=step)
 
     # ---- output device ------------------------------------------------------------------------------
-    m = re.match(r"^(?:switch|change|move|send|set)\s+(?:the\s+)?(?:audio|sound|output|playback)(?:\s+output)?\s+"
+    m = re.match(r"^(?:switch|change|move|send|set)\s+(?:the\s+|my\s+)?(?:audio|sound|output|playback)(?:\s+output)?\s+"
                  r"(?:to|over to|through)\s+(?P<dev>.+)$|"
                  r"^(?:use|switch to|play (?:sound|audio) (?:through|on|from|out of))\s+(?:my\s+|the\s+)?"
                  r"(?P<dev2>headphones?|headset|speakers?|monitor|tv|earbuds|buds|[\w .'-]+?\s+(?:headphones|headset|"
@@ -146,4 +152,12 @@ def parse_winctl(text: str) -> Optional[Intent]:
                 r"(?:\s+of\s+(?:my|the|both|all)\s+screens?)?$|^screenshot(?:\s+(?:this|that|my screen|the screen))?$", t):
         return _run("system.screenshot", "take a screenshot",
                     lambda r: "Saved a screenshot to Pictures, Screenshots.")
+    m = re.match(r"^(?:take|grab|capture|save)\s+(?:a\s+)?(?:screenshot|screen ?shot|screen capture|picture)\s+of\s+"
+                 r"(?:the\s+|my\s+)?(?P<what>.+?)(?:\s+window)?$|^screenshot\s+(?:the\s+|my\s+)?(?P<what2>.+?)$", t)
+    if m:
+        what = (m.group("what") or m.group("what2")).strip()
+        if what in ("this", "this window", "that", "it", "the window"):
+            what = "this"
+        return _run("system.screenshot", f"take a screenshot of {what}",
+                    lambda r: f"Saved a screenshot of {r.get('what') or what} to Pictures, Screenshots.", target=what)
     return None

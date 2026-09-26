@@ -111,6 +111,8 @@ class ActionNotice(QWidget):
         lay.addLayout(col, 1)
         self._state = "running"        # running | ok | error | ask
         self._tool = ""
+        self._task = ""                # background task shown with a progress ring
+        self._fraction: float = -1.0   # 0..1 while a task shows progress, else -1
         self._label = ""
         self._count = 0
         self._spin = 0.0
@@ -133,6 +135,20 @@ class ActionNotice(QWidget):
         elif t in (EventType.TOOL_COMPLETED, EventType.TOOL_FAILED):
             if self.isVisible() and p.get("tool") == self._tool and self._state == "running":
                 self.finished(t == EventType.TOOL_COMPLETED, p.get("error", ""))
+        elif t == EventType.TASK_PROGRESS:
+            # A tool's own pill wins while it runs; the task's progress comes back after.
+            busy = self.isVisible() and self._state == "running" and self._tool and not self._task
+            if enabled() and not busy:
+                self.task_progress(p.get("id", ""), p.get("description", ""), float(p.get("progress") or 0.0),
+                                   p.get("text", ""))
+        elif t == EventType.TASK_DONE and p.get("id") and p.get("id") == self._task:
+            summary = p.get("summary", "")
+            self._task, self._fraction = "", -1.0
+            self.finished(p.get("status") in ("completed", "done"), "" if p.get("status") in ("completed", "done")
+                          else summary)
+            if summary and p.get("status") in ("completed", "done"):
+                self.sub.setText(_short(summary))
+                self._fit()
         elif t == EventType.UI_CHAT_RENDER and p.get("role") == "assistant" and self.isVisible() \
                 and self._state in ("ok", "error", "ask") and time.monotonic() - self._done_at < 6:
             reply = (p.get("text") or "").strip()
@@ -141,7 +157,27 @@ class ActionNotice(QWidget):
                 self._fit()
                 self._hide_timer.start(2800)
 
+    def task_progress(self, task_id: str, description: str, fraction: float, text: str = ""):
+        """A background job (scan, extraction, SAINT watching you): a ring that fills up."""
+        first = self._task != task_id or not self.isVisible() or self._closing
+        self._task, self._tool = task_id, ""
+        self._fraction = max(0.0, min(1.0, fraction))
+        self._state = "running"
+        self._label = (description[:1].upper() + description[1:]) if description else "Working"
+        self.title.setText(self._label + "…")
+        pct = f"{round(self._fraction * 100)}%" if self._fraction > 0 else ""
+        self.sub.setText(" · ".join(x for x in (pct, text) if x) or "Working on it")
+        if first:
+            self._icon("clock")
+            self._spinner.stop()
+        self._hide_timer.stop()
+        self._hide_timer.start(15000)          # a task that stops reporting doesn't pin the pill
+        self._fit()
+        self.update()
+        self.appear()
+
     def started(self, tool: str, args: dict = None):
+        self._task, self._fraction = "", -1.0
         self._tool = tool
         self._label = label_for(tool, args)
         self._count = self._count + 1 if self.isVisible() and not self._closing else 1
@@ -243,7 +279,12 @@ class ActionNotice(QWidget):
         pen.setCapStyle(Qt.RoundCap)
         g.setPen(pen)
         g.setBrush(Qt.NoBrush)
-        if self._state == "running":
+        if self._state == "running" and self._fraction >= 0:
+            g.setPen(QPen(with_alpha(color, 70), 2.2))
+            g.drawEllipse(ring.adjusted(1, 1, -1, -1))
+            g.setPen(pen)
+            g.drawArc(ring.adjusted(1, 1, -1, -1), 90 * 16, int(-360 * 16 * max(0.03, self._fraction)))
+        elif self._state == "running":
             g.drawArc(ring.adjusted(1, 1, -1, -1), int(-self._spin * 16), 100 * 16)
         else:
             g.drawEllipse(ring.adjusted(1, 1, -1, -1))

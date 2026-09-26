@@ -91,7 +91,14 @@ def app_name(process: str, title: str = "") -> str:
     for k, v in _APP_NAMES.items():
         if stem.startswith(k):
             return v
-    return (process or "").replace(".exe", "") or (title.split(" - ")[-1] if title else "an app")
+    # Unknown apps and games: the window title says it better than the
+    # executable ("THE FINALS", not "Discovery"; "Disk Cleanup", not "cleanmgr").
+    parts = [p.strip() for p in re.split(r"\s+[-–—]\s+", title or "") if p.strip()]
+    if parts:
+        cand = parts[-1] if len(parts) > 1 else re.split(r"\s*:\s+|\s+:\s*", parts[0])[0]
+        if 2 <= len(cand) <= 40 and not re.fullmatch(r"[\d\W_]+", cand):
+            return cand
+    return (process or "").replace(".exe", "") or "an app"
 
 
 _BROWSER_STEMS = ("opera", "chrome", "msedge", "firefox", "brave", "vivaldi", "arc", "zen")

@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-_FILL = r"(?:(?:hey|ok(?:ay)?|yo|um+|uh+|just|please|saint|now|right now|already|dude|man|oh)[\s,.!]*)*"
+_FILL = r"(?:(?:hey|ok(?:ay)?|yo|um+|uh+|just|please|saint|now|right now|already|dude|man|oh|thank you|thanks|bro)[\s,.!]*)*"
 
 _STOP_ALL = re.compile(
     rf"^{_FILL}(?:stop|cancel|abort|kill|halt)\s+(?:everything|it all|all of it|all tasks|all the tasks|"

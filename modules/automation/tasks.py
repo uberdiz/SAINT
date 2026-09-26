@@ -122,6 +122,7 @@ class BackgroundTaskManager:
                 if text:
                     task.current_action = text
                 task.updated_at = now
+            activity.set_progress(task.id, task.progress)
             if now - last_emit[0] >= 0.5 or task.progress >= 1.0:
                 last_emit[0] = now
                 event_bus.emit_event(EventType.TASK_PROGRESS, {

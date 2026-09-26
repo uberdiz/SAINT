@@ -211,9 +211,9 @@ def test_01_language_switch_interruption(mock_setup):
 # ===========================================================================
 #
 # User:   "Open Chrome."
-# SAINT:  "Opening Chrome."   ← starts speaking
+# SAINT:  "Chrome it is."   ← starts speaking
 # User:   "Actually Firefox." ← interrupts
-# SAINT:  "Stopping... Opening Firefox."
+# SAINT:  "Right — Firefox it is."
 #
 def test_02_action_interruption(mock_setup):
     """

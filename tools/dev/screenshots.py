@@ -66,6 +66,14 @@ def seed():
                 ok = rnd.random() > 0.06
                 f.write(json.dumps({"ts": ts, "source": src, "user": user, "reply": reply, "ms": rnd.randint(700, 2600),
                                     "tools": [{"tool": t, "ok": ok, "ms": ms} for t, ms in tools]}) + "\n")
+    (DATA / "skills.json").write_text(json.dumps([
+        {"phrase": "tidy my screen", "said": "Tidy my screen", "steps": ["show the desktop"], "how": "planned",
+         "id": "k1", "created": now - 86400 * 3, "uses": 6, "last_used": now - 3600, "fails": 0},
+        {"phrase": "play my study playlist", "said": "Play my study playlist",
+         "steps": ["play my lofi focus playlist"], "how": "corrected", "id": "k2", "created": now - 86400,
+         "uses": 2, "last_used": now - 7200, "fails": 0},
+        {"phrase": "open the cleaner", "said": "Open the cleaner", "steps": ["open Disk Cleanup"], "how": "shown",
+         "id": "k3", "created": now - 1800, "uses": 0, "last_used": 0, "fails": 0}]), encoding="utf-8")
     (DATA / "scenes.json").write_text(json.dumps([
         {"id": "a1", "name": "Focus mode", "phrase": "focus time", "steps": ["play lofi beats", "set volume to 35"],
          "schedule": "", "automation_id": "", "last_run": 0},
@@ -155,6 +163,16 @@ def main():
             settle(300)
         w.grab().save(str(OUT / f"{fname}.png"))
         print("saved", fname)
+        if page == "Automations":
+            auto = w.stack.currentWidget()
+            auto.seg.set_index(2)                  # the Learned tab
+            auto.stack.setCurrentIndex(2)
+            auto.learned.refresh()
+            settle(700)
+            w.grab().save(str(OUT / "automations-learned.png"))
+            auto.seg.set_index(0)
+            auto.stack.setCurrentIndex(0)
+            print("saved automations-learned")
 
     # A made-up desktop to show the overlay, the Halo and the mini player on.
     W, H = 1600, 900

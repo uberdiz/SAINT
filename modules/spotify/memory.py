@@ -206,6 +206,13 @@ class SpotifyMemory:
     def banned_artists(self) -> set:
         return {str(p["value"]).lower() for p in self.get_preferences("ban.artist.")}
 
+    # "Never play that playlist again"
+    def ban_playlist(self, uri: str, name: str = ""):
+        self.set_preference("ban.playlist." + uri.strip(), name.strip() or uri.strip(), "explicit")
+
+    def banned_playlists(self) -> set:
+        return {str(p["key"])[len("ban.playlist."):] for p in self.get_preferences("ban.playlist.")}
+
     def artist_genres_by_name(self, name: str) -> List[str]:
         rows = self._query("SELECT genres_json FROM artist_genres WHERE lower(name)=lower(?)", (name,))
         if not rows:

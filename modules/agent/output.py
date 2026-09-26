@@ -22,8 +22,12 @@ import re
 from typing import Callable, Dict, List, Optional, Tuple
 
 # Text that starts like one of these is held until we know what it is.
-_SUSPECT_START = re.compile(r"^\s*(?:\{|\[|```|<\|?(?:tool|function|python)|functions?\.|"
-                            r"\b(?:tool_call|function_call)\b|[a-z_]+__[a-z_]+\s*\()", re.I)
+_SUSPECT_START = re.compile(r"^\s*(?:\{|\[|```|`?[a-z_]+__[a-z_]+|<\|?(?:tool|function|python)|functions?\.|"
+                            r"\b(?:tool_call|function_call)\b|[a-z_]+__[a-z_]+\s*\(|here'?s how you (?:could|can) "
+                            r"ask)", re.I)
+# A tool call written like code: desktop__click_element(name="top left video", action="click")
+_CODE_CALL = re.compile(r"\b([a-z][a-z0-9_]*__[a-z0-9_]+)\s*\(([^()]*)\)", re.I)
+_KWARG = re.compile(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|-?\d+(?:\.\d+)?|true|false|none)", re.I)
 _TOOLISH_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:__|\.)[a-z0-9_]+$")
 _CODE_REQUEST = re.compile(r"\b(code|script|program|python|javascript|json|function|regex|snippet|"
                            r"class|html|css|sql|powershell|bash|command line)\b", re.I)
@@ -62,14 +66,30 @@ def _as_call(val) -> Optional[Tuple[str, Dict]]:
     return (name.strip(), args if isinstance(args, dict) else {})
 
 
+def _literal(v: str):
+    low = v.lower()
+    if low in ("true", "false"):
+        return low == "true"
+    if low == "none":
+        return None
+    if v[:1] in "\"'":
+        return v[1:-1]
+    return float(v) if "." in v else int(v)
+
+
 def extract_tool_calls(text: str) -> List[Tuple[str, Dict]]:
-    """Tool calls written as text (JSON objects/lists with name + parameters)."""
+    """Tool calls written as text: JSON objects/lists with name + parameters,
+    or code like ``spotify__play_query(query="jazz")``."""
     calls = []
-    for _s, _e, val in _json_objects(_strip_fences(text)):
+    plain = _strip_fences(text)
+    for _s, _e, val in _json_objects(plain):
         for item in (val if isinstance(val, list) else [val]):
             c = _as_call(item)
             if c:
                 calls.append(c)
+    if not calls:
+        for m in _CODE_CALL.finditer(plain.replace("`", " ")):
+            calls.append((m.group(1), {k: _literal(v) for k, v in _KWARG.findall(m.group(2))}))
     return calls
 
 
@@ -122,6 +142,12 @@ def clean_reply(text: str, user_text: str = "") -> str:
         t = re.sub(r"\{[^{}]{0,400}?\}", " ", t)
         t = re.sub(r"^\s*\[[^\[\]]{0,400}?\]\s*", " ", t)
     # Internal tool identifiers ("screen__context", "desktop.open_app", "composite:...").
+    if not wants_code:
+        t = re.sub(r"^\s*here'?s how you (?:could|can) ask (?:that|it|me)[:.]?\s*", " ", t, flags=re.I)
+        t = _CODE_CALL.sub(" ", t)
+        t = re.sub(r"`+\s*`*", " ", t)
+        if re.fullmatch(r"[\s,.;:]*(?:(?:followed by|then|and|or|after that)[\s,.;:]*)*", t, flags=re.I):
+            t = ""                               # nothing but the glue between removed calls
     t = re.sub(r"\bcomposite[:.][\w.+:]+", " ", t)
     t = re.sub(r"\b(?:spotify|desktop|screen|memory|automation|system|browser|window|vision|voice)(?:__|\.)[a-z_]+\b",
                " ", t)
@@ -141,9 +167,26 @@ _ACTION_CLAIM = re.compile(
     r"removed|added|restored|shuffled)\b", re.I)
 
 
+# "Playing your 'yuh' playlist", "Disk Cleanup is open.", "Spotify volume increased."
+_ACTION_CLAIM_MORE = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|sure|done|alright|got it)[,.!]?\s*)?(?:i'?m\s+)?(?:now\s+)?"
+    r"(?:playing|opening|closing|launching|starting|switching|skipping|pausing|muting|unmuting|turning|setting|"
+    r"moving|clicking|typing|searching|minimi[sz]ing|maximi[sz]ing|stopping)\b|"
+    r"^[\w'’ .-]{1,40}?\s+(?:is|are|was|were|has been|have been)\s+(?:now\s+)?(?:open(?:ed)?|closed|playing|paused|"
+    r"muted|unmuted|on|off|launched|started|switched|minimi[sz]ed|maximi[sz]ed|skipped|banned)\b|"
+    r"^[\w'’ .-]{1,40}?\s+(?:volume\s+)?(?:increased|decreased|raised|lowered|switched|turned (?:up|down|on|off)|"
+    r"muted|unmuted|opened|closed|launched)\b", re.I)
+
+
 def unverified_action_claim(text: str) -> bool:
     """A reply that says an action happened. Only allowed when a tool ran."""
-    return bool(_ACTION_CLAIM.match((text or "").strip()))
+    t = (text or "").strip()
+    if _ACTION_CLAIM.match(t):
+        return True
+    # "Nothing is playing" / "Spotify isn't open" describe a state, they don't claim an action.
+    if re.search(r"\b(?:not|nothing|no|never|isn'?t|aren'?t|wasn'?t|can'?t|couldn'?t|won'?t)\b", t, re.I):
+        return False
+    return bool(_ACTION_CLAIM_MORE.match(t))
 
 
 HONEST_NO_ACTION = "I haven't done anything yet — tell me what you'd like me to do."

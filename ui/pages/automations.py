@@ -341,17 +341,102 @@ class ScheduledView(QWidget):
             self.refresh()
 
 
+_HOW = {"planned": "Worked out", "corrected": "You corrected me", "shown": "You showed me"}
+
+
+class LearnedView(QWidget):
+    """Requests SAINT has learned (modules/learning): what it now does for each,
+    and how it learned it. Forget anything it got wrong."""
+
+    def __init__(self):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(16)
+        card = Card("Learned")
+        hint = QLabel("When SAINT can't do something, it works it out with commands it knows, learns from "
+                      "“no, I meant …”, or watches you do it once. Say “what have you learned” or "
+                      "“forget that”.")
+        hint.setObjectName("Faint")
+        hint.setWordWrap(True)
+        card.body.addWidget(hint)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["When you say", "SAINT does", "How", "Used", "Learned"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        card.body.addWidget(self.table)
+        btns = QHBoxLayout()
+        run = QPushButton("Try it")
+        run.clicked.connect(self._run)
+        forget = QPushButton("Forget")
+        forget.setObjectName("Danger")
+        forget.clicked.connect(self._forget)
+        btns.addWidget(run)
+        btns.addWidget(forget)
+        btns.addStretch()
+        self.status = QLabel("")
+        self.status.setObjectName("Faint")
+        btns.addWidget(self.status)
+        card.body.addLayout(btns)
+        lay.addWidget(card, 1)
+
+    def refresh(self):
+        from modules.learning.skills import skills
+
+        def show(items):
+            self.table.setRowCount(0)
+            for s in sorted(items, key=lambda s: s.created, reverse=True):
+                r = self.table.rowCount()
+                self.table.insertRow(r)
+                vals = [s.said or s.phrase, "  →  ".join(s.steps), _HOW.get(s.how, s.how),
+                        f"{s.uses}×" if s.uses else "—", datetime.fromtimestamp(s.created).strftime("%b %d")]
+                for c, v in enumerate(vals):
+                    it = QTableWidgetItem(str(v))
+                    it.setData(Qt.UserRole, s.id)
+                    self.table.setItem(r, c, it)
+            self.status.setText("" if items else "Nothing learned yet.")
+        run_async(skills.all, show)
+
+    def _selected(self):
+        rows = self.table.selectionModel().selectedRows()
+        return self.table.item(rows[0].row(), 0).data(Qt.UserRole) if rows else None
+
+    def _run(self):
+        from modules.learning.skills import skills
+        sid = self._selected()
+        s = next((x for x in skills.all() if x.id == sid), None) if sid else None
+        if s is None:
+            return
+        from modules.agent.agent import agent
+        self.status.setText(f"Running “{s.said or s.phrase}”…")
+        run_async(lambda: agent.run_command(s.said or s.phrase), lambda text: self.status.setText(text or ""))
+
+    def _forget(self):
+        from modules.learning.skills import skills
+        sid = self._selected()
+        if sid:
+            gone = skills.forget(sid)
+            self.status.setText(f"Forgot “{gone.said or gone.phrase}”." if gone else "")
+            self.refresh()
+
+
 class AutomationsPage(Page):
     def __init__(self):
         super().__init__("Automations", "Scenes run several commands from one phrase. Schedules run on time — "
-                                        "even with the window closed.")
-        self.seg = Segmented(["Scenes", "Scheduled"])
+                                        "even with the window closed. Learned is what SAINT has picked up from you.")
+        self.seg = Segmented(["Scenes", "Scheduled", "Learned"])
         self.actions.addWidget(self.seg)
         self.stack = QStackedWidget()
         self.scenes = ScenesView()
         self.scheduled = ScheduledView()
+        self.learned = LearnedView()
         self.stack.addWidget(self.scenes)
         self.stack.addWidget(self.scheduled)
+        self.stack.addWidget(self.learned)
         self.seg.changed.connect(self.stack.setCurrentIndex)
         self.root.addWidget(self.stack, 1)
         ui_bus.event.connect(self._on_event)
@@ -363,6 +448,9 @@ class AutomationsPage(Page):
         t, p = ev.type, ev.payload or {}
         if t in (EventType.AUTOMATION_CREATED, EventType.AUTOMATION_UPDATED, EventType.AUTOMATION_CANCELLED,
                  EventType.AUTOMATION_TRIGGERED) and self.isVisible():
+            if p.get("skill"):
+                self.learned.refresh()
+                return
             self.scheduled.refresh()
             if p.get("kind") == "scene":
                 self.scenes.show_results(p.get("title", ""), p.get("result", ""))
@@ -371,3 +459,4 @@ class AutomationsPage(Page):
         super().showEvent(e)
         self.scenes.refresh()
         self.scheduled.refresh()
+        self.learned.refresh()

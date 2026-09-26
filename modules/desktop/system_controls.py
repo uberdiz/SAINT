@@ -96,6 +96,10 @@ def _endpoint(kind: str):
 
 
 def mic_mute(state: str = "toggle"):
+    from modules.desktop.voicemeeter import voicemeeter
+    if voicemeeter.available():
+        # With Voicemeeter in between, the mic is its input strip, not the Windows device.
+        return voicemeeter.mute_mic(state)
     ep = _endpoint("mic")
     cur = bool(ep.GetMute())
     new = (not cur) if state == "toggle" else state in ("on", "mute", "true")
@@ -211,6 +215,10 @@ def match_output(spoken: str, names: List[str]) -> List[str]:
 
 
 def output_device(name: str):
+    from modules.desktop.voicemeeter import voicemeeter
+    if voicemeeter.available():
+        # Windows plays into Voicemeeter; the real devices are its A-buses.
+        return voicemeeter.route_to(name)
     AU = _pycaw()
     # data_flow 0 = playback devices, device_state 1 = active (plugged in and enabled)
     render = [d for d in AU.GetAllDevices(data_flow=0, device_state=1) if d.FriendlyName]
@@ -255,14 +263,33 @@ def do_not_disturb():
     return {"opened": "notification settings"}
 
 
-def screenshot():
+def screenshot(target: str = ""):
+    """All screens, one screen ("my left screen") or one window ("Claude")."""
     from PIL import ImageGrab
     from modules.files.paths import known_folder
+    from modules.desktop.controller import desktop
     folder = os.path.join(known_folder("pictures") or os.path.expanduser("~\\Pictures"), "Screenshots")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, time.strftime("SAINT %Y-%m-%d %H%M%S.png"))
-    ImageGrab.grab(all_screens=True).save(path)
-    return {"path": path}
+    target = (target or "").strip()
+    what, bbox = "all screens", None
+    m = re.match(r"^(?:my|the)?\s*(\w+)\s+(?:screen|monitor|display)$", target, re.I)
+    if m:
+        mon = desktop.resolve_monitor(m.group(1), 1)
+        bbox, what = (mon.left, mon.top, mon.right, mon.bottom), desktop.monitor_label(mon)
+    elif target and target.lower() not in ("all", "everything", "both screens", "all screens"):
+        w = desktop.find_window(target)
+        if w.minimized:
+            raise ToolError(f"{target} is minimized, so there's nothing to capture.", "NOT_VISIBLE")
+        desktop._activate(w)
+        time.sleep(0.3)
+        w = desktop._info(w.hwnd)
+        from modules.vision.screen import app_label
+        bbox, what = (w.left, w.top, w.left + w.width, w.top + w.height), app_label(
+            {"title": w.title, "process": w.process})
+    img = ImageGrab.grab(bbox=bbox, all_screens=True)
+    img.save(path)
+    return {"path": path, "what": what}
 
 
 def register_system_tools(registry):
@@ -300,8 +327,10 @@ def register_system_tools(registry):
                          "step": P("integer", required=False, default=0)}, llm_exposed=True, category="system"),
         Tool("system.do_not_disturb", "Open Windows' Do Not Disturb settings", {}, PermissionLevel.LOW,
              do_not_disturb, parameters={}, llm_exposed=True, category="system"),
-        Tool("system.screenshot", "Save a screenshot of all screens to Pictures\\Screenshots", {},
-             PermissionLevel.LOW, screenshot, parameters={}, llm_exposed=True, category="system"),
+        Tool("system.screenshot", "Save a screenshot (all screens, one screen, or one window) to "
+             "Pictures\\Screenshots", {}, PermissionLevel.LOW, screenshot,
+             parameters={"target": P("string", "a window ('Claude') or screen ('left screen'); empty = all",
+                                     required=False, default="")}, llm_exposed=True, category="system"),
     ]
     for t in tools:
         registry.register(t)

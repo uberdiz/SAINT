@@ -198,7 +198,7 @@ def parse(text: str, youtube_context: bool = False) -> Optional[Tuple[str, objec
 
     # -- playback (the video) ---------------------------------------------------------------
     if re.search(rf"^(?:go |put (?:it|this|the video) |make (?:it|this|the video) |enter )?full ?screen(?: mode)?$|"
-                 rf"^(?:full ?screen|maximi[sz]e) {_VID}$", t):
+                 rf"^(?:full ?screen|maximi[sz]e) {_VID}$|^full ?screen (?:it|this|that)$", t):
         return "fullscreen", None
     if re.search(r"^(?:exit|leave|get out of|close) full ?screen", t):
         return "exit_fullscreen", None

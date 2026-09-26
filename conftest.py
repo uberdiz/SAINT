@@ -29,6 +29,9 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
         "desktop": {"enabled": False},
         "widgets": {"any_media": False},          # never read this PC's real media sessions
         "automation": {"speak_reminders": False},
+        # Never call the real local model or watch the real mouse/keyboard.
+        "learning": {"planner": False, "watch_and_learn": False, "watch_after_failure": False},
+        "audio": {"voicemeeter": {"enabled": "off"}},
         "spotify": {"client_id": ""},
         "logging": {"level": "Errors Only"},
     }, f)

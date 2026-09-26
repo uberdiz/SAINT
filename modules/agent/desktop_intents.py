@@ -216,9 +216,21 @@ def _explain_screen(question: str) -> Reply:
 # ---------------------------------------------------------------------- #
 # Element actions
 # ---------------------------------------------------------------------- #
+_ON_SCREEN = re.compile(rf"\s+(?:on|in)\s+(?:my|the)\s+({_WHICH_MON})\s+{_SCREEN}$", re.I)
+
+
+def split_monitor(target: str):
+    """'recycle bin on my main screen' -> ('recycle bin', 'main')."""
+    m = _ON_SCREEN.search(target or "")
+    if not m:
+        return target, ""
+    return target[:m.start()].strip(), m.group(1).lower()
+
+
 def _click(target: str, action: str = "click", window_hwnd: Optional[int] = None) -> Reply:
     verb = {"click": "Clicked", "double_click": "Double-clicked", "right_click": "Right-clicked",
             "middle_click": "Middle-clicked", "hover": "Hovering over"}[action]
+    target, monitor = split_monitor(target)
 
     def ok(r):
         name = r.get("clicked") or target
@@ -226,13 +238,14 @@ def _click(target: str, action: str = "click", window_hwnd: Optional[int] = None
             return f"{verb} {name}, but nothing visibly changed yet."
         return f"{verb} {name}."
 
+    extra = {"monitor": monitor} if monitor else {}
     if window_hwnd:
         from modules.desktop import uia
         with uia.in_window(window_hwnd):
             return _tool("desktop.click_element", f"{action.replace('_', ' ')} {target}", ok,
-                         name=target, action=action)
+                         name=target, action=action, **extra)
     return _tool("desktop.click_element", f"{action.replace('_', ' ')} {target}", ok,
-                 retry=lambda: _click(target, action), name=target, action=action)
+                 retry=lambda: _click(target, action), name=target, action=action, **extra)
 
 
 def _act_on_last(action: str) -> Reply:
@@ -414,9 +427,11 @@ def parse(text: str) -> Optional[Intent]:
             "middle_click" if v.startswith("middle") else "hover"
         return Intent("desktop.click_element", lambda: _click(target, action), "desktop")
     m = re.match(r"^(?:click|tap|select|open|play|choose|pick)(?: on)? (?:the )?(first|second|third|fourth|fifth|"
-                 r"1st|2nd|3rd|4th|5th|top|last)\s+(video|result|link|search result|song|item|one|article|post)s?$", t)
+                 r"1st|2nd|3rd|4th|5th|top(?:[- ]left)?|upper[- ]left|last)\s+"
+                 r"(video|result|link|search result|song|item|one|article|post)s?$", t)
     if m:
-        target = f"{m.group(1)} {m.group(2)}"
+        which = "first" if re.match(r"top[- ]left|upper", m.group(1)) else m.group(1)
+        target = f"{which} {m.group(2)}"
         return Intent("desktop.click_result", lambda: _click(target), "desktop")
     m = re.match(r"^click(?: on)? (?:the )?((?:button|link|icon|thing|one)\s+)?(?:in|at|on) (?:the )?(.+)$", t)
     if m and re.search(r"\b(top|bottom|upper|lower|left|right|middle|center|corner)\b", m.group(2)):
@@ -466,7 +481,8 @@ def parse(text: str) -> Optional[Intent]:
         (r"^(?:zoom out|make (?:the )?text smaller)$", "ctrl+minus", "Zoomed out."),
         (r"^(?:reset zoom|actual size)$", "ctrl+0", "Zoom reset."),
         (r"^(?:exit|leave|get out of) full ?screen$", "esc", "Left full screen."),
-        (r"^(?:show (?:the )?desktop|minimi[sz]e everything|hide (?:all|every) windows?)$", "win+d", "Showing the desktop."),
+        (r"^(?:show (?:me )?(?:the |my )?desktop|(?:go|take me) (?:to|back to) (?:the |my )?desktop|"
+         r"minimi[sz]e everything|hide (?:all|every) windows?)$", "win+d", "Showing the desktop."),
         (r"^(?:switch|go back) to the (?:last|previous) (?:window|app)$", "alt+tab", "Switched."),
         (r"^(?:pause|play|resume) (?:the )?video$", "k", "Done."),
     ]
@@ -475,7 +491,7 @@ def parse(text: str) -> Optional[Intent]:
             return Intent("desktop.keys", lambda keys=keys, said=said: run_tool(
                 "desktop.press_keys", f"press {keys}", lambda r: said, keys=keys), "desktop")
     if re.match(r"^(?:put (?:it|this|that|the video) in |go |make (?:it|this|the video) |enter |switch to )?"
-                r"full ?screen(?: mode)?$", t):
+                r"full ?screen(?: mode)?$|^full ?screen (?:it|this|that)$", t):
         def run_fs():
             from modules.desktop.controller import desktop
             w = desktop.target_window()

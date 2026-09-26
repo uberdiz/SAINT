@@ -513,11 +513,111 @@ def _find_anywhere(name: str, activate: bool, wait: float = 2.5):
     return el, top, None
 
 
-def click_element(name: str, action: str = "click") -> Dict:
-    """Click (or double/right-click, hover) a named element and report whether
-    the UI changed afterwards (title / focus), so success is not assumed."""
+# Icons that live on the desktop: "double click the recycle bin" means the
+# desktop icon even when a window in front mentions "recycle bin" somewhere.
+_DESKTOP_ICONS = re.compile(r"^(?:the\s+)?(?:recycle bin|this pc|my computer|computer|network|control panel|"
+                            r"user'?s? files)$", re.I)
+_DESKTOP_ITSELF = re.compile(r"^(?:the\s+|my\s+)?(?:desktop|empty desktop|desktop background|wallpaper|"
+                             r"background)$", re.I)
+
+
+def _monitor(monitor):
+    from modules.desktop.controller import desktop
+    return desktop.resolve_monitor(monitor, 1)
+
+
+def _on_monitor(r, mon) -> bool:
+    if r is None or mon is None:
+        return True
+    cx, cy = r["left"] + r["width"] // 2, r["top"] + r["height"] // 2
+    return mon.left <= cx < mon.right and mon.top <= cy < mon.bottom
+
+
+def _desktop_icon(spec: str, mon):
+    """A desktop icon by name, only on ``mon`` when given."""
+    root = _scope_root("desktop")
+    if root is None:
+        return None, None
+    want = _target_words(spec)[0]
+    best, best_score = None, 0.0
+    for c in _walk(root, max_depth=4, limit=400):
+        r = _rect(c)
+        if r is None or not _on_monitor(r, mon):
+            continue
+        s = _score(c, want, {"ListItemControl"})
+        if s > best_score:
+            best, best_score = c, s
+    return (best if best_score >= 0.5 else None), root
+
+
+def click_desktop(action: str = "right_click", monitor=None) -> Dict:
+    """Click an empty spot on the desktop (on one monitor), e.g. to open the
+    desktop's right-click menu. Windows covering that spot are minimized."""
     import pyautogui
-    el, top, scope = _find_anywhere(name, activate=True)
+    from modules.desktop.controller import desktop
+    mon = _monitor(monitor) if monitor else next((m for m in desktop.monitors() if m.primary), None)
+    if mon is None:
+        raise ToolError("I can't find that screen.", "NOT_FOUND")
+    wl, wt, wr, wb = mon.work
+    spots = [(0.5, 0.5), (0.7, 0.6), (0.35, 0.7), (0.8, 0.3), (0.6, 0.85)]
+    auto = _auto()
+    for fx, fy in spots:
+        x, y = int(wl + fx * (wr - wl)), int(wt + fy * (wb - wt))
+        if _desktop_icon_covered(x, y):
+            for w in desktop.windows_on(mon.index):
+                if not desktop._is_own(w):
+                    try:
+                        import win32con
+                        import win32gui
+                        win32gui.ShowWindow(w.hwnd, win32con.SW_MINIMIZE)
+                    except Exception:
+                        pass
+            time.sleep(0.5)
+        try:
+            under = auto.ControlFromPoint(x, y)
+            if under is not None and under.ControlTypeName == "ListItemControl":
+                continue                       # an icon: find an empty spot
+        except Exception:
+            pass
+        if _desktop_icon_covered(x, y):
+            continue
+        {"right_click": pyautogui.rightClick, "double_click": pyautogui.doubleClick}.get(
+            action, pyautogui.click)(x, y)
+        return {"clicked": "the desktop", "x": x, "y": y, "changed": True, "window": "your desktop",
+                "scope": "desktop", "monitor": mon.index}
+    raise ToolError("I couldn't find an empty spot on that desktop.", "ELEMENT_NOT_FOUND")
+
+
+def click_element(name: str, action: str = "click", monitor=None) -> Dict:
+    """Click (or double/right-click, hover) a named element and report whether
+    the UI changed afterwards (title / focus), so success is not assumed.
+    ``monitor`` limits the search to one screen ("on my main screen")."""
+    import pyautogui
+    name = re.sub(r"\brecycl(?:ing|ed)\s+bin\b", "recycle bin", (name or "").strip(), flags=re.I)
+    spec_only, scope_said = _split_scope(name)
+    if _DESKTOP_ITSELF.match(name.strip()):
+        return click_desktop(action, monitor)
+    mon = _monitor(monitor) if monitor else None
+    if scope_said == "desktop" or _DESKTOP_ICONS.match(spec_only.strip()):
+        el, top = _desktop_icon(spec_only, mon)
+        scope = "desktop"
+        if el is None:
+            where = " on that screen" if mon is not None else ""
+            raise ToolError(f"I can't see {spec_only.strip()} on your desktop{where}.", "ELEMENT_NOT_FOUND")
+    elif mon is not None:
+        # The front-most window on that screen, not the one in front overall.
+        from modules.desktop.controller import desktop
+        wins = [w for w in desktop.windows_on(mon.index) if not desktop._is_own(w)]
+        if not wins:
+            raise ToolError("There's no window open on that screen.", "NOT_FOUND")
+        with in_window(wins[0].hwnd):
+            el, top, scope = _find_anywhere(name, activate=True)
+    else:
+        el, top, scope = _find_anywhere(name, activate=True)
+    return _click_found(name, action, el, top, scope, pyautogui)
+
+
+def _click_found(name, action, el, top, scope, pyautogui) -> Dict:
     where = _SCOPE_LABEL.get(scope) or top.Name or "the active window"
     if el is None:
         raise ToolError(f"I can't see anything called '{name}' in {where}.", "ELEMENT_NOT_FOUND")
