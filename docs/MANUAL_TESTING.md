@@ -20,8 +20,8 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | Normal conversation near the mic without "SAINT" (≥ 2 min) | Never reacts |
 | ✅ | "Hey SAINT, open Spotify" → "play Kendrick Lamar" → "skip that" (no wake word after the first) | All three run |
 | Y | Music playing: "Hey SAINT, find the settings button" → "click it" → "skip that" (no wake word after the first) | All three run; chatter in between ("that's amazing", "I think it's good") is ignored |
-| 🔲 | Music playing, in a conversation window: "pause" (one word) | Pauses — one-word commands no longer need "SAINT" in front |
-| 🔲 | Music playing, SAINT idle: say just "skip" (one word, no wake word) | Skips (hot-word). With no music playing it is ignored |
+| Y | Music playing, in a conversation window: "pause" (one word) | Pauses — one-word commands no longer need "SAINT" in front |
+| Y | Music playing, SAINT idle: say just "skip" (one word, no wake word) | Skips (hot-word). With no music playing it is ignored |
 | ✅ | Synthetic "SAINT"/"Hey SAINT"/near-misses, clean and with music (4 voices) | 64/64 correct wake decisions |
 
 ## Spotify
@@ -53,8 +53,8 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | | Test | Expected |
 |---|---|---|
 | ✅ | "Type hello" · "select all" · "copy" (in Notepad) | Text typed/selected/copied |
-| 🔲 | "Double click the recycle bin" (other windows open) | Shows the desktop if the icon is covered, then opens the recycle bin |
-| 🔲 | "Right click <something>" · "hover over <something>" | Acts in the window you're looking at (not one SAINT used minutes ago) |
+| 🔲 fixed — was: *clicked something on my other screen; ignored the screen I named* | "Double click the recycling bin" · "click the recycle bin on my main screen" · "right click the desktop on my main screen" | Uses the desktop icon (never text in a window that mentions it) on that screen; right click opens the desktop menu there |
+| Y | "Right click <something>" · "hover over <something>" | Acts in the window you're looking at (not one SAINT used minutes ago) |
 | ✅ | "Scroll down" · "go back" · "refresh the page" | In the window SAINT is working with |
 | 🔲 | "Click the button in the bottom right" · "click the X button in the top right" | Nearest button to that corner · the Close button in that corner |
 | ✅ | "Press ctrl+t" · "press escape" | Keys go to the intended window |
@@ -75,11 +75,11 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 | One browser window open: "Open my browser and search YouTube" | Reuses it, opens YouTube, no new window |
-| 🔲 | "Open up a new tab in my browser and search YouTube" | New tab in your browser (not the window in front), YouTube opens there |
-| 🔲 | Several browser windows, none in front: "Open my browser" | "I found N browser windows: 1, … Which one?" → answer "the second one" / "the YouTube one" / "the one on my second screen" (no wake word needed, even with music) |
-| 🔲 | "Open my Monkeytype browser" / "switch to the YouTube browser window" | Switches to the browser window with that title |
-| 🔲 | Several browser windows: "Search Google for NVIDIA news" | Uses the browser you used last — doesn't ask which one |
+| Y | One browser window open: "Open my browser and search YouTube" | Reuses it, opens YouTube, no new window |
+| Y | "Open up a new tab in my browser and search YouTube" | New tab in your browser (not the window in front), YouTube opens there |
+| Y | Several browser windows, none in front: "Open my browser" | "I found N browser windows: 1, … Which one?" → answer "the second one" / "the YouTube one" / "the one on my second screen" (no wake word needed, even with music) |
+| Y | "Open my Monkeytype browser" / "switch to the YouTube browser window" | Switches to the browser window with that title |
+| Y | Several browser windows: "Search Google for NVIDIA news" | Uses the browser you used last — doesn't ask which one |
 | ✅ | "Open a new browser window" | A genuinely new window |
 | ✅ | "Search YouTube for Kendrick Lamar" → "click the first video" | First visible video opens (sidebar/channel card skipped) |
 | ✅ | "Put it in fullscreen" / "exit full screen" on a video | YouTube fullscreen toggles |
@@ -89,9 +89,9 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | | Test | Expected |
 |---|---|---|
 | ✅ | "Open a new browser window, search YouTube for Kendrick Lamar, click the first video, and pause." | All steps, each verified, in that window |
-| 🔲 | Said aloud with natural pauses: "Hey SAINT, open my browser, search YouTube for Kendrick Lamar, click the first video, and turn the volume down." | The whole request arrives as one command (no fragment like "and" is answered), then all four steps run |
-| 🔲 | "Open my browser search YouTube for Kendrick Lamar, click the first video and turn down the volume" (said in one go, no pause) | Same four steps — never "couldn't find an app called …" |
-| 🔲 | "Open my browser, go to YouTube, search for Kendrick Lamar, click the first video, put it in fullscreen, and turn the volume down." | Six steps; stops and says where if a step fails |
+|Y | Said aloud with natural pauses: "Hey SAINT, open my browser, search YouTube for Kendrick Lamar, click the first video, and turn the volume down." | The whole request arrives as one command (no fragment like "and" is answered), then all four steps run |
+| Y | "Open my browser search YouTube for Kendrick Lamar, click the first video and turn down the volume" (said in one go, no pause) | Same four steps — never "couldn't find an app called …" |
+| Y | "Open my browser, go to YouTube, search for Kendrick Lamar, click the first video, put it in fullscreen, and turn the volume down." | Six steps; stops and says where if a step fails |
 
 ## Natural responses
 
@@ -144,18 +144,18 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 | "Turn off the mini player" · "show the mini player" (with and without a YouTube tab in front) | SAINT's mini player hides/shows; YouTube's miniplayer only when you say "YouTube mini player" |
-| 🔲 | "Open the dashboard" · "go to history" · "go to settings" · "open settings" | SAINT's pages; plain "open settings" still opens Windows Settings |
-| 🔲 | "Hide the halo" · "dark mode" · "minimize yourself" | Applied at once |
+| Y | "Turn off the mini player" · "show the mini player" (with and without a YouTube tab in front) | SAINT's mini player hides/shows; YouTube's miniplayer only when you say "YouTube mini player" |
+| Y | "Open the dashboard" · "go to history" · "go to settings" · "open settings" | SAINT's pages; plain "open settings" still opens Windows Settings |
+| Y | "Hide the halo" · "dark mode" · "minimize yourself" | Applied at once |
 
 ## Stop, silence, status
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 | Start a long multi-step request or a scene, then "stop" | It stops before the next step; no keys left held down |
-| 🔲 | "Be quiet for 5 minutes", then "skip" / "what time is it" / "open blahblah" | Acts silently on the first two (reply shown on screen), still says the error for the third |
-| 🔲 | Whisper "Hey SAINT, what time is it" | Answer is noticeably quieter |
-| 🔲 | During a long request: "what are you doing?" | Names the current step without cancelling it |
+| Y | Start a long multi-step request or a scene, then "stop" | It stops before the next step; no keys left held down |
+| Y | "Be quiet for 5 minutes", then "skip" / "what time is it" / "open blahblah" | Acts silently on the first two (reply shown on screen), still says the error for the third |
+| 🔲 fixed — was: *not quieter* | Whisper "Hey SAINT, what time is it" (after a few normal requests) | Answer is noticeably quieter — a whisper is now judged against how loud you usually talk |
+| Y | During a long request: "what are you doing?" | Names the current step without cancelling it |
 | 🔲 | In a follow-up window, talk to someone else ("OK, why not?") | Ignored |
 
 ## Steam
@@ -163,8 +163,8 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | | Test | Expected |
 |---|---|---|
 | ✅ | "What games do I have" · "what are my biggest games" · "how big is Apex Legends" | Lists from Steam's files (verified live) |
-| 🔲 | "Launch Terraria" · "start cs2" | Game starts through Steam |
-| 🔲 | "Launch Apex Legends" (in the unregistered D:\SteamLibrary) | Explains how to add the library in Steam → Settings → Storage |
+| Y | "Launch Terraria" · "start cs2" | Game starts through Steam |
+| 🔲 still not registered — was: *I added my games folder and it won't open it* | "Launch Apex Legends" (D:\SteamLibrary) | Steam's library list (steamapps\libraryfolders.vdf) still only has C:. In Steam → Settings → Storage → "+", pick the **D:** drive (Steam finds D:\SteamLibrary), not D:\Games |
 | 🔲 | "Open my Steam library and search how many dudes" | Opens the library, then "you don't have it" + store search |
 
 ## Files, storage and WinRAR (try removals on a test folder first)
@@ -174,7 +174,7 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 | ✅ | "How much space is left on E" · "how full are my drives" | Real numbers (verified live) |
 | ✅ | "What's taking up space on E" | Announces the biggest folders when the background scan ends (E: ≈ 50 s) |
 | 🔲 | Put a file and an identical "file (1)" copy in Downloads → "clean up my Downloads" → "yes" | The copy goes to the Recycle Bin; restore it from there |
-| 🔲 | "What can I delete on E" | Reports the old Windows install on E: as report-only, plus recordings |
+| 🔲 improved — was: *works; wants visual feedback / percent* | "What can I delete on E", then "what are you doing?" | A pill at the bottom of the screen fills up with the percent; "what are you doing?" says "about N% done" |
 | 🔲 | "Empty the recycle bin" | Refuses, opens the Recycle Bin |
 | 🔲 | Download a .rar → "go to my Downloads folder, click the first download and extract it using WinRAR to my games folder" | Progress, then "Extracted … to D:\Games\…"; nothing overwritten |
 | 🔲 | "Unzip the latest download and delete it afterwards" → "yes" | Extracts, then asks, then recycles the archive |
@@ -185,11 +185,32 @@ Legend: ✅ = verified automatically/live during development · 🔲 = needs you
 
 | | Test | Expected |
 |---|---|---|
-| 🔲 | "Mute my mic" / "unmute my mic" | The Windows mic mute icon changes |
-| 🔲 | "Set Spotify to 30 percent" · "mute the game" (a game in front) | Volume mixer changes for that app only |
-| 🔲 | "Switch audio to my headphones" · "use my speakers" | Default output changes (HyperX = headphones) |
+| 🔲 fixed — was: *should mute Voicemeeter Stereo Input 1 / B1, and bare "mute" should work* | "Mute" · "unmute" · "mute my mic on voicemeeter" | Voicemeeter's Stereo Input 1 (your LCS USB mic) mutes/unmutes (audio.voicemeeter.mic_strip to change) |
+| Y | "Set Spotify to 30 percent" · "mute the game" (a game in front) | Volume mixer changes for that app only |
+| 🔲 fixed — was: *use Voicemeeter: A2 (speakers) ↔ A1 (headphones)* | "Switch my audio to my headphones" · "use my speakers" | In Voicemeeter, strips playing on A2 move to A1 (HyperX), and back |
 | 🔲 | "Restart my PC" → "yes" → "cancel the shutdown" | Windows shows the 60 s warning, then it's cancelled |
-| 🔲 | "Lock my PC" · "take a screenshot" | Locks · PNG in Pictures\Screenshots |
+| 🔲 fixed — was: *"take a screenshot of Claude" captured both screens* | "Take a screenshot of Claude" · "take a screenshot of my left screen" | Only that window / screen in Pictures\Screenshots |
+
+## Learning (SAINT working things out)
+
+Learned requests show on **Automations → Learned** (Try it / Forget). Say "what have you learned" or
+"forget that" any time.
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | "Minimize all my windows and double left click the recycling bin" | Every window minimizes, then the Recycle Bin opens |
+| 🔲 | "Open disk, clean up" (odd phrasing) | Opens Disk Cleanup; the next time it's instant |
+| 🔲 | Something it doesn't know: "hop over to Discord" · "get Spotify onto my left monitor" | It works it out ("switch to discord"), does it, and says it'll remember |
+| 🔲 | "Play my kpop playlist" → "no, I meant play my yuh playlist" → later "play my kpop playlist" | Plays yuh, says it'll remember; the third time plays yuh straight away |
+| 🔲 | "Play my kpop playlist" when none of yours is called that (and memory doesn't say) | "You don't have a playlist called kpop. Want me to play a public one?" — never plays a stranger's silently |
+| 🔲 | Something it can't do: it says "I'll watch and learn" → do it yourself (e.g. open Disk Cleanup from Start) → say "done" | "Got it. Next time you say … I'll open Disk Cleanup." A pill shows "Watching how you do it" while it watches |
+| 🔲 | "Let me show you how to open the recycle bin" → double-click it → "done" | Learns "double click Recycle Bin on the desktop" |
+| 🔲 | "Forget that" right after it learned something | That request goes back to how it was |
+| 🔲 | "Close the finals" / "close to area" (misheard) with the game running | "Do you want me to close THE FINALS / Terraria?" (the real name) → "yes" closes it; if the game ignores it, offers to force it to quit |
+| 🔲 | "No, close the finals" while SAINT asks something else | Answers the question *and* closes it |
+| 🔲 | "Never play that playlist again" while a playlist plays | Pauses; that playlist is skipped from then on |
+| 🔲 | Play a YouTube video out loud (no wake word), talk to someone in the room | Nothing is treated as a request (the follow-up check now also covers the window after actions and talking over SAINT) |
+| 🔲 | "Turn off the mini-player… Hey SAINT, turn off the mini-player" | Turns it off (a repeated request isn't dropped as a loop anymore) |
 
 ## Watching, workspaces, clipboard, notifications, developer mode
 
