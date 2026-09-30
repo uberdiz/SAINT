@@ -41,5 +41,10 @@ winrt-Windows.Storage.Streams>=3.0
 # Spotify login tokens are stored in the Windows Credential Manager
 keyring>=25.0.0
 
+# SAINT Link: connect your phone, other PCs and friends' SAINTs (modules/link)
+segno>=1.6.0                 # the pairing QR code on the Devices page (pure Python)
+zeroconf>=0.130.0            # optional: your devices find each other by name (mDNS); IP:port works without it
+cryptography>=42.0.0         # optional: faster encryption for file transfers (SAINT has a pure-Python fallback)
+
 # Tests
 pytest>=8.0.0

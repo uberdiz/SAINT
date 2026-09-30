@@ -55,8 +55,10 @@ class FasterWhisperSTT(STTEngine):
         compute_type: str = "float16",
         language: str = "en",
         hotwords: str = "",
+        initial_prompt: str = "",
     ):
         self._hotwords = hotwords or None   # biases decoding toward e.g. "SAINT"
+        self._initial_prompt = initial_prompt or None   # e.g. "Hey SAINT. Conversación en español e inglés."
         self._model_name = model_name
         self._device = device
         self._compute_type = compute_type
@@ -121,6 +123,7 @@ class FasterWhisperSTT(STTEngine):
                 vad_filter=False,  # we do our own VAD
                 # ``hint``: words expected right now ("yes, no" after a question).
                 hotwords=" ".join(x for x in (self._hotwords, hint) if x) or None,
+                initial_prompt=self._initial_prompt,
             )
             text_parts = []
             avg_logprob = 0.0

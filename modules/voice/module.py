@@ -97,6 +97,7 @@ class VoiceModule(BaseModule):
     description = "Wake word, voice input, speech recognition and interruption handling."
 
     def __init__(self):
+        self._last_stt_language = ""      # the language Whisper heard (modules/lang uses it as a hint)
         super().__init__()
         self.subtasks = {
             "Wake Word Detection": False,
@@ -234,13 +235,22 @@ class VoiceModule(BaseModule):
             stt_device = config.get("voice.stt_device", "cuda")
             stt_compute = config.get("voice.stt_compute_type", "float16")
             stt_model = config.get("voice.stt_model", "base.en")
+            stt_language = config.get("voice.stt_language", "en")
+            initial_prompt = ""
+            if config.get("language.multilingual_stt", False):
+                # Whisper picks the language for each utterance (and copes with a second one in the
+                # same sentence); the ".en" models can't, so use the multilingual one.
+                stt_model = config.get("voice.stt_model_multilingual", "small")
+                stt_language = "auto"
+                initial_prompt = config.get("voice.stt_initial_prompt", "Hey SAINT. Hola SAINT. Play some música.")
             self._stt = make_stt(
                 "faster_whisper",
                 model_name=stt_model,
                 device=stt_device,
                 compute_type=stt_compute,
-                language=config.get("voice.stt_language", "en"),
+                language=stt_language,
                 hotwords=config.get("voice.stt_hotwords", "SAINT"),
+                initial_prompt=initial_prompt,
             )
             self._stt_device_info = f"{stt_device}/{stt_compute}/{stt_model}"
             threading.Thread(target=self._warmup_stt, daemon=True, name="voice-warmup").start()
@@ -882,6 +892,7 @@ class VoiceModule(BaseModule):
             hint = _REPLY_HINT if wake_initiated and dialog.expects_short_answer() else ""
             try:
                 result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE, hint=hint)
+                self._last_stt_language = getattr(result, "language", "") or ""
             except TypeError:                     # an STT backend without hints
                 result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
         except Exception as e:
@@ -982,6 +993,7 @@ class VoiceModule(BaseModule):
             "inference_ms": round(inference_ms, 1),
             "session_id": session_id,
             "wake": wake_initiated,
+            "language": self._last_stt_language,
             **({"source": "hotword"} if hot else {}),
             "diagnostics": {
                 "audio_duration_ms": audio_duration_ms,
@@ -999,13 +1011,14 @@ class VoiceModule(BaseModule):
     # Transcript helpers
     # ------------------------------------------------------------------ #
     _WAKE_PREFIX = re.compile(
-        r"^\s*(?:(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+)?(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
+        r"^\s*(?:(?:hey|hay|they|hi|ok(?:ay)?|oye|hola|ey|eh|salut|hallo|ciao|ol[aá]|oi|ehi)[\s,.!]+)?"
+        r"(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
         re.IGNORECASE)
 
     # Whisper sometimes renders "Hey SAINT" as "Hey, St." — only strip that
     # form after a greeting, so "St. Louis weather" is left alone.
     _WAKE_PREFIX_ALT = re.compile(
-        r"^\s*(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
+        r"^\s*(?:hey|hay|they|hi|ok(?:ay)?|oye|hola|ey|eh|salut|hallo|ciao|ol[aá]|oi|ehi)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
         re.IGNORECASE)
 
     def _strip_wake_prefix(self, text: str) -> str:
@@ -1025,7 +1038,7 @@ class VoiceModule(BaseModule):
         return stripped.strip()
 
     _WAKE_START = re.compile(
-        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh)[\s,.!]+)?(?:(?:hey|hay|they|hi|ok(?:ay)?|yo)[\s,.!]+)?"
+        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh|pues|bueno|euh)[\s,.!]+)?(?:(?:hey|hay|they|hi|ok(?:ay)?|oye|hola|ey|eh|salut|hallo|ciao|ol[aá]|oi|ehi|yo)[\s,.!]+)?"
         r"(?:saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)", re.IGNORECASE)
     _WAKE_START_ALT = re.compile(r"^\s*(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+st\.?(?=[\s,.!?]|$)", re.IGNORECASE)
 

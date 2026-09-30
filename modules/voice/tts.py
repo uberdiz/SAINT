@@ -418,6 +418,47 @@ class KokoroTTS(TTSEngine):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------ #
+    # Languages: one pipeline (and voice) per language, sharing the loaded model.
+    # A sentence in Spanish is spoken by a Spanish voice; one that mixes Spanish
+    # and English switches voice where the language does (modules/lang).
+    # ------------------------------------------------------------------ #
+    def _voice_for(self, code: str):
+        """(pipeline, voice) for a language code; English (the configured voice)
+        for "en", unknown languages and languages Kokoro has no voice for."""
+        if code in ("", "en", "und"):
+            return self._pipeline, self._voice
+        cache = self.__dict__.setdefault("_lang_pipelines", {})
+        if code not in cache:
+            cache[code] = None
+            try:
+                from modules.lang.pack import get_pack
+                pack = get_pack(code)
+                if pack is not None and pack.tts_lang and pack.tts_voice:
+                    from kokoro import KPipeline
+                    pipe = KPipeline(lang_code=pack.tts_lang, model=self._pipeline.model,
+                                     device=getattr(self, "_resolved_device", None))
+                    cache[code] = (pipe, pack.tts_voice)
+                else:
+                    import logging
+                    logging.info("tts.no_voice_for_language %s: speaking it with the English voice", code)
+            except Exception as e:
+                import logging
+                logging.warning("tts.language_voice_failed %s: %s", code, e)
+        return cache[code] or (self._pipeline, self._voice)
+
+    def _chain(self, text: str):
+        """Synthesis results for ``text``, language by language."""
+        try:
+            from modules.lang import state
+            from modules.lang.segments import segments
+            plan = segments(text, hint=state.reply_language)
+        except Exception:
+            plan = [("en", text)]
+        for code, part in plan or [("en", text)]:
+            pipeline, voice = self._voice_for(code)
+            yield from pipeline(part, voice=voice, speed=self._speed)
+
     def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         """Synthesise full text via the Kokoro pipeline and stream audio chunks.
 
@@ -453,11 +494,7 @@ class KokoroTTS(TTSEngine):
             # Single pipeline call for the full text — the generator yields
             # sentence-level Result objects with pre-synthesised audio.
             t_infer_start = time.perf_counter()
-            generator = self._pipeline(
-                text,
-                voice=self._voice,
-                speed=self._speed,
-            )
+            generator = self._chain(text)
 
             for i, result in enumerate(generator):
                 if self._interrupt_event.is_set():

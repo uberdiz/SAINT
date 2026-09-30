@@ -103,6 +103,8 @@ class ConversationController:
         self._active_turn_id: int = -1
         self._turn_id_lock = threading.Lock()
 
+        self._speech_language = ""
+        self._turn_language: dict = {}
         self._stt_session_submitted: set = set()
         self._stt_session_lock = threading.Lock()
 
@@ -157,6 +159,7 @@ class ConversationController:
         t = ev.type
         if t == EventType.VOICE_STT_FINAL:
             p = ev.payload
+            self._speech_language = p.get("language", "") or ""      # Whisper's guess, a hint for modules/lang
             self._handle_user_speech(
                 p["text"], p.get("session_id", 0), p.get("confidence", 0.0),
                 addressed=bool(p.get("wake")) or p.get("source") in ("text", "inject_text"),
@@ -379,6 +382,8 @@ class ConversationController:
             turn_id = self._turn_id
         self._active_turn_id = turn_id
         self._current_turn_start = time.perf_counter()
+        self._turn_language[turn_id] = self._speech_language
+        self._turn_language.pop(turn_id - 50, None)
         self._set_state(ConvState.THINKING)
         self._voice.set_saint_speaking(False)
         with self._echo_lock:
@@ -458,7 +463,8 @@ class ConversationController:
             try:
                 self._ai.stream_prompt(prompt=text, on_token=on_token,
                                        is_interruption=is_interruption,
-                                       turn_id=turn_id, request_id=request_id)
+                                       turn_id=turn_id, request_id=request_id,
+                                       language=self._turn_language.get(turn_id, ""))
             except Exception as e:
                 log.exception("conversation.ai_failed")
                 event_bus.emit_event(EventType.AI_ERROR, {"error": str(e), "turn_id": turn_id})

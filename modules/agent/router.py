@@ -1593,6 +1593,11 @@ def parse_extras(text: str) -> Optional[Intent]:
     return parse(text)
 
 
+def parse_link(text: str) -> Optional[Intent]:
+    from modules.agent.link_intents import parse_link as parse
+    return parse(text)
+
+
 _SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_winctl,
                    parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
 
@@ -1618,7 +1623,9 @@ def route(text: str) -> Optional[Intent]:
     # made or found (modules/agent/recent.py) — before memory, so "delete the
     # junk" never means "forget a memory".
     from modules.agent.refer_intents import parse_refer
-    for parser in (parse_web, parse_files_task, parse_refer, parse_automation, parse_memory):
+    # parse_link first: "send this prompt to Gian's PC on Claude: open the door and lock it" is one
+    # request, whatever words the prompt itself contains.
+    for parser in (parse_link, parse_web, parse_files_task, parse_refer, parse_automation, parse_memory):
         try:
             intent = parser(text)
         except Exception:

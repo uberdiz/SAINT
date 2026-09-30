@@ -35,7 +35,7 @@ _WAKE_KEYS = ("voice.wake_word_enabled", "voice.wake_word_model_path", "voice.wa
 _TTS_KEYS = ("voice.tts_backend", "voice.tts_voice", "voice.tts_device", "voice.tts_speed",
              "voice.tts_qwen_model", "voice.tts_qwen_speaker", "voice.tts_qwen_type")
 _STT_KEYS = ("voice.stt_backend", "voice.stt_model", "voice.stt_device", "voice.stt_compute_type",
-             "voice.stt_language")
+             "voice.stt_language", "language.multilingual_stt")
 
 
 def tts_settings() -> dict:
@@ -135,6 +135,14 @@ class SaintRuntime:
         except Exception:
             log.debug("runtime.media_watcher_unavailable", exc_info=True)
 
+        # SAINT Link: listen for / dial your phone, other PCs and paired friends (off until turned on).
+        try:
+            if config.get("link.enabled", False):
+                from modules.link.service import get_link
+                get_link().start()
+        except Exception:
+            log.exception("runtime.link_failed")
+
         # Game Mode: hide overlays and stop screen capture while a game runs.
         try:
             from core.game_mode import game_mode
@@ -183,13 +191,18 @@ class SaintRuntime:
             pass
         # Background watchers are daemon threads, but stop them explicitly so
         # nothing keeps polling or capturing while the process winds down.
-        for stop in (self._stop_game_mode, self._stop_watch, self._stop_focus_history):
+        for stop in (self._stop_link, self._stop_game_mode, self._stop_watch, self._stop_focus_history):
             try:
                 stop()
             except Exception:
                 pass
         if self.controller:
             self.controller.shutdown()
+
+    @staticmethod
+    def _stop_link():
+        from modules.link.service import get_link
+        get_link().stop()
 
     @staticmethod
     def _stop_game_mode():

@@ -48,7 +48,7 @@ class AliasStore:
 
     @property
     def path(self) -> str:
-        return self._path or data_path("aliases.json")
+        return self._path or str(data_path("aliases.json"))
 
     def all(self) -> Dict[str, str]:
         with self._lock:

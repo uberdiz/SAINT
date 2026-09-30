@@ -20,7 +20,7 @@ from ui.widgets import ElidedLabel, IconButton, Orb
 
 PAGES = [("Home", "home"), ("Music", "music"), ("Automations", "zap"), ("History", "history"),
          ("Memory", "memory"), ("Activity", "activity"), ("Storage", "drive"), ("System", "cpu"),
-         ("Settings", "settings")]
+         ("Devices", "smartphone"), ("Settings", "settings")]
 
 LOGO_PATH = "SAINT.png"       # the SAINT logo shipped in the repository root
 
@@ -227,9 +227,10 @@ class MainWindow(QMainWindow):
         self.home = HomePage(self)
         self.music = MusicPage(self)
         self.settings_ui = SettingsUI(on_appearance_changed=self.apply_appearance)
+        from ui.pages.devices import DevicesPage
         from ui.pages.storage import StoragePage
         self.pages = [self.home, self.music, AutomationsPage(), HistoryPage(), MemoryPage(), ActivityPage(),
-                      StoragePage(), SystemPage(), self.settings_ui]
+                      StoragePage(), SystemPage(), DevicesPage(), self.settings_ui]
         for page in self.pages:
             self.stack.addWidget(page)
 
@@ -252,7 +253,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.palette.open)
         QShortcut(QKeySequence("Ctrl+,"), self, activated=lambda: self.navigate("Settings"))
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._escape)
-        for i, (name, _icon) in enumerate(PAGES):
+        for i, (name, _icon) in enumerate(PAGES[:9]):              # Ctrl+1 ... Ctrl+9
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda n=name: self.navigate(n))
 
         self._build_tray()
@@ -291,7 +292,7 @@ class MainWindow(QMainWindow):
     def _commands(self):
         from ui.palette import Command
         from modules.automation.scenes import scenes
-        cmds = [Command(f"Go to {n}", f"Page · Ctrl+{i + 1}", ic, lambda n=n: self.navigate(n))
+        cmds = [Command(f"Go to {n}", f"Page · Ctrl+{i + 1}" if i < 9 else "Page", ic, lambda n=n: self.navigate(n))
                 for i, (n, ic) in enumerate(PAGES)]
         hk = config.get("overlay.hotkey", "")
         halo = config.get("overlay.halo", "minimized")
