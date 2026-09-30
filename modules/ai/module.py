@@ -408,7 +408,7 @@ class AIModule(BaseModule):
                     shown.append(tok)
                     _safe_on_token(tok)
 
-                guard = ReplyGuard(_emit)
+                guard = ReplyGuard(_emit, prompt)
                 provider.stream_send(
                     messages=messages, model=model, api_key=api_key, base_url=base_url,
                     temperature=temperature, timeout=timeout, on_token=guard.feed,

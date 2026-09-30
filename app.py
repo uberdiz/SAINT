@@ -12,7 +12,16 @@ Boot order:
 """
 
 import argparse
+import os
 import sys
+
+# Started from the Startup folder through pythonw.exe there is no console:
+# sys.stdout/stderr are None and the first library that writes a progress bar
+# would crash SAINT. Give them somewhere to go (before the logger is set up).
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 # Qt 6 owns per-monitor DPI awareness; only the rounding policy is set here
 # (it must be configured before the QApplication exists).
@@ -59,8 +68,17 @@ def main():
     from PySide6.QtCore import QLockFile, QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    # Our own taskbar identity: without it Windows groups SAINT under
+    # python.exe (Python's icon, "Python" in the jump list). Before any window.
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SAINT.Assistant")
+    except Exception:
+        pass
+
     app = QApplication(sys.argv)
     app.setApplicationName("SAINT")
+    app.setApplicationDisplayName("SAINT")
     app.setQuitOnLastWindowClosed(False)   # the tray keeps SAINT alive
 
     lock = QLockFile(str(data_path("saint.lock")))
@@ -80,6 +98,10 @@ def main():
     from core.module_manager import module_manager  # noqa: F401  (enables modules, registers tools)
     from core.runtime import runtime
     runtime.start()
+
+    import threading
+    from core import autostart
+    threading.Thread(target=autostart.sync, daemon=True, name="autostart-sync").start()
 
     from ui.main_window import MainWindow
     window = MainWindow(app, runtime)

@@ -152,6 +152,8 @@ DEFAULT_CONFIG = {
         # song lyrics. Only follow-ups SAINT recognises as commands (or short
         # direct questions) are kept; "Hey SAINT, <anything>" always works.
         "music_strict_followup": True,
+        # ...and a "command" that is a line of the song playing (synced lyrics) is dropped.
+        "lyrics_filter": True,
         # Whisper scores short commands low; a follow-up SAINT recognises as a
         # command ("click it") only needs this much confidence.
         "followup_command_min_confidence": 0.1,
@@ -214,6 +216,7 @@ DEFAULT_CONFIG = {
         "spotify": False,                 # floating always-on-top now-playing widget
         "spotify_pos": None,              # [x, y], remembered after dragging
         "any_media": True,                # show any app's media (YouTube, VLC, ...), not only Spotify
+        "lyrics": False,                  # synced lyrics panel under the mini player (LRCLIB)
     },
 
     # ------------------------------------------------------------------
@@ -284,6 +287,22 @@ DEFAULT_CONFIG = {
     # ------------------------------------------------------------------
     "steam": {
         "extra_libraries": ["D:\\SteamLibrary"],   # libraries Steam may not know about
+    },
+
+    # ------------------------------------------------------------------
+    # Game Mode (core/game_mode.py): while a game runs, SAINT hides its
+    # always-on-top windows (Halo, edge tab, action pill, mini player) — they
+    # upset anti-cheat and fullscreen — and won't capture the screen or
+    # click/type into the game. Voice, Spotify and volume keep working.
+    # ------------------------------------------------------------------
+    "game_mode": {
+        "enabled": True,                  # detect games automatically
+        "processes": [],                  # extra game .exe names ("mygame.exe")
+        "folders": [],                    # extra folders whose programs are games
+        "ignore": [],                     # .exe names that are never games
+        "block_capture": True,            # no screenshots / screen reading while a game runs
+        "block_input": True,              # no synthetic clicks / typing into the game window
+        "announce": True,                 # toast when Game Mode turns on / off
     },
 
     # ------------------------------------------------------------------
@@ -396,6 +415,7 @@ DEFAULT_CONFIG = {
         "track_history": True,            # remember what you listen to / skip
         "auto_device": True,              # wake an available device if none is active
         "volume_step": 15,
+        "autoqueue": True,                # a song / mood / "more like this" keeps going: 5 similar songs at a time
     },
 
     # ------------------------------------------------------------------
@@ -418,6 +438,7 @@ DEFAULT_CONFIG = {
     # System / Diagnostics
     # ------------------------------------------------------------------
     "system": {
+        "start_with_windows": False,      # mirrors the Startup-folder shortcut (core/autostart.py)
         "startup_check": True,
         "log_level": "Verbose",
         "data_dir": "data",

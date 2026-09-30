@@ -16,6 +16,8 @@ _F = 'fill="currentColor" stroke="none"'
 PATHS = {
     "home": '<path d="M3 10.2 12 3l9 7.2V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
     "music": '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    "lyrics": '<path d="M3 6h12"/><path d="M3 12h9"/><path d="M3 18h7"/><path d="M19 17V6l3-1"/>'
+              '<circle cx="17" cy="17" r="2"/>',
     "zap": '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>',
     "history": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'
                '<path d="M12 7v5l4 2"/>',

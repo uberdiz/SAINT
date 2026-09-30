@@ -548,6 +548,13 @@ class SettingsUI(QWidget):
         self._row(f, "Mini player", self._check("widgets.spotify", "Show the floating always-on-top player",
                                                 live="Mini player {state}."),
                   "Shows whatever is playing — Spotify, a YouTube video, or any app Windows knows about.")
+        self._row(f, "Lyrics", self._check("widgets.lyrics", "Show the song's lyrics under the mini player",
+                                           live="Lyrics {state}."),
+                  "Synced lyrics from LRCLIB (only the song title and artist are sent). "
+                  "Or say “turn on the lyrics”.")
+        self._row(f, "Keep it going", self._check("spotify.autoqueue",
+                                                  "After a song I ask for, queue songs like it — 5 at a time"),
+                  "Also used for moods (“I'm feeling chill”) and “queue more songs like this”.")
         lay.addWidget(box)
 
         box, f = self._section("Music memory", "Used for “play something I'd like” and “what did I listen to today”.")
@@ -852,6 +859,12 @@ class SettingsUI(QWidget):
                                                        "does something",
                               live="Action notifications {state}."))
         self._row(f, "Edge tab", self._check("overlay.edge_tab", "Reveal a SAINT tab at the top edge"))
+        self._row(f, "Game Mode",
+                  self._check("game_mode.enabled", "Hide the Halo and pop-ups while a game or fullscreen app runs",
+                              live="Game Mode detection {state}."),
+                  "Anti-cheat treats see-through windows on top of a game as a cheat overlay, and they stop true "
+                  "fullscreen. While a game runs SAINT also won't capture the screen or click inside the game. "
+                  "Voice and music keep working. Say “game mode on / off” any time.")
         self._row(f, "Overlay hotkey", self._line("overlay.hotkey", "alt+`"),
                   "Works from anywhere. Combine ctrl / alt / shift / win with a key, e.g. alt+` or ctrl+alt+s.")
         lay.addWidget(box)
@@ -907,8 +920,21 @@ class SettingsUI(QWidget):
         lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
         f.addRow(lbl)
         self._row(f, "Startup check", self._check("system.startup_check", "Run the environment check on launch"))
+        auto = self._check("system.start_with_windows", "Start SAINT when I sign in to Windows")
+        auto.toggled.connect(self._set_autostart)
+        self._row(f, "Start with Windows", auto,
+                  "Starts hidden in the tray. Shows up as “SAINT” in Task Manager → Startup apps.")
         lay.addWidget(box)
         self._add_page(w, lay)
+
+    def _set_autostart(self, on: bool):
+        if self._loading:
+            return
+        from core import autostart
+        ok, message = autostart.set_enabled(on)
+        pal = current_palette()
+        self.status.setText(message)
+        self.status.setStyleSheet(f"color:{(pal.success if on else pal.muted) if ok else pal.danger};")
 
     # ------------------------------------------------------------------ #
     # Load / save

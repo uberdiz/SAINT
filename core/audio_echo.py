@@ -75,6 +75,7 @@ class EchoGate:
         self.margin = margin
         self.min_frames = max(1, int(min_ms / frame_ms))
         self.floor = floor
+        self.idle_floor = 0.03
         self.coupling = initial_coupling
         self._score = 0.0
         self._smoothed = 0.0
@@ -91,7 +92,12 @@ class EchoGate:
         talking over SAINT.
         """
         self._smoothed = 0.5 * self._smoothed + 0.5 * mic_rms
-        predicted = self.coupling * playback_rms * self.margin + self.floor
+        # SAINT is "speaking" but nothing is playing yet (still thinking, or
+        # between sentences): the bar used to drop to the bare floor (0.01), so
+        # quiet room noise or music from the speakers cancelled the turn —
+        # logged 2026-09-28 at mic 0.011 / 0.005, while real talk-overs are 0.07+.
+        floor = self.floor if playback_rms > 0 else max(self.floor, self.idle_floor)
+        predicted = self.coupling * playback_rms * self.margin + floor
         if self._smoothed > predicted:
             self._score += 1.0
         else:

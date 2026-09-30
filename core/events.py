@@ -135,6 +135,8 @@ class EventType:
     WATCH_FIRED="watch.fired"; ACTIVITY_CHANGED="activity.changed"
     # "Stop everything" — cancel plans, typing, background work (core/cancel.py)
     STOP_ALL="stop.all"
+    # Game Mode on/off, or the overlays hidden for a fullscreen app (core/game_mode.py)
+    GAME_MODE="game_mode"
     ERROR="error"; WARNING="warning"
 
 

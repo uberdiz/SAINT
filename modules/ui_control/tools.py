@@ -16,7 +16,7 @@ _PAGE_ALIASES = {"dashboard": "Home", "home": "Home", "main": "Home", "music": "
                  "reminders": "Automations", "history": "History", "stats": "History", "memory": "Memory",
                  "memories": "Memory", "activity": "Activity", "console": "Activity", "logs": "Activity",
                  "system": "System", "storage": "Storage", "junk": "Storage", "disk space": "Storage", "drives": "Storage", "settings": "Settings", "preferences": "Settings"}
-FEATURES = ("mini_player", "halo", "overlay", "action_notices", "theme")
+FEATURES = ("mini_player", "lyrics", "halo", "overlay", "action_notices", "theme")
 
 
 def page_for(name: str) -> str:
@@ -55,7 +55,7 @@ def set_feature(feature, value):
         raise ToolError("The halo can be off, minimized or always.", "INVALID")
     if feature == "theme" and value not in ("dark", "light", "system", "toggle"):
         raise ToolError("The theme can be dark, light or system.", "INVALID")
-    if feature in ("mini_player", "action_notices", "overlay") and value not in ("on", "off", "toggle"):
+    if feature in ("mini_player", "lyrics", "action_notices", "overlay") and value not in ("on", "off", "toggle"):
         raise ToolError("Say on, off or toggle.", "INVALID")
     return _send("set", feature=feature, value=value)
 
@@ -74,7 +74,8 @@ def register_ui_tools(registry):
              {"page": "string"}, PermissionLevel.LOW, navigate,
              parameters={"page": P("string", "page name; 'dashboard' means Home")},
              llm_exposed=True, category="ui"),
-        Tool("ui.set", "Turn one of SAINT's own features on or off: the mini player, the halo, the overlay, "
+        Tool("ui.set", "Turn one of SAINT's own features on or off: the mini player, song lyrics (shown in the "
+             "mini player), the halo, the overlay, "
              "action notices, or the theme",
              {"feature": "string", "value": "string"}, PermissionLevel.LOW, set_feature,
              parameters={"feature": P("string", "which feature", enum=list(FEATURES)),

@@ -33,7 +33,9 @@ BOTTOM_GAP = 28
 
 
 def enabled() -> bool:
-    return bool(config.get("notifications.actions", True))
+    from core.game_mode import game_mode
+    # Never pop a top-most window over a game (core/game_mode.py).
+    return bool(config.get("notifications.actions", True)) and not game_mode.overlays_blocked
 
 
 _YT_WORDS = {"play_pause": "Play / pause", "fullscreen": "Full screen", "exit_fullscreen": "Exit full screen",

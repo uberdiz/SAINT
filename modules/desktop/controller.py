@@ -125,6 +125,18 @@ def _require(flag: str, what: str):
         raise ToolError(f"{what} is turned off in Settings > Desktop Control.", "DESKTOP_OFF")
 
 
+_MEDIA_KEYS = {"playpause", "nexttrack", "prevtrack", "stop", "volumeup", "volumedown", "volumemute"}
+
+
+def _game_guard():
+    """Synthetic input must not reach a game that's in front (anti-cheat can
+    read it as a bot) — see core/game_mode.py."""
+    from core.game_mode import game_mode
+    reason = game_mode.refuse_input()
+    if reason:
+        raise ToolError(reason, "GAME_MODE")
+
+
 class DesktopController:
     # ------------------------------------------------------------------ #
     # Monitors
@@ -836,6 +848,7 @@ class DesktopController:
             raise ToolError(f"That's {len(text)} characters; the limit is {limit} (Settings > Desktop Control).",
                             "TOO_LONG")
         win = self._input_target()
+        _game_guard()
         focused = None
         if target:
             from modules.desktop import uia
@@ -870,7 +883,12 @@ class DesktopController:
                 raise ToolError(f"'{p}' isn't a key I know.", "INVALID")
         if frozenset(parts) in _BLOCKED_COMBOS:
             raise ToolError(f"I won't press {'+'.join(parts)} — use a close/lock command instead.", "BLOCKED")
-        self._input_target()
+        if not set(parts) <= _MEDIA_KEYS:
+            self._input_target()
+            _game_guard()
+        # Media / volume keys are handled by Windows, not by the window in front:
+        # no need to switch windows (that pulled focus out of games), and they
+        # are fine during Game Mode ("press play on Spotify" was refused in Rocket League).
         if len(parts) == 1:
             pyautogui.press(parts[0])
         else:
@@ -898,6 +916,7 @@ class DesktopController:
 
     def mouse_move(self, x: int, y: int, duration: float = 0.2) -> dict:
         _require("allow_mouse", "Mouse control")
+        _game_guard()
         import pyautogui
         self._check_point(x, y)
         pyautogui.moveTo(x, y, duration=max(0.0, min(duration, 2.0)))
@@ -906,6 +925,7 @@ class DesktopController:
     def mouse_click(self, x: Optional[int] = None, y: Optional[int] = None, button: str = "left",
                     clicks: int = 1) -> dict:
         _require("allow_mouse", "Mouse control")
+        _game_guard()
         import pyautogui
         if (x is None) != (y is None):
             raise ToolError("Give both x and y, or neither to click where the mouse is.", "INVALID")
@@ -923,6 +943,7 @@ class DesktopController:
     def drag(self, x1: int, y1: int, x2: int, y2: int, button: str = "left", duration: float = 0.4) -> dict:
         """Press at (x1, y1), move to (x2, y2), release — drag and drop / text selection."""
         _require("allow_mouse", "Mouse control")
+        _game_guard()
         import pyautogui
         self._check_point(x1, y1)
         self._check_point(x2, y2)
@@ -939,6 +960,7 @@ class DesktopController:
             w = self.target_window(activate=True) if HAS_WIN32 else None
             if w is not None:
                 x, y = w.left + w.width // 2, w.top + w.height // 2
+        _game_guard()
         if x is not None and y is not None:
             self._check_point(x, y)
             pyautogui.moveTo(x, y, duration=0.05)

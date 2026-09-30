@@ -597,6 +597,10 @@ def click_element(name: str, action: str = "click", monitor=None) -> Dict:
     spec_only, scope_said = _split_scope(name)
     if _DESKTOP_ITSELF.match(name.strip()):
         return click_desktop(action, monitor)
+    from core.game_mode import game_mode
+    refused = game_mode.refuse_input()        # never click inside a game (core/game_mode.py)
+    if refused:
+        raise ToolError(refused, "GAME_MODE")
     mon = _monitor(monitor) if monitor else None
     if scope_said == "desktop" or _DESKTOP_ICONS.match(spec_only.strip()):
         el, top = _desktop_icon(spec_only, mon)

@@ -29,6 +29,8 @@ _NOT_APPS = {"it", "this", "that", "the volume", "volume", "the music", "music",
 def _is_app(name: str) -> bool:
     """'discord', 'the game', 'steam' — not 'the volume', 'brightness', 'a timer'."""
     n = (name or "").strip()
+    if re.match(r"^(?:it|this|that|these|those|them|everything)\b", n):
+        return False              # "turn it up to 80%" is the music, not an app called "it up"
     return bool(n) and n not in _NOT_APPS and len(n.split()) <= 3 and not re.search(
         r"\b(brightness|timer|alarm|reminder|theme|mode|temperature|volume|speed|quality|playback|screen|"
         r"halo|overlay|notices|mini ?player|notifications?)\b", n)

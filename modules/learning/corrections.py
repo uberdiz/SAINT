@@ -36,9 +36,13 @@ _VERB = re.compile(
     r"^(?:open|close|quit|launch|start|run|play|pause|resume|skip|click|double|right|press|type|minimi[sz]e|"
     r"maximi[sz]e|show|hide|move|put|set|turn|switch|mute|unmute|go|take|search|clean|clear|extract|lock|"
     r"save|restore|scroll|snap|focus|use|delete|rename|make|create)\b", re.I)
-# Not corrections, even after "no": "no, it's fine", "no no no", "no thanks".
+# Not corrections, even after "no": "no, it's fine", "no no no", "no thanks", "no, bro",
+# "no, don't do that. Forget that." (both were fitted into a song request on 2026-09-29).
 _NOT_A_THING = re.compile(r"^(?:it'?s|that'?s|i'?m|you'?re|we'?re|thanks|thank you|worries|problem|way|never ?mind|"
-                          r"no+|nah|nope|stop|wait|okay|ok|sorry|good|fine|cancel)\b", re.I)
+                          r"no+|nah|nope|stop|wait|okay|ok|sorry|good|fine|cancel|bro|bruh|dude|man|dawg|dog|"
+                          r"brother|girl|sis|fam|lol|lmao|wtf|what|why|how|huh|ugh|oh|damn|dang|come on|"
+                          r"seriously|not even|don'?t|do not|forget|undo|leave|never|you|that|this|wrong|"
+                          r"please|just)\b", re.I)
 
 
 @dataclass

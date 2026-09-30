@@ -109,13 +109,20 @@ def _is_user_input(e: Event) -> bool:
     return e.kind in ("click", "keys")
 
 
-def summarize(events: List[Event]) -> List[str]:
-    """What the user did, as commands SAINT can repeat (unrepeatable bits dropped)."""
+def summarize(events: List[Event], ignore_exe: str = "") -> List[str]:
+    """What the user did, as commands SAINT can repeat (unrepeatable bits dropped).
+
+    ``ignore_exe``: the app that was in front when watching started (the
+    editor / chat the user said "yes" from). Clicks, keys and focus changes
+    inside it are the user carrying on with their work, not the lesson —
+    "open blockstrap" once learned "click MANUAL_TESTING.md, preview"."""
     steps: List[tuple] = []                     # (command, event)
     pending_start: Optional[Event] = None       # a Start-menu click waiting to see what it opens
     last_launch: Optional[Event] = None
     input_since_launch = False                  # did the user click / press anything named since?
     for e in events:
+        if ignore_exe and e.exe == ignore_exe and e.kind in ("click", "keys", "focus") and e.where == "window":
+            continue
         if e.kind == "launch":
             name = pending_start.name if pending_start and pending_start.name else e.app
             # Started by the app just opened (Bloxstrap starting Roblox, an updater
@@ -168,6 +175,41 @@ def summarize(events: List[Event]) -> List[str]:
     return out[:8]
 
 
+_GOAL_OPEN = re.compile(r"^(?:open|launch|start|run|switch to|go to|bring up|pull up)\s+(?:up\s+)?"
+                        r"(?:my\s+|the\s+)?(.+)$", re.I)
+
+
+def _simple(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def _similar(a: str, b: str) -> bool:
+    """'blockstrap' ~ 'Bloxstrap' (the request is usually a mishearing)."""
+    import difflib
+    a, b = _simple(a), _simple(b)
+    return bool(a and b) and (a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= 0.75)
+
+
+def focus_on_goal(phrase: str, steps: List[str]) -> List[str]:
+    """Keep what the request was about.
+
+    "open X": the step that opened (or switched to) X is the whole lesson.
+    Otherwise a final "switch to Y" — going back to where the user was, Y not
+    named in the request — is dropped."""
+    steps = list(steps)
+    m = _GOAL_OPEN.match((phrase or "").strip(" .!?"))
+    if m:
+        target = m.group(1)
+        for prefix in ("open ", "switch to "):
+            hit = next((s for s in steps if s.lower().startswith(prefix) and _similar(s[len(prefix):], target)), None)
+            if hit:
+                return [hit]
+    while len(steps) > 1 and steps[-1].lower().startswith("switch to ") and \
+            not _similar(steps[-1][10:], phrase) and not any(_similar(steps[-1][10:], w) for w in phrase.split() if len(w) >= 4):
+        steps.pop()
+    return steps
+
+
 # ---------------------------------------------------------------------- #
 # Watching (Windows)
 # ---------------------------------------------------------------------- #
@@ -202,6 +244,7 @@ class Recorder:
         self.phrase = ""
         self.events: List[Event] = []
         self.started = 0.0
+        self.start_exe = ""                   # the app in front when watching began
         self._on_done: Optional[Callable[[List[str]], None]] = None
 
     @property
@@ -210,6 +253,10 @@ class Recorder:
 
     def start(self, phrase: str, on_done: Optional[Callable[[List[str]], None]] = None) -> bool:
         if os.name != "nt" or not config.get("learning.watch_and_learn", True):
+            return False
+        from core.game_mode import game_mode
+        if game_mode.active:                  # never poll the keyboard while a game runs
+            log.info("learning.watch.skipped game_mode game=%r", game_mode.game)
             return False
         if self.active:
             self.stop("restart")
@@ -230,7 +277,7 @@ class Recorder:
         self._thread = None
         with self._lock:
             events = list(self.events)
-        steps = summarize(events)
+        steps = summarize(events, self._ignore_exe())
         log.info("learning.watch.stop reason=%s events=%d steps=%r", reason, len(events), steps)
         return steps
 
@@ -248,9 +295,15 @@ class Recorder:
                 with self._lock:
                     events = list(self.events)
                 try:
-                    cb(summarize(events))
+                    cb(summarize(events, self._ignore_exe()))
                 except Exception:
                     log.exception("learning.watch.on_done_failed")
+
+    def _ignore_exe(self) -> str:
+        """The starting app, unless the lesson is about it ("show me how to split Code's window")."""
+        exe = self.start_exe
+        return "" if not exe or _similar(exe, self.phrase) or any(
+            _similar(exe, w) for w in self.phrase.split() if len(w) >= 4) else exe
 
     def _add(self, e: Event):
         with self._lock:
@@ -288,6 +341,12 @@ class Recorder:
         except Exception:
             screen_name = {}
         fg = user32.GetForegroundWindow()
+        self.start_exe = ""
+        if fg and not self._is_own(fg, own, win32process):
+            try:
+                self.start_exe = exe_of_pid(win32process.GetWindowThreadProcessId(fg)[1])
+            except Exception:
+                pass
         held = {vk: bool(user32.GetAsyncKeyState(vk) & 0x8000) for vk in list(_KEYS) + list(_MODS) + [1, 2]}
         press_pos = {}
         seen = {}
@@ -506,17 +565,31 @@ def _remember_programs(steps: List[str], events: List[Event]):
 def learn_from(phrase: str, steps: List[str], events: Optional[List[Event]] = None) -> str:
     """Save what was seen as a skill and say what was learned."""
     from modules.learning.planner import understood
-    from modules.learning.skills import skills
     if events:
         _remember_programs(steps, events)
-    good = [s for s in steps if understood(s)]
+    known = [s for s in steps if understood(s)]
+    skipped = len(known) < len(steps)            # things it saw but can't repeat
+    good = focus_on_goal(phrase, known)
     if not good:
         return "I didn't see anything I know how to repeat, so I haven't learned that one."
+    if len(good) > int(config.get("learning.review_over_steps", 3)):
+        # A long lesson is easy to get wrong (stray clicks, going back to your
+        # work): read it back and only keep it on "yes".
+        from modules.agent.confirm import PendingAction, confirmations
+        confirmations.ask(PendingAction(f"remember those {len(good)} steps",
+                                        lambda: _save(phrase, good, skipped), tool="learning.learn"))
+        return (f"I saw {len(good)} steps: {', then '.join(good)}. Should I remember all of that "
+                f"for “{phrase}”?")
+    return _save(phrase, good, skipped)
+
+
+def _save(phrase: str, good: List[str], skipped: bool = False) -> str:
+    from modules.learning.skills import skills
     skill = skills.learn(phrase, good, "shown")
     if skill is None:
         return "Okay."
     what = ", then ".join(good)
-    note = " Some of what you did I can't repeat, so I left it out." if len(good) < len(steps) else ""
+    note = " Some of what you did I can't repeat, so I left it out." if skipped else ""
     text = (f"Got it. Next time you say “{skill.said or phrase}”, I'll {what}.{note} "
             "Say “forget that” if I got it wrong.")
     global _last_result

@@ -63,7 +63,9 @@ class Agent:
         if demonstration.recorder.active and learning.is_done(text):
             log.info("agent.intent learning.done")
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.done", "text": text[:80]})
-            return AgentResult(demonstration.finish(), "learning.done")
+            text = demonstration.finish()
+            # A long lesson is read back and needs a "yes" (demonstration.learn_from).
+            return AgentResult(text, "learning.done", expects_reply=confirmations.pending is not None)
         if learning.is_done(text) and demonstration.just_finished():
             # It had already stopped (15 quiet seconds) and saved what it saw.
             return AgentResult("I'd already stopped watching. " + demonstration.just_finished(), "learning.done")
@@ -282,7 +284,7 @@ class Agent:
         try:
             from modules.agent.dictate import dictation
             from modules.agent.confirm import choices
-            if dictation.active or confirmations.pending is not None or choices.pending is not None:
+            if dictation.active or confirmations.can_answer(text) or choices.pending is not None:
                 return True
             from modules.agent.meta import match_meta
             if match_meta(text) is not None:

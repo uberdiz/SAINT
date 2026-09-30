@@ -67,7 +67,7 @@ def run_tool(tool: str, describe: str, on_ok: Callable[[object], str], **kwargs)
 
 
 # "right" is only filler as "Right, ..." — "right click the desktop" is a command.
-_FILLERS = re.compile(r"^(?:oh my (?:gosh|god|goodness)|all right|actually|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|"
+_FILLERS = re.compile(r"^(?:oh my (?:gosh|god|goodness)|all right|actually|whoa|woah|oh|um+|uh+|so|okay|ok|well|hmm+|and|but|"
                       r"also|wait|alright|right(?=[,.!])|yes|yeah|yep|sure|just|wow|dude|bro)[,.!\s]+",
                       re.I)
 
@@ -104,11 +104,24 @@ def _clean(text: str) -> str:
     t = re.sub(r"\bdisk,?\s+clean[\s-]?up\b", "disk cleanup", t, flags=re.I)
     t = re.sub(r"\b(?:voice\s?meeter|voice\s?meter|voicemeter)\b", "voicemeeter", t, flags=re.I)
     t = spell_out(t)
+    # "Use my browser, make a new tab, and search for X" (2026-09-29, went to the model, which
+    # answered with code): the lead-in only says where; the steps after it say what.
+    t = re.sub(r"^(?:use|in|on)\s+(?:my|the)\s+(?:web\s+)?browser\s*,\s*(?=(?:and\s+)?(?:make|open|"
+               r"create|start|search|go|new)\b)", "", t, flags=re.I)
     for _ in range(3):   # "Actually, um, what time is it?"
         t2 = _FILLERS.sub("", t)
         if t2 == t:
             break
         t = t2
+    # A stutter: "Close, close, CS2" -> "close CS2" (logged 2026-09-26, rejected as chatter).
+    t = re.sub(r"^(\w+)(?:[,.\s]+\1\b)+[,.]?", r"\1", t, flags=re.I)
+    # SAINT only ever recycles, so "move/put X in the recycle bin" is "delete X".
+    t = re.sub(r"^(?:move|put|send|throw)\s+(.+?)\s+(?:in|into|to)\s+(?:the\s+)?(?:recycle bin|trash|bin)$",
+               r"delete \1", t.rstrip(".!"), flags=re.I)
+    # A bare playlist name answers "which playlist?" / repairs a mishearing: "My gym playlist."
+    t = re.sub(r"^(?:my|the)\s+([\w' &-]{1,40}?)\s+playlist[.!]*$", r"play my \1 playlist", t, flags=re.I)
+    # "Smaller." / "Bigger." right after a window action.
+    t = re.sub(r"^(bigger|smaller|wider|narrower|taller|shorter)[.!]*$", r"make it \1", t, flags=re.I)
     t = re.sub(r"^(?:can you|could you|would you|will you|please|can u|i want you to|i'd like you to|"
                r"i want to|go ahead and|let's|lets)\s+", "", t, flags=re.I)
     t = re.sub(r"^(?:please)\s+", "", t, flags=re.I)
@@ -415,6 +428,91 @@ _NO_MORE = re.compile(r"^(?:no more|ban|block|stop recommending|don'?t play(?: m
                       r"(?:songs by\s+|music by\s+)?(.+?)(?:\s+(?:anymore|any more|again|please))?$")
 
 
+# "Queue more songs like this" / "cue some more like this" / "more like this": keep the
+# song that's playing and fill the queue (it used to skip to a new song and add one more).
+_QUEUE_SIMILAR = re.compile(
+    r"^(?:(?:can you|could you|please)\s+)?(?:queue|cue|q|add|put|throw|line)(?:\s+up)?\s+(?:me\s+)?"
+    r"(?:(?P<n>\d+|a few|a couple(?: of)?|some|some more|three|four|five|six|seven|eight|nine|ten)\s+)?(?:more\s+)?"
+    r"(?:songs?|tracks?|music|stuff|ones?|bangers)?\s*(?:like|similar to)\s+"
+    r"(?:this|that|it|this one|that one|this song|that song|this track|what'?s playing)(?:\s+(?:one|song|track))?"
+    r"(?:\s+(?:to|in|into|on)\s+(?:the |my )?queue)?(?:\s+(?:please|for me))?$|"
+    r"^(?:(?:play|give me|let'?s (?:hear|get))\s+)?(?:some\s+)?more\s+(?:songs?\s+|music\s+|tracks?\s+|stuff\s+)?"
+    r"like\s+(?:this|that)(?:\s+(?:one|song|track))?(?:\s+(?:please|next|after this|after it))?$|"
+    r"^keep (?:it )?going with (?:more )?(?:songs? |music )?like (?:this|that)(?: one)?$|"
+    r"^(?:add|queue|cue)\s+(?:some\s+)?(?:similar|more)\s+(?:songs?|tracks?|music)(?:\s+(?:to|in)\s+(?:the |my )?queue)?$")
+_COUNT_WORDS = {"a few": 5, "a couple": 3, "a couple of": 3, "some": 5, "some more": 5, "three": 3, "four": 4,
+                "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+
+# Mood -> a queue built from scratch out of the user's own listening (spotify.play_recommended).
+_MOOD_SYNONYMS = {
+    "sad": "sad", "down": "sad", "depressed": "sad", "heartbroken": "sad", "lonely": "sad", "blue": "sad",
+    "emotional": "sad", "in my feelings": "sad",
+    "chill": "chill", "chilled": "chill", "relaxed": "chill", "calm": "chill", "mellow": "chill", "tired": "chill",
+    "sleepy": "chill", "stressed": "chill", "anxious": "chill", "lazy": "chill", "cozy": "chill", "vibing": "chill",
+    "happy": "happy", "good": "happy", "great": "happy", "cheerful": "happy", "upbeat": "happy",
+    "hype": "energetic", "hyped": "energetic", "pumped": "energetic", "energetic": "energetic",
+    "turnt": "energetic", "gym": "energetic", "workout": "energetic", "working out": "energetic",
+    "lifting": "energetic", "running": "energetic",
+    "focus": "focus", "focused": "focus", "studying": "focus", "study": "focus", "working": "focus",
+    "reading": "focus", "coding": "focus", "productive": "focus",
+    "party": "party", "partying": "party", "pregame": "party", "pregaming": "party", "lit": "party",
+    "romantic": "romantic", "in love": "romantic", "love": "romantic",
+    "angry": "angry", "mad": "angry", "pissed": "angry", "pissed off": "angry", "furious": "angry",
+    "dark": "darker", "darker": "darker", "moody": "darker", "gloomy": "darker",
+}
+_MOOD_ALT = "|".join(sorted((re.escape(k) for k in _MOOD_SYNONYMS), key=len, reverse=True))
+_FEELING = re.compile(rf"^(?:i'?m|i am|i feel|feeling|i'?m feeling|i am feeling)\s+(?:so\s+|really\s+|kinda\s+|pretty\s+|"
+                      rf"a (?:bit|little)\s+)?(?:in (?:a|the)\s+)?(?P<m>{_MOOD_ALT})(?:\s+(?:mood|mode|vibe))?"
+                      rf"(?:\s+(?:right now|today|tonight|rn))?"
+                      rf"(?:[,.]?\s+(?:so\s+)?(?:play|put on|queue up|give me|make me)\b.*)?$")
+_MOOD_QUEUE = re.compile(
+    rf"^(?:play|put on|queue up|make|build|create|give|set up|start)\s+(?:me\s+)?(?:a\s+|an\s+|some\s+)?(?:new\s+)?"
+    rf"(?P<m>{_MOOD_ALT})\s+(?:queue|playlist|mix|set|session|music|songs|vibes?)(?:\s+(?:for me|from scratch))?$|"
+    rf"^(?:play|put on|queue up)\s+(?:me\s+)?(?:something|some music|music|songs)\s+(?:for|to)\s+(?:the\s+|my\s+)?"
+    rf"(?P<m2>gym|workout|working out|study|studying|focus|work|working|party|partying|relax|relaxing|chill|"
+    rf"chilling|sleep|coding|reading|pregame|pregaming)$")
+_MOOD_AUTO = re.compile(
+    r"^(?:play|put on|queue up|make|build|create|give|pick)\s+(?:me\s+)?(?:something|some music|music|songs|a queue|"
+    r"a mix|a playlist|a new queue)\s+(?:for|to match|that (?:fits|matches)|based on|for how i'?m feeling|"
+    r"that fits how i feel)(?:\s+(?:my|the))?(?:\s+(?:mood|vibe|feeling))?$|"
+    r"^(?:match|read|fit) my (?:mood|vibe)$|^(?:make|build|create|start) (?:me )?(?:a )?(?:new )?queue"
+    r"(?: from scratch)?(?: for me)?$|^(?:play|put on) something for (?:my|the) (?:mood|vibe)$")
+_WORD_NUM = {"ten": 10, "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+             "eighty": 80, "ninety": 90, "hundred": 100, "a hundred": 100, "one hundred": 100}
+_UNITS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9}
+
+
+def _mood_request(lower: str) -> Optional[str]:
+    """'I'm feeling sad', 'make me a chill queue', 'play something for my mood' -> a mood ('auto' = infer)."""
+    if _MOOD_AUTO.match(lower):
+        return "auto"
+    m = _MOOD_QUEUE.match(lower)
+    if m:
+        return _MOOD_SYNONYMS.get(m.group("m") or "", None) or {
+            "gym": "energetic", "workout": "energetic", "working out": "energetic", "party": "party",
+            "partying": "party", "pregame": "party", "pregaming": "party", "sleep": "chill", "relax": "chill",
+            "relaxing": "chill", "chill": "chill", "chilling": "chill"}.get(m.group("m2") or "", "focus")
+    m = _FEELING.match(lower)
+    if m:
+        from modules.agent.context import desktop_context
+        # "I'm tired" is conversation. "I'm feeling sad" while music plays, or "..., play something", is a request.
+        if re.search(r"\b(play|put on|queue|give me|make me)\b", lower) or (
+                re.search(r"\b(feel|feeling|mood|vibe)\b", lower) and desktop_context.music_is_context()):
+            return _MOOD_SYNONYMS[m.group("m")]
+    return None
+
+
+def _spoken_volume(lower: str) -> str:
+    """'turn it up to AD' (Whisper's "eighty"), 'volume to seventy five' -> digits."""
+    lower = re.sub(r"\bto (?:a\.?d\.?|a d|eddie|80s)$", "to 80", lower)
+
+    def num(m):
+        tens = _WORD_NUM.get(m.group(1), 0)
+        return str(tens + _UNITS.get(m.group(2) or "", 0))
+    return re.sub(r"\b(ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|(?:a |one )?hundred)"
+                  r"(?:[\s-](one|two|three|four|five|six|seven|eight|nine))?\b(?=\s*(?:%|percent)?$)", num, lower)
+
+
 def _dj_intent(lower: str) -> Optional[SpotifyIntent]:
     """DJ mode: steer what plays by mood, the last song, novelty or artist bans."""
     if re.fullmatch(r"(?:dj|dj mode|be my dj|start dj mode|you'?re the dj|play dj)", lower):
@@ -476,6 +574,20 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         return SpotifyIntent("next_reject", "spotify.next", {})
     if _CHANGE_TRACK.match(lower):
         return SpotifyIntent("next", "spotify.next", {})
+
+    # --- "queue more songs like this": keep playing, fill the queue --------------------------
+    m = _QUEUE_SIMILAR.match(lower)
+    if m:
+        n = m.group("n")
+        count = int(n) if n and n.isdigit() else _COUNT_WORDS.get(n or "", 5)
+        return SpotifyIntent("queue_similar", "spotify.queue_similar", {"count": max(1, min(10, count))})
+    if has(r"^(?:stop|turn off|disable|cancel|no more)\s+(?:the\s+)?(?:auto[- ]?queu(?:e|ing)|radio|"
+           r"queu(?:e|ing) (?:more )?songs|adding (?:more )?songs)(?:\s+(?:to the queue|automatically))?$"):
+        return SpotifyIntent("stop_autoqueue", "spotify.stop_autoqueue", {})
+    # --- a queue built from scratch for a mood ("I'm feeling sad", "make me a chill queue") ----
+    mood = _mood_request(lower)
+    if mood:
+        return SpotifyIntent("mood", "spotify.play_recommended", {"mood": mood})
 
     # --- DJ mode ("more energetic", "something darker", "more like the last song") ----------
     dj = _dj_intent(lower)
@@ -552,8 +664,10 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     if has(r"^(i (?:really )?(?:like|love|dig) (?:this|this song|this track|it)|this (?:song|track) is (?:great|good|fire)|"
            r"thumbs up)$"):
         return SpotifyIntent("like", "spotify.feedback", {"signal": 1.0})
-    if has(r"^(i (?:don'?t|do not) like (?:this|this song|this track|it)|i hate (?:this|this song)|thumbs down|"
-           r"this (?:song|track) (?:sucks|is bad)|don'?t (?:play|recommend) (?:this|songs like this))"):
+    # Anchored: "I hate this game" (logged 2026-09-29, mid-match) is not about the song.
+    if has(r"^(i (?:don'?t|do not) like (?:this|this song|this track|it)|i hate (?:this|this song|this track|it)|"
+           r"thumbs down|this (?:song|track) (?:sucks|is bad)|don'?t (?:play|recommend) (?:this|songs like this))"
+           r"(?:\s+(?:song|track|one|at all|anymore|any more))?$"):
         return SpotifyIntent("dislike", "spotify.feedback", {"signal": -1.0})
 
     # --- add current to playlist ------------------------------------------------
@@ -565,8 +679,8 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         return SpotifyIntent("add_to_playlist", "spotify.add_current_to_playlist", {"playlist": m.group(1).strip()})
 
     # --- queue ----------------------------------------------------------------------
-    m = re.search(r"^(?:queue(?: up)?|add) (.+?) (?:to (?:the|my) queue|next)$", lower) or \
-        re.search(r"^queue(?: up)? (.+)$", lower) or re.search(r"^play (.+?) next$", lower)
+    m = re.search(r"^(?:queue(?: up)?|cue(?: up)?|add) (.+?) (?:to (?:the|my) queue|next)$", lower) or \
+        re.search(r"^(?:queue|cue)(?: up)? (.+)$", lower) or re.search(r"^play (.+?) next$", lower)
     if m and not has(r"^play (the )?next\b"):
         return SpotifyIntent("queue", "spotify.queue", {"query": m.group(1).strip()})
 
@@ -588,14 +702,17 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         return SpotifyIntent("pause", "spotify.pause", {})
 
     # --- volume ---------------------------------------------------------------------
-    vol = re.search(r"\bvolume\b.*?(\d{1,3})", lower) or re.search(r"\bset (?:the )?(?:music |spotify )?volume (?:to )?(\d{1,3})", lower) \
-        or re.search(r"\bturn (?:it|the music|spotify|the volume) (?:up |down )?to (\d{1,3})", lower)
+    vl = _spoken_volume(lower)
+    vol = re.search(r"\bvolume\b.*?(\d{1,3})", vl) or re.search(r"\bset (?:the )?(?:music |spotify )?volume (?:to )?(\d{1,3})", vl) \
+        or re.search(r"\b(?:turn|put|set|bring) (?:it|this|the music|spotify|the volume|the song)? ?(?:up |down |back )?to (\d{1,3})", vl) \
+        or re.search(r"^(?:turn|put|bring) (?:it )?(?:up|down|back) to (\d{1,3})", vl)
     if vol:
         return SpotifyIntent("volume_set", "spotify.volume", {"percent": max(0, min(100, int(vol.group(1))))})
     musical = has(r"\b(music|song|spotify|track|tune)\b") or desktop_context.music_is_context()
-    if musical and has(r"\b(volume up|louder|turn (it|the music|spotify|the volume|the song) up|turn up (the |my )?(music|volume|song|spotify)|crank it)\b"):
+    # "Turn this up!", "lower volume." went to the planner (an LLM call) on 2026-09-29.
+    if musical and has(r"\b(volume up|louder|turn (it|this|the music|spotify|the volume|the song) up|turn up (the |my )?(music|volume|song|spotify)|crank it|(raise|increase) (the )?volume)\b"):
         return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up"})
-    if musical and has(r"\b(volume down|quieter|softer|turn (it|the music|spotify|the volume|the song) down|turn down (the |my )?(music|volume|song|spotify)|lower the volume)\b"):
+    if musical and has(r"\b(volume down|quieter|softer|turn (it|this|the music|spotify|the volume|the song) down|turn down (the |my )?(music|volume|song|spotify)|(lower|decrease|reduce) (the )?volume)\b"):
         return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down"})
 
     # --- shuffle / repeat -------------------------------------------------------
@@ -608,6 +725,11 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     # --- resume -------------------------------------------------------------------
     if has(r"^(resume|unpause|continue)\b") and (wc <= 3 or has(r"\b(music|song|spotify|playback|playing)\b")) \
             or lower in ("play", "play music", "play spotify", "play the music", "start the music", "keep playing"):
+        return SpotifyIntent("resume", "spotify.play", {})
+    # "Press play on Spotify" / "hit play" / "play my Spotify" (logged 2026-09-28: went to the
+    # planner, which tried a key press, and "my Spotify" was taken for a playlist name).
+    if has(r"^(?:press|hit|click|tap|push)(?: the)? play(?: button)?(?: (?:on|in) (?:my |the )?spotify)?$") \
+            or has(r"^(?:play|start) (?:on |in )?(?:my |the )?spotify(?: again)?$"):
         return SpotifyIntent("resume", "spotify.play", {})
 
     # --- recommendations -------------------------------------------------------
@@ -637,7 +759,12 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
 
     if re.match(r"^(my )?(liked songs|liked music|favou?rites|favou?rite songs|saved songs|library)$", q):
         return SpotifyIntent("liked", "spotify.play_liked", {})
-    pm = re.match(r"^(?:my |the )?(.+?) playlist$", q_orig, re.I) or re.match(r"^(?:the )?playlist (.+)$", q_orig, re.I) \
+    if re.match(r"^(?:my|a|one of my|the)\s+playlists?$", q):
+        # No name given: ask which (it used to play a stranger's playlist called "£").
+        return SpotifyIntent("choose_playlist", "spotify.playlists", {})
+    # "a playlist called Dominican Dembow", "a Spanish playlist", "my gym playlist"
+    pm = re.match(r"^(?:my |the |a |an |some )?playlist (?:called |named |titled )?(.+)$", q_orig, re.I) \
+        or re.match(r"^(?:my |the |a |an |some )?(.+?) playlist$", q_orig, re.I) \
         or re.match(r"^my (?!music$|songs$)(.+)$", q_orig, re.I)
     if pm:
         args = {"query": pm.group(1).strip(), "kind": "playlist"}
@@ -693,6 +820,10 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
         if r.get("fallback"):
             return ("Smart Shuffle is only available in the Spotify app, which isn't open, so I turned on "
                     "regular shuffle instead." if r.get("shuffle") else "Shuffle off.")
+        if r.get("unsupported"):
+            return ("Spotify only does Smart Shuffle on a playlist or your Liked Songs. "
+                    + ("I'm already queueing songs like this one." if r.get("autoqueue") else
+                       "Say “queue more songs like this” and I'll keep similar songs coming."))
         if not r.get("verified", True):
             return "I tried to switch Smart Shuffle, but Spotify didn't confirm the change."
         return "Smart Shuffle is on." if r.get("smart") else "Smart Shuffle is off."
@@ -719,6 +850,16 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
         return f"Added {r['track']} by {r['artist']} to {r['playlist']}."
     if k == "queue":
         return f"Queued {r['name']}" + (f" by {r['artist']}." if r.get("artist") else ".")
+    if k == "queue_similar":
+        first = r["names"][0] if r.get("names") else ""
+        return (f"Queued {r['count']} songs like {r['seed']}" + (f", starting with {first}" if first else "")
+                + ". I'll keep adding more as they play.")
+    if k == "stop_autoqueue":
+        return "Okay, I'll stop adding songs." if r.get("stopped") else "I wasn't adding songs to the queue."
+    if k == "mood":
+        mood = r.get("mood") or "your"
+        return (f"Here's a {mood} queue from your own listening: {r['name']} by {r['artist']}, "
+                f"with {r['count'] - 1} more lined up. I'll keep it going.")
     if k == "liked":
         return f"Playing your liked songs ({r['count']} tracks, shuffled)."
     if k == "similar_seed":
@@ -770,9 +911,29 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
     if kind == "album":
         return f"Playing the album {r['name']} by {r['artist']}."
     if kind == "genre":
-        return f"Playing {r['genre']} — {r['name']}." if r.get("name") and "tracks" not in r["name"] \
+        return f"Playing {r['genre']} — the {r['name']} playlist." if r.get("name") and "tracks" not in r["name"] \
             else f"Playing some {r['genre']}, starting with {r.get('first')}."
+    if r.get("radio"):
+        return f"Playing {r['name']} by {r['artist']}, and I'll queue up more like it."
     return f"Playing {r['name']} by {r['artist']}."
+
+
+def _ask_playlist(result) -> Reply:
+    """"Play my playlist" with no name: offer the user's own playlists."""
+    names = [p["name"] for p in (result or {}).get("playlists", []) if p.get("name")][:5]
+    if not names:
+        return Reply("I couldn't find any playlists of yours on Spotify.", ok=False)
+    if len(names) == 1:
+        res = call("spotify.play_query", query=names[0], kind="playlist", own_only=True)
+        return Reply(f"Playing {names[0]}." if res.success else res.error, ok=res.success)
+    from modules.agent.confirm import ChoiceOption, PendingChoice, choices
+
+    def play(name):
+        res = call("spotify.play_query", query=name, kind="playlist", own_only=True)
+        return f"Playing {name}." if res.success else res.error
+    question = f"Which playlist? {', '.join(names[:-1])} or {names[-1]}?"
+    choices.ask(PendingChoice(question, [ChoiceOption(n, n, n) for n in names], play))
+    return Reply(question, expects_reply=True)
 
 
 def parse_spotify(text: str) -> Optional[Intent]:
@@ -830,16 +991,28 @@ def parse_spotify(text: str) -> Optional[Intent]:
                 return Reply(f"{res.error} Want me to play a public one? If yours has another name, say "
                              f"“no, I meant my … playlist” and I'll remember it.", ok=True, expects_reply=True)
             return Reply(res.error, ok=False)
+        if si.kind == "choose_playlist":
+            return _ask_playlist(res.result)
         reply = Reply(_spotify_reply(si, res.result))
         if si.kind == "search":
             items = [x for x in ((res.result.get("tracks") or {}).get("items") or []) if x]
             if items:
                 first = items[0]
+                from modules.agent.confirm import ChoiceOption, PendingChoice, choices
+
+                def play_item(item):
+                    choices.clear()
+                    r2 = call("spotify.play", uri=item["uri"])
+                    return f"Playing {item['name']}." if r2.success else r2.error
 
                 def play_found():
-                    r2 = call("spotify.play", uri=first["uri"])
-                    return f"Playing {first['name']}." if r2.success else r2.error
+                    return play_item(first)
                 confirmations.ask(PendingAction(f"play {first['name']}", play_found, tool="spotify.play"))
+                # "Yes" plays the first; "the second one" / "play the third song" picks from the list.
+                choices.ask(PendingChoice(reply.text, [
+                    ChoiceOption(x.get("name", ""), " ".join([x.get("name", "")] + [
+                        a.get("name", "") if isinstance(a, dict) else str(a) for a in (x.get("artists") or [])]
+                        + [str(x.get("artist") or "")]), x) for x in items[:5]], play_item))
                 reply.text += " Want me to play the first one?"
                 reply.expects_reply = True
         if si.kind == "recommend" and res.result["recommendations"]:
@@ -1056,6 +1229,12 @@ def parse_desktop(text: str) -> Optional[Intent]:
         target = m.group(2)
         enter = bool(re.search(r"and (press|hit) enter$", t))
         if target and target.lower() in ("it", "this", "here"):
+            target = None
+        if target and (len(target.split()) > 4 or re.search(r"[?]|\b(?:i|me|my room|how|what|why|would|could|"
+                                                            r"should|through|because|about|doing)\b", target, re.I)):
+            # "type I want to turn off the lights in my room through my PC, how would I..." is
+            # one sentence to type, not text for a box called "my room through my PC..." (2026-09-29).
+            text_to_type = re.sub(r"\s+and (?:press|hit) enter$", "", raw[m.start(1):], flags=re.I).strip().strip('"“”')
             target = None
         kwargs = {"text": text_to_type, "press_enter": enter}
         if target:
@@ -1447,10 +1626,22 @@ def route(text: str) -> Optional[Intent]:
             intent = None
         if intent:
             return intent
+    # "Open YouTube on my main screen" = open it, then move it there (logged
+    # 2026-09-28: said three times, never understood).
+    m = _ON_SCREEN.match(_clean(text))
+    if m and route_single(m.group(1)) is not None:
+        placed = _route_composite(f"{m.group(1)} then move it to my {m.group(2)}")
+        if placed:
+            return placed
     composite = _route_composite(text)
     if composite:
         return composite
     return route_single(text)
+
+
+_ON_SCREEN = re.compile(r"^((?:open|launch|start|pull up|bring up)\s+.+?)\s+on\s+(?:my\s+|the\s+)?"
+                        r"((?:main|primary|first|second|third|left|right|other|middle|\d)\s*"
+                        r"(?:screen|monitor|display))$", re.I)
 
 
 _RETRYABLE = ("can't see", "isn't visible", "hasn't loaded", "hasn't changed", "nothing visibly changed",
@@ -1576,6 +1767,16 @@ def _route_composite(text: str) -> Optional[Intent]:
     cleaned = _clean(text)
     parts = [p.strip() for p in re.split(r",?\s+(?:and then|then|and also|after that|and)\s+|,\s+", cleaned, flags=re.I)
              if p.strip()]
+    # "search for Backboard Defense codes, training pack codes": text after a search / type
+    # step that doesn't start a new command belongs to that step's words.
+    merged: List[str] = []
+    for p in parts:
+        if merged and re.match(r"^(?:search|google|look up|type|write)\b", merged[-1], re.I) \
+                and not _NEXT_VERB.match(" " + p) and not re.match(r"^(?:then|and)\b", p, re.I):
+            merged[-1] = f"{merged[-1]}, {p}"
+        else:
+            merged.append(p)
+    parts = merged
     if len(parts) > 8:
         return None
     # Parse each step in the context the earlier steps will create: after

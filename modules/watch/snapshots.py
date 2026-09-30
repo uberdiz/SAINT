@@ -60,7 +60,10 @@ def take() -> Snapshot:
     from modules.desktop.controller import desktop
     wins = {w.hwnd: (w.process, w.title, w.monitor) for w in desktop.list_windows() if w.title != "SAINT"}
     screens = {}
-    if config.get("watch.screen_hash", True):
+    from core.game_mode import game_mode
+    # No screen capture while a game runs: it stutters the game and some
+    # anti-cheats flag programs that grab the screen.
+    if config.get("watch.screen_hash", True) and not game_mode.active:
         try:
             from PIL import ImageGrab
             for m in desktop.monitors():

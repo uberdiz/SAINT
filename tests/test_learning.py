@@ -570,3 +570,39 @@ def test_no_plan_hands_over_to_the_model_then_offers_to_learn(monkeypatch):
     assert ai._offer_to_learn("add this song to my party playlist",
                               {"tool_calls": [{"tool": "spotify.add_current_to_playlist", "success": True}]},
                               said.append) == ""
+
+
+# ---- 2026-09-28: the Bloxstrap lesson kept stray clicks in the editor -------------------------
+
+def test_open_lesson_keeps_only_the_step_that_opened_it():
+    from modules.learning.demonstration import focus_on_goal
+    steps = ["switch to Bloxstrap", "click MANUAL_TESTING.md", "click preview", "open Bloxstrap", "switch to Python"]
+    assert focus_on_goal("open blockstrap", steps) == ["open Bloxstrap"]
+    assert focus_on_goal("launch block strap", ["switch to Bloxstrap", "click Launch"]) == ["switch to Bloxstrap"]
+
+
+def test_going_back_to_your_work_is_not_part_of_the_lesson():
+    from modules.learning.demonstration import focus_on_goal
+    steps = ["open Disk Cleanup", "click Clean up system files", "switch to Python"]
+    assert focus_on_goal("clean up my system files", steps) == steps[:2]
+
+
+def test_clicks_in_the_app_you_started_from_are_ignored():
+    from modules.learning.demonstration import Event, summarize
+    events = [Event("click", 1.0, app="Code", exe="code", name="MANUAL_TESTING.md"),
+              Event("launch", 2.0, app="Bloxstrap", exe="bloxstrap"),
+              Event("focus", 5.0, app="Code", exe="code")]
+    assert summarize(events, ignore_exe="code") == ["open Bloxstrap"]
+    assert "click MANUAL_TESTING.md" in summarize(events)
+
+
+def test_a_long_lesson_is_read_back_before_it_is_kept(monkeypatch):
+    from modules.agent.confirm import confirmations
+    from modules.learning import demonstration
+    saved = []
+    monkeypatch.setattr(demonstration, "_save", lambda phrase, good, skipped=False: saved.append(good) or "Got it.")
+    monkeypatch.setattr("modules.learning.planner.understood", lambda s: True)
+    steps = ["open Steam", "click Library", "click Rounds", "click Play", "press enter"]
+    text = demonstration.learn_from("get rounds going", steps)
+    assert "Should I remember" in text and not saved and confirmations.pending is not None
+    assert confirmations.resolve("yes") == "Got it." and saved == [steps]

@@ -98,6 +98,8 @@ def launch(name: str):
     if not g.registered:
         raise ToolError(f"{g.name} is in {g.library}, which Steam doesn't know about yet, so it can't start it. "
                         f"Add that folder in Steam > Settings > Storage and it'll launch.", "UNREGISTERED_LIBRARY")
+    from core.game_mode import game_mode
+    game_mode.expect_launch(g.name)          # overlays off before the game's anti-cheat starts
     _open(f"steam://rungameid/{g.appid}")
     return {"launched": g.name, "appid": g.appid}
 

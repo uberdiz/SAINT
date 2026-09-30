@@ -98,7 +98,10 @@ def _notifications(t: str, raw: str) -> Optional[Intent]:
     if re.match(r"^(?:read|check|show|what are)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:new\s+|latest\s+|recent\s+)?"
                 r"notifications$|^(?:do i have\s+)?any\s+(?:new\s+)?notifications$|^what did i get$", t):
         return Intent("notifications.read", lambda: _say(call("notifications.read")), "notifications")
-    if re.match(r"^(?:clear|dismiss|mark(?:\s+all)?(?:\s+as)?\s+read)\s+(?:all\s+)?(?:my\s+|the\s+)?notifications$", t):
+    # "Close that notification" is about a notification, never an app ("close that
+    # notification" once turned into "Do you want me to close Claude?").
+    if re.match(r"^(?:clear|dismiss|close|hide|get rid of|mark(?:\s+all)?(?:\s+as)?\s+read)\s+(?:all\s+)?"
+                r"(?:my\s+|the\s+|that\s+|this\s+|these\s+|those\s+)?(?:windows\s+)?(?:notifications?|pop-?ups?|toasts?)$", t):
         return Intent("notifications.clear", lambda: _say(call("notifications.clear")), "notifications")
     if re.match(r"^(?:only\s+(?:tell|notify)\s+me\s+(?:about\s+)?important\s+(?:ones|notifications)|"
                 r"only important notifications)$", t):

@@ -46,7 +46,16 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
-**Latest — SAINT remembers what just happened:**
+**Latest — Game Mode, Better Listening & Dialog State:**
+
+- **Game Mode:** SAINT automatically detects fullscreen and protected games. It hides overlays (like the Halo), pauses screen hashing, and prevents input injection so it stays out of your game's way and avoids anti-cheat flags. Settings restore when the game exits.
+- **Short-Answer & Dialog Fixes:** A new dialog state machine fixes the dropped "yes/no" answers. SAINT now listens better for single-word replies during follow-ups, with shortened end-of-speech waits and clear countdown indicators when waiting for your choice.
+- **Improved Follow-ups:** Follow-up commands automatically strip filler words ("uh", "yeah"), and you can reference items naturally (like "the second song" for Spotify results).
+- **Better Demonstrations:** The demonstration recorder now filters out unrelated windows and asks you to review steps before saving them.
+- **Packaging Groundwork:** Path resolution, frozen-app support, AppUserModelID, and multi-size taskbar icons are now built-in, laying the foundation for an upcoming standalone EXE installer.
+- **UI & LLM Polish:** Added a "Didn't catch that" visual cue for dropped speech, LLM argument repairs, and output guards to prevent raw tool-syntax from being spoken out loud.
+
+**Earlier — SAINT remembers what just happened:**
 
 - **Short-term memory.** SAINT keeps track of what it did, made or found in the last half hour — the
   screenshot it took, the folder it extracted, what a junk check found, the app it opened, the playlist it

@@ -229,6 +229,29 @@ class SpotifyMemory:
             return json.loads(rows[0]["value"])
         return None
 
+    def track_stats(self, days: int = 60, limit: int = 400) -> List[Dict[str, Any]]:
+        """Songs you've actually played, with how often, how often skipped and
+        your explicit feedback — the raw material for queues built from scratch."""
+        since = time.time() - days * 86400
+        rows = self._query("""
+            SELECT track_id, track_uri, track_name, artist, artist_id, album, COUNT(*) AS plays,
+                   MAX(played_at) AS last_played FROM listening
+            WHERE played_at>=? AND track_id IS NOT NULL AND track_uri IS NOT NULL
+            GROUP BY track_id ORDER BY plays DESC LIMIT ?""", (since, limit))
+        skips = {r["track_id"]: r["n"] for r in self._query(
+            "SELECT track_id, COUNT(*) AS n FROM skips WHERE created_at>=? GROUP BY track_id", (since,))}
+        fb = {r["track_id"]: r["s"] for r in self._query(
+            "SELECT track_id, SUM(signal) AS s FROM feedback WHERE track_id IS NOT NULL GROUP BY track_id")}
+        for r in rows:
+            r["skips"] = skips.get(r["track_id"], 0)
+            r["feedback"] = float(fb.get(r["track_id"]) or 0.0)
+        return rows
+
+    def disliked_track_ids(self) -> set:
+        rows = self._query("SELECT track_id FROM feedback WHERE track_id IS NOT NULL GROUP BY track_id "
+                           "HAVING SUM(signal) <= -0.5")
+        return {r["track_id"] for r in rows}
+
     def skipped_track_ids(self, days: int = 30) -> set:
         rows = self._query("SELECT track_id FROM skips WHERE created_at>=?", (time.time() - days * 86400,))
         return {r["track_id"] for r in rows if r["track_id"]}

@@ -21,6 +21,32 @@ from typing import Optional
 
 from modules.agent.router import Intent, Reply, _clean, run_tool
 
+_GAME_MODE = re.compile(r"\bgam(?:e|ing) mode\b")
+
+
+def _game_mode(t: str) -> Intent:
+    """"game mode on/off", "is game mode on?" (core/game_mode.py)."""
+    def run() -> Reply:
+        from core.game_mode import game_mode
+        if re.match(r"^(?:is|are you in|what'?s)\b", t) or t.endswith(("status", "on or off")):
+            return Reply(f"Game Mode is on for {game_mode.game}." if game_mode.active else "Game Mode is off.")
+        value = _value(t)
+        on = (not game_mode.active) if value == "toggle" else value == "on"
+        game_mode.set_manual(True if on else False)
+        if on:
+            return Reply("Game Mode on. The Halo and pop-ups are off; I'm still listening.")
+        return Reply("Game Mode off.")
+    return Intent("ui.game_mode", run, "ui")
+
+_WHEN_WINDOWS = (r"(?:(?:automatically\s+)?(?:when|with|at|on)\s+(?:windows\s+)?(?:starts?|start ?up|boots?|boot ?up|"
+                 r"log ?in|login|sign ?in|windows)|automatically|at startup|on startup)")
+_AUTOSTART = re.compile(
+    rf"^(?:(?:please|can you|could you)\s+)?(?P<off>don'?t |do not |stop )?(?:start|launch|open|run|boot)(?:ing)?\s+"
+    rf"(?:saint\s+|yourself\s+|up\s+)?{_WHEN_WINDOWS}$|"
+    rf"^(?:(?:please|can you|could you)\s+)?(?:add|put)\s+(?:saint|yourself|you|this app)\s+(?:to|in|into)\s+(?:the\s+|my\s+)?"
+    rf"(?:windows\s+)?startup(?:\s+apps|\s+programs|\s+folder)?$|"
+    rf"^(?:(?:please|can you|could you)\s+)?(?P<off2>remove|take)\s+(?:saint|yourself|you)\s+(?:out of|from|off)\s+(?:the\s+|my\s+)?"
+    rf"(?:windows\s+)?startup(?:\s+apps|\s+programs|\s+folder)?$")
 _OWN = r"(?:saint'?s?|your|the saint)"
 _OFF = r"\b(?:off|hide|close|disable|remove|get rid of|stop showing|turn off|switch off|dismiss)\b"
 _ON = r"\b(?:on|show|open|enable|bring up|bring back|turn on|switch on|put up|display)\b"
@@ -44,6 +70,8 @@ def _set(feature: str, value: str, spoken: str) -> Intent:
 
 
 def _said(feature: str, value: str) -> str:
+    if feature == "lyrics":
+        return {"on": "Lyrics on — they're in the mini player.", "off": "Lyrics off."}.get(value, "Toggled the lyrics.")
     names = {"mini_player": "the mini player", "halo": "the halo", "overlay": "the overlay",
              "action_notices": "action notices", "theme": "the theme"}
     name = names.get(feature, feature)
@@ -74,6 +102,24 @@ def parse_saint_ui(text: str) -> Optional[Intent]:
         return None
     own = bool(re.search(rf"\b{_OWN}\b|\byourself\b", t))
 
+    # ---- start with Windows (core/autostart.py) ------------------------------------------------
+    m = _AUTOSTART.match(t)
+    if m:
+        on = not (m.group("off") or m.group("off2"))
+
+        def run_autostart():
+            from core import autostart
+            ok, message = autostart.set_enabled(on)
+            return Reply(message, ok=ok)
+        return Intent("ui.autostart", run_autostart, "ui")
+
+    # ---- lyrics (in the mini player) ---------------------------------------------------------
+    # "turn on the lyrics for Spotify", "show lyrics", "hide the lyrics" — not "look up the lyrics to X".
+    if re.search(r"\blyrics?\b", t) and not re.search(
+            r"\b(?:search|google|look up|find|what are|what're|what is|what's|write|meaning|mean|translate|"
+            r"read|sing|to the song|of the song|for the song)\b", t) and len(t.split()) <= 9:
+        return _set("lyrics", _value(t), "the lyrics")
+
     # ---- mini player -----------------------------------------------------------------------
     if re.search(r"\bmini ?player\b|\bnow playing widget\b|\bmusic widget\b|\bspotify widget\b", t):
         if re.search(r"\b(youtube|video|clip)\b", t):
@@ -86,6 +132,10 @@ def parse_saint_ui(text: str) -> Optional[Intent]:
             except Exception:
                 pass
         return _set("mini_player", _value(t), "the mini player")
+
+    # ---- game mode (before "halo": "game mode, hide the halo" is about the game) --------------
+    if _GAME_MODE.search(t) and not re.search(r"\b(?:scene|workspace)\b", t):
+        return _game_mode(t)
 
     # ---- halo / overlay / action notices -------------------------------------------------------
     if re.search(r"\bhalo\b", t):

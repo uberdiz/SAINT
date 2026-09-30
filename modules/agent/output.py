@@ -24,7 +24,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 # Text that starts like one of these is held until we know what it is.
 _SUSPECT_START = re.compile(r"^\s*(?:\{|\[|```|`?[a-z_]+__[a-z_]+|<\|?(?:tool|function|python)|functions?\.|"
                             r"\b(?:tool_call|function_call)\b|[a-z_]+__[a-z_]+\s*\(|here'?s how you (?:could|can) "
-                            r"ask)", re.I)
+                            r"ask|here(?:'s| is) (?:the |some |an? )?(?:example )?(?:python |json )?(?:code|function "
+                            r"call|json|snippet|implementation)|(?:python|json)\s*\n)", re.I)
+# "Here is the code that corresponds to the provided specification: python { "type": "function", ...}"
+# (2026-09-28/29): the model narrating a tool call as code. Nothing in it is for the user.
+_CODE_DUMP = re.compile(r"^\s*here(?:'s| is) (?:the |some |an? )?(?:example )?(?:python |json )?(?:code|function call|"
+                        r"json|snippet|implementation)\b|\"type\"\s*:\s*\"function\"|\"parameters\"\s*:", re.I)
 # A tool call written like code: desktop__click_element(name="top left video", action="click")
 _CODE_CALL = re.compile(r"\b([a-z][a-z0-9_]*__[a-z0-9_]+)\s*\(([^()]*)\)", re.I)
 _KWARG = re.compile(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|-?\d+(?:\.\d+)?|true|false|none)", re.I)
@@ -120,6 +125,8 @@ def clean_reply(text: str, user_text: str = "") -> str:
     if not t:
         return t
     wants_code = bool(_CODE_REQUEST.search(user_text or ""))
+    if not wants_code and _CODE_DUMP.search(t) and not pseudo_answer_in(t):
+        return ""
     # A reply that is only a pseudo call wrapping an answer -> the answer.
     objs = _json_objects(_strip_fences(t))
     if objs and not wants_code:
@@ -151,12 +158,31 @@ def clean_reply(text: str, user_text: str = "") -> str:
     t = re.sub(r"\bcomposite[:.][\w.+:]+", " ", t)
     t = re.sub(r"\b(?:spotify|desktop|screen|memory|automation|system|browser|window|vision|voice)(?:__|\.)[a-z_]+\b",
                " ", t)
+    # Talk about its own tools ("Based on the provided functions, it seems like you
+    # want to open YouTube. However, there is no direct function to..." — 2026-09-28).
+    t = re.sub(r"(?:^|(?<=[.!?])\s+)(?:based on (?:the )?(?:provided|available|given|listed) "
+               r"(?:functions?|tools?|information)|(?:however,?\s+)?(?:there (?:is|are) no|i (?:don'?t|do not) "
+               r"have (?:a|any)) (?:direct |specific |available )?(?:functions?|tools?))[^.!?]*[.!?]?", " ", t,
+               flags=re.I)
     # Meta-narration voice-first users don't want to hear.
     t = re.sub(r"^\s*(?:sure|okay|ok|alright|got it),?\s+(?:i'?ll|i will|let me|i'?m going to|i am going to)\s+"
                r"[^.!?\n]{0,120}[.!?]\s*", "", t, flags=re.I)
     t = re.sub(r"[ \t]+", " ", t)
     t = re.sub(r"\s+([.,!?])", r"\1", t).strip()
+    # What's left of a broken JSON call ('{"type":"function","name":" ","parameters }') is not speech.
+    if not wants_code and (t[:1] in "{[" or re.search(r"\"\w+\"\s*:", t) or
+                           (t and sum(ch in "{}[]\":" for ch in t) / len(t) > 0.12)):
+        return ""
     return t
+
+
+def pseudo_answer_in(text: str) -> bool:
+    """A wrapped answer ({"name": "prompt", "parameters": {"result": "..."}}) is worth keeping."""
+    for _s, _e, val in _json_objects(_strip_fences(text)):
+        call = _as_call(val)
+        if call and pseudo_answer(*call):
+            return True
+    return False
 
 
 _ACTION_CLAIM = re.compile(
@@ -203,25 +229,39 @@ def honest(text: str, tool_succeeded: bool) -> str:
     return text
 
 
+# Once a reply is prose it streams sentence by sentence, and each sentence is
+# still checked: "You can use the `automation__schedule_command` function.
+# Here's an example: automation__schedule_command(command=...)" was spoken
+# aloud on 2026-09-25 because everything after the first words passed through.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
+_INTERNAL_BITS = re.compile(r"\b[a-z][a-z0-9]*__[a-z0-9_]+|\b[a-z_][a-z0-9_]*\s*\(\s*[a-z_]+\s*=", re.I)
+
+
 class ReplyGuard:
-    """Streams prose through immediately; holds anything that might be internal.
+    """Streams prose through; holds anything that might be internal.
 
     ``feed`` receives model tokens. While the reply so far could still be a
-    tool call or code block nothing is emitted; once it is clearly prose the
-    buffer is flushed and later tokens pass straight through. ``held`` is the
-    text that was never shown.
+    tool call or code block nothing is emitted; once it is clearly prose it is
+    released a sentence at a time, and a sentence that carries a tool name or
+    a code-style call is dropped (unless the user asked for code). ``held`` is
+    the text that was never shown.
     """
 
     DECIDE_CHARS = 24
+    MAX_PENDING = 240              # release a long sentence without an end at a word boundary
 
-    def __init__(self, emit: Callable[[str], None]):
+    def __init__(self, emit: Callable[[str], None], user_text: str = ""):
         self._emit = emit
         self._buf = ""
+        self._pending = ""
+        self._wants_code = bool(_CODE_REQUEST.search(user_text or ""))
+        self._user_text = user_text
         self._mode = "undecided"     # undecided | pass | hold
 
     def feed(self, tok: str):
         if self._mode == "pass":
-            self._emit(tok)
+            self._pending += tok
+            self._flush()
             return
         self._buf += tok
         if self._mode == "hold":
@@ -238,11 +278,40 @@ class ReplyGuard:
                 self._mode = "hold"
                 return
             self._mode = "pass"
-            self._emit(self._buf)
-            self._buf = ""
+            self._pending, self._buf = self._buf, ""
+            self._flush()
+
+    def _flush(self, final: bool = False):
+        while True:
+            m = _SENTENCE_END.search(self._pending)
+            if not m:
+                break
+            sentence, gap = self._pending[:m.start()], m.group(0)
+            self._pending = self._pending[m.end():]
+            self._release(sentence, gap)
+        if len(self._pending) > self.MAX_PENDING and " " in self._pending:
+            cut = self._pending.rfind(" ")
+            sentence, self._pending = self._pending[:cut], self._pending[cut + 1:]
+            self._release(sentence, " ")
+        if final and self._pending.strip():
+            sentence, self._pending = self._pending, ""
+            self._release(sentence, "")
+
+    def _release(self, sentence: str, gap: str):
+        if self._wants_code:
+            self._emit(sentence + gap)
+            return
+        if _INTERNAL_BITS.search(sentence):
+            return                         # a tool name / call spelled out: never spoken
+        out = clean_reply(sentence, self._user_text)
+        if out:
+            lead = sentence[:len(sentence) - len(sentence.lstrip())]
+            self._emit(lead + out + gap)
 
     def finish(self) -> str:
         """End of a model message. Returns text still held back (not shown)."""
+        if self._mode == "pass":
+            self._flush(final=True)
         held, self._buf = self._buf, ""
         if self._mode == "undecided" and held.strip() and not looks_internal(held) \
                 and not unverified_action_claim(held):

@@ -93,6 +93,12 @@ def grounded(step: str, request: str) -> bool:
                  r"\w+\s+(?:screen|monitor|display))?$", s)
     if m and not _mentioned(m.group(1), r):
         return False
+    # Closing / deleting something the user never named: "close that notification"
+    # was planned as "close Claude" (2026-09-28).
+    m = re.match(r"^(?:close|quit|exit|kill|end|force quit|force close|delete|remove|uninstall|recycle)\s+"
+                 r"(?:the\s+|my\s+)?(.+)$", s)
+    if m and not _mentioned(m.group(1), r) and not _misheard(m.group(1), r):
+        return False
     # Keys the user didn't ask for ("press delete", "press enter" after opening a folder).
     m = re.match(r"^(?:press|hit)\s+(.+)$", s)
     if m and not re.search(r"\b(?:press|hit|key|shortcut)\b", r):
@@ -116,6 +122,16 @@ def _mentioned(target: str, request: str) -> bool:
                (len(w) > 3 and sounds_like(w, x) >= 0.9) for x in said):
             hits += 1
     return hits >= max(1, (len(t_words) + 1) // 2)
+
+
+def _misheard(target: str, request: str) -> bool:
+    """A looser 'did they name it': one real word of ``target`` close to a word
+    they said ("finers" ~ "FINALS"), but not "Claude" for "close that notification"."""
+    import difflib
+    t_words = [w for w in re.findall(r"[a-z0-9]+", target.lower()) if len(w) > 3 and w not in ("the", "window")]
+    said = [w for w in re.findall(r"[a-z0-9]+", request.lower())
+            if len(w) > 3 and w not in ("close", "quit", "exit", "kill", "delete", "remove", "that", "this", "please")]
+    return any(difflib.SequenceMatcher(None, w, x).ratio() >= 0.6 for w in t_words for x in said)
 
 
 def clean(text: str) -> str:

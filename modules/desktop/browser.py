@@ -192,7 +192,16 @@ def open_url(url: str, hint: str = "", new_window: bool = False, hwnd: Optional[
     from modules.desktop.controller import desktop, _require
     _require("allow_keyboard", "Keyboard control")
     site = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
-    w = desktop._info(hwnd) if hwnd else _browser_window(hint, new_window)
+    # "Open YouTube" with a YouTube window already open means *that* window —
+    # no "which browser window?" (logged 2026-09-28), and no navigating away
+    # from the video that's playing in it.
+    site_name = site.split(".")[-2] if site.count(".") >= 1 else site
+    bare_site = re.fullmatch(r"https?://(?:www\.)?[^/]+/?", url) is not None
+    w = desktop._info(hwnd) if hwnd else _browser_window(hint or site_name, new_window)
+    if w is not None and not hwnd and not hint and bare_site and site_name and site_name in w.title.lower():
+        w = desktop._activate(w)
+        desktop._note(w)
+        return {"url": url, "site": site, "window": w.title, "reused": True, "verified": True, "already_open": True}
     if w is None:
         # No browser running (or a new window was asked for): let Windows open
         # the default browser, then wait for its window.

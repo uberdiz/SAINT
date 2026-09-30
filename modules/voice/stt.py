@@ -31,7 +31,7 @@ class STTResult:
 # Base
 # ---------------------------------------------------------------------------
 class STTEngine:
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> STTResult:
+    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000, hint: str = "") -> STTResult:
         raise NotImplementedError
 
     def warm_up(self):
@@ -98,7 +98,7 @@ class FasterWhisperSTT(STTEngine):
         silence = np.zeros(16000, dtype=np.float32)
         self.transcribe(silence)
 
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> STTResult:
+    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000, hint: str = "") -> STTResult:
         with self._lock:
             self._load()
 
@@ -119,7 +119,8 @@ class FasterWhisperSTT(STTEngine):
                 language=self._language if self._language != "auto" else None,
                 beam_size=5,
                 vad_filter=False,  # we do our own VAD
-                hotwords=self._hotwords,
+                # ``hint``: words expected right now ("yes, no" after a question).
+                hotwords=" ".join(x for x in (self._hotwords, hint) if x) or None,
             )
             text_parts = []
             avg_logprob = 0.0
@@ -180,7 +181,7 @@ class MockSTT(STTEngine):
         with self._lock:
             self._queue.append((text, confidence))
 
-    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> STTResult:
+    def transcribe(self, audio: np.ndarray, sample_rate: int = 16000, hint: str = "") -> STTResult:
         with self._lock:
             if self._queue:
                 text, confidence = self._queue.pop(0)

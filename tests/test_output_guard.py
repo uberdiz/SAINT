@@ -73,3 +73,40 @@ def test_leaked_schema_fragment_stripped():
 
 def test_vision_tool_identifier_stripped():
     assert "vision__analyze" not in clean_reply("Done using vision__analyze on the second monitor.")
+
+
+def test_tool_call_later_in_a_prose_reply_is_not_spoken():
+    """Logged 2026-09-25: the call streamed through because the reply started as prose."""
+    text = ("You can add that as an automation. Here's an example of how you can do this: "
+            'automation__schedule_command(command="steam://open/", when="every Monday at 8") '
+            "This will open Steam every Monday.")
+    shown, held = _stream(text)
+    assert "automation__" not in shown and "command=" not in shown
+    assert shown.strip() == "You can add that as an automation."    # the run-on sentence with the call is dropped
+
+
+def test_prose_across_sentences_keeps_its_spacing():
+    shown, _ = _stream("Paris is the capital of France. It has about two million people.")
+    assert shown == "Paris is the capital of France. It has about two million people."
+
+
+def test_code_is_kept_when_asked_for():
+    shown = []
+    g = ReplyGuard(shown.append, user_text="write a python function")
+    for tok in ["Sure thing. Here it is:\n", "def add(a, b=1):\n", "    return a + b\n"]:
+        g.feed(tok)
+    g.finish()
+    assert "def add(a, b=1):" in "".join(shown)
+
+
+def test_schema_shaped_llm_arguments_are_repaired():
+    from modules.agent.llm import repair_args
+
+    class T:
+        name = "spotify.play_query"
+        parameters = {"query": {}, "kind": {}, "own_only": {}}
+
+    assert repair_args(T, {"properties": {"query": "kpop"}, "required": ["query"], "type": "object"}) == \
+        {"query": "kpop"}
+    assert repair_args(T, {"properties": {"query": {"type": "string", "value": "jazz"}}}) == {"query": "jazz"}
+    assert repair_args(T, {"query": "jazz", "kind": "auto"}) == {"query": "jazz", "kind": "auto"}

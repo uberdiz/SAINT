@@ -64,7 +64,11 @@ def parse(text: str, last_failed: str = "") -> Optional[Tuple[str, str]]:
         return None
     if _LIST.match(t):
         return "list", ""
-    if _FORGET_LAST.match(t) or _UNDO.match(t):
+    # "No, don't do that. Forget that." — the "no" is part of the same undo.
+    t_undo = re.sub(r"^(?:no+|nope|nah)[\s,.!]+", "", t)
+    t_undo = re.sub(r"[.!]\s+", " ", t_undo)
+    if _FORGET_LAST.match(t_undo) or _UNDO.match(t_undo):
+        t = t_undo
         window = 90 if _UNDO.match(t) else 600
         if skills.last_learned is not None and time.time() - skills.last_learned_at < window:
             return "forget_last", ""

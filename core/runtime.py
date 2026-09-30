@@ -135,6 +135,13 @@ class SaintRuntime:
         except Exception:
             log.debug("runtime.media_watcher_unavailable", exc_info=True)
 
+        # Game Mode: hide overlays and stop screen capture while a game runs.
+        try:
+            from core.game_mode import game_mode
+            game_mode.start()
+        except Exception:
+            log.exception("runtime.game_mode_failed")
+
         event_bus.subscribe(self._on_event)
         log.info("runtime.started voice=%s wake=%s automation=%s",
                  config.get("modules.voice", True), config.get("voice.wake_word_enabled", True),
@@ -174,8 +181,30 @@ class SaintRuntime:
                 sp.stop_poller()
         except Exception:
             pass
+        # Background watchers are daemon threads, but stop them explicitly so
+        # nothing keeps polling or capturing while the process winds down.
+        for stop in (self._stop_game_mode, self._stop_watch, self._stop_focus_history):
+            try:
+                stop()
+            except Exception:
+                pass
         if self.controller:
             self.controller.shutdown()
+
+    @staticmethod
+    def _stop_game_mode():
+        from core.game_mode import game_mode
+        game_mode.stop()
+
+    @staticmethod
+    def _stop_watch():
+        from modules.watch.snapshots import snapshot_log
+        snapshot_log.stop()
+
+    @staticmethod
+    def _stop_focus_history():
+        from modules.desktop.focus_history import focus_history
+        focus_history.stop()
 
     # ------------------------------------------------------------------ #
     # Live settings

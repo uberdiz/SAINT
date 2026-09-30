@@ -45,6 +45,10 @@ def screenshots_dir() -> Path:
 
 def capture(monitor: Optional[int] = None, save: bool = True) -> Dict[str, Any]:
     """Capture all monitors (default) or one monitor (1-based)."""
+    from core.game_mode import game_mode
+    refused = game_mode.refuse_capture()      # no screen grabs while a game runs
+    if refused:
+        raise ToolError(refused, "GAME_MODE")
     try:
         from PIL import ImageGrab
     except Exception as e:

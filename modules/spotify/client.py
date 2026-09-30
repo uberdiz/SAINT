@@ -152,10 +152,17 @@ class SpotifyClient:
                 pass
         return detail, reason
 
-    def search(self, query, types="track,artist,album,playlist", limit=10):
+    def search(self, query, types="track,artist,album,playlist", limit=10, offset=0):
         # Spotify caps search pages at 10 results for development-mode apps.
         limit = max(1, min(10, int(limit)))
-        return self.request("GET", "/search", params={"q": query, "type": types, "limit": limit})[0]
+        params = {"q": query, "type": types, "limit": limit}
+        if offset:
+            params["offset"] = max(0, int(offset))
+        return self.request("GET", "/search", params=params)[0]
+
+    def artist_top_tracks(self, artist_id):
+        return (self.request("GET", f"/artists/{artist_id}/top-tracks",
+                             params={"market": "from_token"})[0] or {}).get("tracks") or []
 
     def playback(self):
         return self.request("GET", "/me/player")[0]

@@ -50,6 +50,7 @@ from modules.base import BaseModule
 from modules.voice.vad import make_vad, RmsVAD
 from modules.voice.stt import make_stt, STTEngine
 from modules.voice.wake_word import make_wake_word_detector, OnnxWakeWordDetector
+from core import dialog
 from core.assistant_state import assistant_state, AssistantState
 from core.audio_echo import playback_monitor, EchoGate
 from core.events import event_bus, EventType
@@ -63,6 +64,11 @@ CHANNELS = 1
 CHUNK_MS = 30           # milliseconds per VAD frame
 CHUNK_FRAMES = int(SAMPLE_RATE * CHUNK_MS / 1000)
 PREROLL_MS = 1500       # audio kept before speech onset / barge-in
+PREROLL_FRAMES = 20     # 600 ms of that pre-roll starts every segment
+# Windows where speech is addressed to SAINT (not a follow-up that may be room chatter).
+_ADDRESSED = ("awaiting reply", "wake word")
+MISSED = "didn't catch that"
+_REPLY_HINT = "yes no yeah nope okay sure cancel stop the first one the second one the third one"
 MAX_TENTATIVE_MS = 12000
 DEFAULT_CONVERSATION_SEC = 15.0
 
@@ -126,6 +132,7 @@ class VoiceModule(BaseModule):
         self._prev_passive = None          # (audio_clock_end, frames) of the last passive utterance
         self._audio_clock = 0.0            # seconds of microphone audio processed
         self._awaiting_stt = False
+        self._missed = False               # the last addressed utterance came back empty
         self._last_wake_time = 0.0
 
         self._process_thread: Optional[threading.Thread] = None
@@ -363,7 +370,12 @@ class VoiceModule(BaseModule):
             if ev.payload.get("expects_reply"):
                 # SAINT asked a question (e.g. a confirmation) — accept the
                 # answer without requiring the wake word again.
-                self._enter_command(8.0, reason="awaiting reply", chime=True)
+                # The window lasts as long as the question does (it used to
+                # close after 8 s while the question stayed open for 30 s).
+                # No chime by default: right after SAINT's own voice it sounded
+                # like a glitch (2026-09-28); the status shows it's waiting.
+                self._enter_command(dialog.reply_window(8.0), reason="awaiting reply",
+                                    chime=bool(config.get("voice.reply_chime", False)))
                 return
             base = float(config.get("voice.wake_word_followup_sec", DEFAULT_CONVERSATION_SEC) or 0.0)
             if base <= 0:
@@ -479,6 +491,9 @@ class VoiceModule(BaseModule):
         # breathe between the steps of "open my browser, search YouTube for X...".
         command_silence_frames = max(silence_frames,
                                      int(config.get("voice.command_silence_ms", 1000) / CHUNK_MS))
+        # An answer to SAINT's question ("Yes.") is one breath: don't make the
+        # user wait a whole second of silence before SAINT reacts.
+        reply_silence_frames = max(1, int(config.get("voice.reply_silence_ms", 550) / CHUNK_MS))
         min_speech_frames = max(1, int(config.get("voice.min_speech_duration_ms", 300) / CHUNK_MS))
         min_speech_rms = config.get("voice.min_speech_rms", 0.005)
         barge_enabled = config.get("voice.barge_in_enabled", True)
@@ -556,6 +571,7 @@ class VoiceModule(BaseModule):
                         self._speech_session_id += 1
                         sid = self._speech_session_id
                     seg = list(preroll)[-(self._echo_gate.min_frames + 10):]
+                    seg_reason = "interruption"         # not whatever the previous segment was
                     self._enter_command(8.0, reason="interruption")
                 elif not raw_voice:
                     self._echo_gate.reset_run()
@@ -582,7 +598,7 @@ class VoiceModule(BaseModule):
                         sid = self._speech_session_id
                     # 600 ms pre-roll: VAD onset can lag a soft first word
                     # ("Saint" under music) and clipping it loses the wake word.
-                    seg = list(preroll)[-20:]
+                    seg = list(preroll)[-PREROLL_FRAMES:]
                     with self._phase_lock:
                         seg_reason = self._command_reason if self._phase == ListenPhase.COMMAND else None
                     if self.phase != ListenPhase.WAKE:
@@ -599,18 +615,23 @@ class VoiceModule(BaseModule):
                     was_barge = barge_capture
                     barge_capture = False
                     self._end_segment(seg, speech_count, sid, min_speech_frames,
-                                      min_speech_rms, was_barge, seg_reason)
+                                      min_speech_rms, was_barge, seg_reason, trailing=silence_count)
                     seg, speech_count, silence_count = [], 0, 0
             elif in_speech:
                 silence_count += 1
                 seg.append(chunk16)
-                if silence_count >= (command_silence_frames if self.phase == ListenPhase.COMMAND
-                                     else silence_frames):
+                if self.phase != ListenPhase.COMMAND:
+                    needed = silence_frames
+                elif seg_reason == "awaiting reply" and dialog.expects_short_answer():
+                    needed = reply_silence_frames
+                else:
+                    needed = command_silence_frames
+                if silence_count >= needed:
                     in_speech = False
                     was_barge = barge_capture
                     barge_capture = False
                     self._end_segment(seg, speech_count, sid, min_speech_frames,
-                                      min_speech_rms, was_barge, seg_reason)
+                                      min_speech_rms, was_barge, seg_reason, trailing=silence_count)
                     seg = []
                     speech_count = 0
                     silence_count = 0
@@ -672,7 +693,7 @@ class VoiceModule(BaseModule):
     # Segment end
     # ------------------------------------------------------------------ #
     def _end_segment(self, frames, speech_count, sid, min_speech_frames, min_speech_rms,
-                     was_barge: bool, started_reason: Optional[str] = None):
+                     was_barge: bool, started_reason: Optional[str] = None, trailing: int = 0):
         phase = self.phase
         if phase == ListenPhase.WAKE and started_reason:
             # The user started talking while SAINT was listening for a command
@@ -711,8 +732,25 @@ class VoiceModule(BaseModule):
                           dur, check is not frames, peak)
                 self._transcribe(check, sid, wake_initiated=False, wake_check=True)
             return
-        if not self._validate_speech_session(frames, speech_count, min_speech_frames, min_speech_rms):
-            self._emit_vad_reject(sid, speech_count, len(frames), frames)
+        # SAINT is listening for a command or an answer: "Yes." / "Stop." is
+        # only 4–8 voiced frames, far below the 300 ms minimum that keeps
+        # clicks and coughs out of passive listening (logged 2026-09-25: the
+        # reply to "Do you want me to close Disk Cleanup?" was dropped here).
+        # The ratio is measured over the spoken part, not the pre-roll and
+        # the trailing silence that every segment carries.
+        min_frames = min_speech_frames
+        if phase == ListenPhase.COMMAND:
+            short_ms = config.get("voice.min_command_speech_ms", 120)
+            if started_reason == "awaiting reply":
+                short_ms = min(short_ms, 90)
+            min_frames = min(min_speech_frames, max(1, int(short_ms / CHUNK_MS)))
+        pad = min(len(frames) - speech_count, PREROLL_FRAMES + trailing) if phase == ListenPhase.COMMAND else 0
+        if not self._validate_speech_session(frames, speech_count, min_frames, min_speech_rms, pad=pad):
+            self._emit_vad_reject(sid, speech_count, len(frames), frames, reason=started_reason)
+            if started_reason in _ADDRESSED and speech_count >= 2:
+                # Speech aimed at SAINT was too faint/short to use: say so on
+                # screen instead of silently waiting ("why didn't it respond?").
+                assistant_state.set(AssistantState.COMMAND_LISTENING, MISSED)
             return
         wake_initiated = phase == ListenPhase.COMMAND
         with self._phase_lock:
@@ -725,23 +763,29 @@ class VoiceModule(BaseModule):
                          follow_up=follow_up)
 
     def _validate_speech_session(self, frames: list, speech_frame_count: int,
-                                 min_speech_frames: int, min_speech_rms: float) -> bool:
+                                 min_speech_frames: int, min_speech_rms: float, pad: int = 0) -> bool:
+        """``pad``: frames known not to be speech (pre-roll + trailing silence),
+        left out of the voiced-ratio check."""
         if not frames:
             return False
         if speech_frame_count < min_speech_frames:
             return False
-        if speech_frame_count / len(frames) < 0.1:
+        if speech_frame_count / max(1, len(frames) - max(0, pad)) < 0.1:
             return False
         audio = np.concatenate(frames)
         return _rms(audio) >= min_speech_rms
 
-    def _emit_vad_reject(self, session_id: int, speech_frames: int, total_frames: int, frames: list = None):
+    def _emit_vad_reject(self, session_id: int, speech_frames: int, total_frames: int, frames: list = None,
+                         reason: Optional[str] = None):
         rms = _rms(np.concatenate(frames)) if frames else 0.0
         ratio = speech_frames / total_frames if total_frames else 0.0
+        # Visible at the default log level: "why didn't it hear me?" starts here.
+        log.info("voice.vad.rejected window=%s speech_ms=%d rms=%.4f", reason or "-",
+                 speech_frames * CHUNK_MS, rms)
         event_bus.emit_event(EventType.VOICE_STT_SKIP, {
             "session_id": session_id, "reason": "insufficient_speech",
             "speech_frames": speech_frames, "total_frames": total_frames,
-            "speech_ratio": round(ratio, 3), "rms": round(rms, 6),
+            "speech_ratio": round(ratio, 3), "rms": round(rms, 6), "window": reason or "",
         })
 
     @staticmethod
@@ -805,7 +849,8 @@ class VoiceModule(BaseModule):
             timeout = float(config.get("voice.wake_word_command_timeout_sec", 6.0))
             with self._phase_lock:
                 self._command_deadline = time.monotonic() + timeout
-            assistant_state.set(AssistantState.COMMAND_LISTENING, self._command_reason)
+            missed, self._missed = self._missed, False
+            assistant_state.set(AssistantState.COMMAND_LISTENING, MISSED if missed else self._command_reason)
 
     def _stt_worker_func(self, frames: list, session_id: int, t0_total: float,
                          wake_initiated: bool = False, allow_during_tts: bool = False,
@@ -832,7 +877,13 @@ class VoiceModule(BaseModule):
             self._stt_session_state[session_id] = STT_STATE_TRANSCRIBING
         t1 = time.perf_counter()
         try:
-            result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
+            # SAINT asked yes/no or "which one?": nudge Whisper toward those
+            # words (it scores a lone "Yes." near 0 and sometimes mishears it).
+            hint = _REPLY_HINT if wake_initiated and dialog.expects_short_answer() else ""
+            try:
+                result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE, hint=hint)
+            except TypeError:                     # an STT backend without hints
+                result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
         except Exception as e:
             log.error("stt.transcribe_failed session=%s %s", session_id, e)
             self._emit_stt_error(session_id, f"Speech recognition failed: {e}")
@@ -897,6 +948,8 @@ class VoiceModule(BaseModule):
         event_bus.emit_event(EventType.VOICE_SPEECH_END, {"session_id": session_id})
 
         if not text.strip() or self._is_punctuation_only(text.strip()):
+            with self._phase_lock:
+                self._missed = not raw_text.strip() and self._command_reason in _ADDRESSED
             event_bus.emit_event(EventType.VOICE_STT_SKIP, {
                 "session_id": session_id, "reason": "empty_after_wake_strip" if raw_text else "empty",
                 "text": raw_text})
@@ -1026,6 +1079,15 @@ class VoiceModule(BaseModule):
         r"^(?:what|what's|whats|who|who's|where|where's|when|why|how|is|are|can|could|will|would|do|does|"
         r"did|should)\b.*\?$", re.IGNORECASE)
 
+    # A request put to SAINT that its router may not know yet ("Open YouTube on my
+    # main screen" was rejected three times in a row on 2026-09-28). Room talk
+    # rarely starts with a command verb; lyrics are still held back by the music guard.
+    _REQUEST = re.compile(
+        r"^(?:(?:and|also|now|ok(?:ay)?|so|please|hey)[\s,]+)*(?:(?:can|could|would|will) you\s+|please\s+)?"
+        r"(?:open|close|launch|start|play|pause|resume|stop|skip|search|google|look up|find|show|turn|set|switch|"
+        r"move|put|minimi[sz]e|maximi[sz]e|click|double click|right click|mute|unmute|take|make|scroll|press|"
+        r"type|read|go (?:to|back)|bring up|pull up|tell me|remind me|lower|raise)\b", re.IGNORECASE)
+
     # Remarks and interjections that are never meant for SAINT.
     _CHATTER = re.compile(
         r"^(?:(?:ok(?:ay)?|oh|ah|yeah|yep|nah|no|wow|lol|damn|shit|fuck|dude|bro|man|huh|hmm|what|"
@@ -1039,6 +1101,15 @@ class VoiceModule(BaseModule):
         try:
             from core.module_manager import module_manager
             return bool(getattr(module_manager.get("ai"), "expects_reply", False))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _answers_set_aside(text: str) -> bool:
+        """A plain yes/no to a question the user talked past a moment ago."""
+        try:
+            from modules.agent.confirm import confirmations
+            return confirmations.can_answer(text)
         except Exception:
             return False
 
@@ -1110,9 +1181,19 @@ class VoiceModule(BaseModule):
 
         if re.search(r"\b(alexa|hey google|ok(ay)? google|siri|hey siri|cortana)\b", lower):
             return False, "foreign_wake_word"
+        # The song singing, not the user: "Open up your eyes." (a lyric) opened the dashboard
+        # and was learned as a skill on 2026-09-29. Checked against the synced lyrics near
+        # the current position, so a real command still gets through.
+        if self._music_playing and len(words) >= 3 and config.get("voice.lyrics_filter", True):
+            try:
+                from modules.spotify.lyrics import lyrics_service
+                if lyrics_service.matches_current(stripped):
+                    return False, "song_lyrics"
+            except Exception as e:
+                log.debug("voice.lyrics_check_failed %s", e)
         # An answer to SAINT's own question ("Yeah." after "Close Disk Cleanup?")
         # is never a hallucination, however short or low-scored.
-        answering = self._ai_expects_reply() or self._question_pending()
+        answering = self._ai_expects_reply() or self._question_pending() or self._answers_set_aside(stripped)
         hallucinations = {"you", "thank you", "thanks for watching", "bye", "okay", "ok",
                           "yeah", "so", "uh", "um", "hmm", "the"}
         if lower.strip(".!?, ") in hallucinations and confidence < short_conf and not answering:
@@ -1138,7 +1219,8 @@ class VoiceModule(BaseModule):
         if follow_up and config.get("voice.followup_requires_intent", True):
             if self._CHATTER.match(stripped) and not command:
                 return False, "followup_chatter"
-            if not (command or self._DIRECT_QUESTION.match(stripped) or self._ai_expects_reply()):
+            request = bool(self._REQUEST.match(stripped)) and len(words) <= 14
+            if not (command or request or self._DIRECT_QUESTION.match(stripped) or self._ai_expects_reply()):
                 return False, "followup_no_intent"
         if follow_up:
             min_conf = min(min_conf, float(config.get("voice.followup_min_confidence", 0.25)))

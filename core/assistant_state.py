@@ -58,6 +58,15 @@ LABELS = {
 }
 
 
+def _label(state: AssistantState, detail: str) -> str:
+    """"Listening" alone doesn't say SAINT is waiting for *your answer*."""
+    if state == AssistantState.COMMAND_LISTENING and detail == "awaiting reply":
+        return "Waiting for your answer"
+    if state == AssistantState.COMMAND_LISTENING and detail == "didn't catch that":
+        return "Didn't catch that — say it again"
+    return LABELS[state]
+
+
 _TOOL_ACTIVITY = {
     "screen": "Looking at the screen",
     "desktop": "Controlling the desktop",
@@ -107,7 +116,7 @@ class AssistantStateTracker:
         with self._lock:
             return {
                 "state": self._state.value,
-                "label": LABELS[self._state],
+                "label": _label(self._state, self._detail),
                 "detail": self._detail,
                 "since": self._since,
                 "resting": self._resting.value,
@@ -126,7 +135,7 @@ class AssistantStateTracker:
         payload = {
             "state": state.value,
             "previous": previous.value,
-            "label": LABELS[state],
+            "label": _label(state, detail),
             "detail": detail,
         }
         payload.update(info)

@@ -32,6 +32,7 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
         # Never call the real local model or watch the real mouse/keyboard.
         "learning": {"planner": False, "watch_and_learn": False, "watch_after_failure": False},
         "audio": {"voicemeeter": {"enabled": "off"}},
+        "game_mode": {"enabled": False},          # never react to games running on this PC
         "spotify": {"client_id": ""},
         "logging": {"level": "Errors Only"},
     }, f)

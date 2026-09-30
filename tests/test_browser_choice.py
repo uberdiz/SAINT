@@ -98,6 +98,6 @@ def test_asking_remembers_the_answer(monkeypatch):
     monkeypatch.setattr(d, "_activate", lambda w: w)
     AmbiguousWindow("browser", wins, remember=True)
     asked = desktop_intents._ask_which(lambda: Reply("Searched."))
-    assert asked is not None and "Which one" in asked.text and "keep using it" in asked.text
+    assert asked is not None and asked.text.startswith("Which browser window?") and "YouTube" in asked.text
     assert choices.resolve("the youtube one") == "Searched."
     assert (config.get(browser.PREF_KEY) or {}).get("hwnd") == 12

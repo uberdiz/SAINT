@@ -155,7 +155,9 @@ class Halo(QObject):
 
     # ------------------------------------------------------------------ #
     def set_visible(self, on: bool):
-        on = bool(on)
+        from core.game_mode import game_mode
+        # Never over a game or a fullscreen app (core/game_mode.py) — whoever asks.
+        on = bool(on) and not game_mode.overlays_blocked
         if on == self._visible:
             return
         self._visible = on
@@ -179,6 +181,9 @@ class Halo(QObject):
     def preview(self, ms: int = 3200):
         """Show the Halo right now for a moment — above everything, even the
         overlay — so a Settings / overlay switch visibly does something."""
+        from core.game_mode import game_mode
+        if game_mode.overlays_blocked:
+            return
         self.previewing = True
         self._flash = 1.0
         self.set_visible(True)

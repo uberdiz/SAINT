@@ -265,6 +265,10 @@ def do_not_disturb():
 
 def screenshot(target: str = ""):
     """All screens, one screen ("my left screen") or one window ("Claude")."""
+    from core.game_mode import game_mode
+    refused = game_mode.refuse_capture()      # no screen grabs while a game runs
+    if refused:
+        raise ToolError(refused, "GAME_MODE")
     from PIL import ImageGrab
     from modules.files.paths import known_folder
     from modules.desktop.controller import desktop

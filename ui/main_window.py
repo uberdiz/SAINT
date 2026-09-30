@@ -57,6 +57,20 @@ def logo_pixmap(size: int = 64, dot_color: str = None) -> QPixmap:
     return out
 
 
+def app_icon() -> QIcon:
+    """Window / taskbar icon. A hand-made ``saint.ico`` next to the logo wins;
+    otherwise every standard size is rendered from the logo (smoothly scaled
+    here rather than by Windows from one 64 px image)."""
+    from core.paths import resolve_project_path
+    ico = resolve_project_path("saint.ico")
+    if ico.exists():
+        return QIcon(str(ico))
+    icon = QIcon()
+    for size in (16, 20, 24, 32, 40, 48, 64, 128, 256):
+        icon.addPixmap(logo_pixmap(size))
+    return icon
+
+
 class Sidebar(QFrame):
     navigated = Signal(int)
     search = Signal()
@@ -328,7 +342,8 @@ class MainWindow(QMainWindow):
         on = bool(on)
         if bool(config.get("widgets.spotify", False)) != on:
             config.set("widgets.spotify", on)
-        if on and not self.widget.isVisible():
+        from core.game_mode import game_mode
+        if on and not self.widget.isVisible() and not game_mode.overlays_blocked:
             self.widget.appear()
         elif not on:
             self.widget.hide()
@@ -361,6 +376,8 @@ class MainWindow(QMainWindow):
                 self.action_notice.leave()
         elif key == "widgets.spotify":
             self.set_widget(bool(config.get("widgets.spotify", False)))
+        elif key == "widgets.lyrics":
+            self.widget.set_lyrics(bool(config.get("widgets.lyrics", False)))
 
     def start_demo(self):
         self.demo.start()
@@ -413,7 +430,9 @@ class MainWindow(QMainWindow):
                 page.apply_theme()
         self.overlay.apply_theme()
         self.widget.update()
-        self.setWindowIcon(QIcon(logo_pixmap(64)))
+        icon = app_icon()
+        self.setWindowIcon(icon)
+        QApplication.instance().setWindowIcon(icon)
         self.hotkey.register(config.get("overlay.hotkey", "alt+`"))
         self.set_widget(bool(config.get("widgets.spotify", False)))
         self.halo.refresh()
@@ -428,8 +447,10 @@ class MainWindow(QMainWindow):
         color = state_color(s.get("state", "offline"), current_palette())
         self.sidebar.render_state(s)
         if getattr(self, "tray", None):
+            from core.game_mode import game_mode
             self.tray.setIcon(QIcon(logo_pixmap(64, color)))
-            self.tray.setToolTip(f"SAINT — {s.get('label', '')}")
+            game = f" · Game Mode ({game_mode.game})" if game_mode.active else ""
+            self.tray.setToolTip(f"SAINT — {s.get('label', '')}{game}")
 
     def _sync_mic(self):
         on = actions.listening()
@@ -439,9 +460,33 @@ class MainWindow(QMainWindow):
             self._listen_action.setText("Stop listening" if on else "Start listening")
 
     def _update_halo(self):
+        from core.game_mode import game_mode
         mode = config.get("overlay.halo", "minimized")
         away = not self.isVisible() or self.isMinimized()
+        if game_mode.overlays_blocked:
+            # A top-most see-through window over a game is what anti-cheat
+            # looks for (and it breaks true fullscreen): never show it then.
+            self.halo.set_visible(False)
+            return
         self.halo.set_visible(self.halo.previewing or mode == "always" or (mode == "minimized" and away))
+
+    def _on_game_mode(self, p: dict):
+        """Game Mode changed (core/game_mode.py): hide / restore the overlays."""
+        blocked = bool(p.get("overlays_blocked"))
+        self._update_halo()
+        if blocked:
+            self.action_notice.hide()
+            if self.widget.isVisible():
+                self.widget.hide()
+        elif config.get("widgets.spotify", False) and not self.widget.isVisible():
+            self.widget.appear()
+        self._render_state(ui_bus.state)
+        if p.get("changed") and config.get("game_mode.announce", True):
+            if p.get("active"):
+                self._notice("Game Mode", f"{p.get('game') or 'A game'} is running. The Halo and pop-ups are off; "
+                             "voice and music still work.", "info", "zap")
+            else:
+                self._notice("Game Mode off", "The Halo and pop-ups are back.", "ok", "zap")
 
     def _build_tray(self):
         self.tray = None
@@ -500,6 +545,8 @@ class MainWindow(QMainWindow):
             self._handle_ui_command(p)
         elif t == EventType.ASSISTANT_STATE:
             self._render_state(p)
+        elif t == EventType.GAME_MODE:
+            self._on_game_mode(p)
         elif t in (EventType.VOICE_LISTENING_START, EventType.VOICE_LISTENING_STOP):
             self._sync_mic()
         elif t == EventType.NOTIFY:
@@ -529,6 +576,12 @@ class MainWindow(QMainWindow):
                 if feature == "mini_player":
                     on = (not bool(config.get("widgets.spotify", False))) if value == "toggle" else value == "on"
                     self.set_widget(on)
+                elif feature == "lyrics":
+                    # The lyrics live in the mini player: turning them on shows it too.
+                    on = (not bool(config.get("widgets.lyrics", False))) if value == "toggle" else value == "on"
+                    self.widget.set_lyrics(on, save=True)
+                    if on and not self.widget.isVisible():
+                        self.set_widget(True)
                 elif feature == "halo":
                     cur = config.get("overlay.halo", "minimized")
                     mode = {"on": "always", "toggle": "off" if cur != "off" else "minimized"}.get(value, value)

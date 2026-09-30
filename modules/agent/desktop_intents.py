@@ -58,6 +58,15 @@ def _title(r) -> str:
 # ---------------------------------------------------------------------- #
 # Asking which window
 # ---------------------------------------------------------------------- #
+def _short_title(title: str, words: int = 4) -> str:
+    """'when a police movie is too realistic - YouTube' -> 'YouTube: when a police movie';
+    'uberdiz/SAINT: SAINT' -> 'uberdiz/SAINT'. Enough to tell windows apart when spoken."""
+    parts = [p.strip() for p in re.split(r"\s+[-–|]\s+|:\s+", title) if p.strip()]
+    site = parts[-1] if len(parts) > 1 and len(parts[-1].split()) <= 2 else ""
+    head = " ".join((parts[0] if parts else title).split()[:words])
+    return f"{site}: {head}" if site and site.lower() not in head.lower() else head
+
+
 def _ask_which(retry: Callable[[], Reply]) -> Optional[Reply]:
     """If the last tool failed because several windows fit, ask which one and
     continue with ``retry`` once the user answers."""
@@ -75,28 +84,32 @@ def _ask_which(retry: Callable[[], Reply]) -> Optional[Reply]:
     except Exception:
         mons = []
     opts = []
+    # Spoken, so keep it short (logged 2026-09-28: a 47-word, 11-second question):
+    # a few words of each title, and the screen only when they're on different ones.
+    same_screen = len({w.monitor for w in cands[:6] if not w.minimized}) <= 1
     for i, w in enumerate(cands[:6]):
         title = re.sub(r"^\(\d+\)\s*", "", w.title)
         title = re.sub(r"\s*[-–]\s*(Opera|Google Chrome|Microsoft Edge|Mozilla Firefox|Brave)$", "", title)
+        short = _short_title(title)
         where, m = "", None
+        if len(mons) > 1:
+            m = next((x for x in mons if x.index == w.monitor), None)
         if w.minimized:
             where = ", minimized"
-        elif len(mons) > 1:
-            m = next((x for x in mons if x.index == w.monitor), None)
-            where = f" on {d.monitor_label(m)}" if m else ""
-        opts.append(ChoiceOption(label=f"{title[:45]}{where}",
+        elif m is not None and not same_screen:
+            where = f" on {d.monitor_label(m)}"
+        opts.append(ChoiceOption(label=f"{short}{where}",
                                  keywords=f"{title} {app_name(w.process)} monitor {w.monitor} "
                                           f"{'main primary' if m and m.primary else 'second other'}",
                                  value=w.hwnd))
     if what == "browser":
         opts.append(ChoiceOption(label="a new window", keywords="new fresh another open a new window", value="new"))
-    spoken = "; ".join(f"{i + 1}, {o.label}" for i, o in enumerate(opts))
+    spoken = ", ".join(f"{i + 1}, {o.label}" for i, o in enumerate(opts[:-1]))
+    spoken = f"{spoken}, or {len(opts)}, {opts[-1].label}" if len(opts) > 1 else f"1, {opts[0].label}"
     if flags.get("offscreen"):
-        question = f"None of your {what} windows are on screen. Should I use {spoken}?"
+        question = f"None of your {what} windows are on screen. Use {spoken}?"
     else:
-        question = f"I found {len(cands)} {what} windows: {spoken}. Which one should I use?"
-    if flags.get("remember"):
-        question += " I'll keep using it after this."
+        question = f"Which {what} window? {spoken}?"
 
     def chosen(hwnd):
         from modules.desktop import browser
@@ -719,7 +732,9 @@ def parse(text: str) -> Optional[Intent]:
             def run_site():
                 desktop_context.note_domain("browser")
                 return _tool("desktop.open_url", f"open {site}",
-                             lambda r: (f"Opened {r['site']}." if r.get("verified") or not r.get("reused")
+                             lambda r: (f"Switched to {_title({'title': r.get('window', '')}) or r['site']}."
+                                        if r.get("already_open") else
+                                        f"Opened {r['site']}." if r.get("verified") or not r.get("reused")
                                         else f"I entered {r['site']}, but the page hasn't loaded yet."),
                              retry=run_site, url=url)
             return Intent("browser.open_url", run_site, "browser")

@@ -20,14 +20,19 @@ from core.events import event_bus, EventType
 
 log = logging.getLogger("saint.agent")
 
-_YES = re.compile(r"^(yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|confirm|confirmed|please do|"
-                  r"yes please|affirmative|absolutely|of course|go for it|sounds good|play it|y)\b", re.I)
-_NO = re.compile(r"^(no|nope|nah|don'?t|do not|cancel|stop|never ?mind|forget it|negative|not now|"
-                 r"no thanks|n)\b", re.I)
+_YES = re.compile(r"^(yes|yeah|yea|yep|yup|ya|sure|ok|okay|k|do it|do that|go ahead|go on|confirm|confirmed|"
+                  r"please do|yes please|affirmative|absolutely|definitely|of course|go for it|"
+                  r"sounds good|play it|alright|all right|correct|that's right|that's it|"
+                  r"uh[- ]huh|mm[- ]?hmm|mhm|let'?s do it|y)\b", re.I)
+_NO = re.compile(r"^(no|nope|nah|don'?t|do not|cancel|stop|never ?mind|forget it|negative|not now|not yet|"
+                 r"no thanks|hold on|wait|leave it|n)\b", re.I)
+# "Uh, yeah." / "Um no" / "Oh yes" — Whisper keeps the filler.
+_FILLER = re.compile(r"^(?:(?:uh+|um+|er+|hmm+|oh|ah|well|so)[\s,.!]+)+", re.I)
 
 
 def classify_reply(text: str) -> Optional[bool]:
     t = re.sub(r"^(saint[,\s]+|hey saint[,\s]+)", "", (text or "").strip().lower()).strip(" .!?,")
+    t = _FILLER.sub("", t)
     if _NO.match(t):
         return False
     if _YES.match(t):
@@ -44,13 +49,19 @@ class PendingAction:
 
 
 class ConfirmationManager:
+    SET_ASIDE_SEC = 12.0
+
     def __init__(self):
         self._lock = threading.Lock()
         self._pending: Optional[PendingAction] = None
+        # A question the user talked past ("Close Rocket League?" -> "and also open
+        # YouTube") — a plain yes/no right after still answers it (2026-09-28).
+        self._set_aside: Optional[tuple] = None      # (action, when)
 
     def ask(self, action: PendingAction):
         with self._lock:
             self._pending = action
+            self._set_aside = None
         log.info("agent.confirm.ask %s", action.description)
         event_bus.emit_event(EventType.AGENT_CONFIRM_REQUIRED, {"description": action.description,
                                                                 "tool": action.tool})
@@ -67,23 +78,50 @@ class ConfirmationManager:
     def clear(self, reason: str = ""):
         with self._lock:
             p, self._pending = self._pending, None
+            if reason != "superseded":
+                self._set_aside = None
         if p:
             event_bus.emit_event(EventType.AGENT_CONFIRM_RESOLVED, {"description": p.description,
                                                                     "result": reason})
 
+    def set_aside(self) -> Optional[PendingAction]:
+        """The question the user just talked past, if it's recent."""
+        with self._lock:
+            s = self._set_aside
+        if s and time.time() - s[1] <= self.SET_ASIDE_SEC \
+                and time.time() - s[0].created <= float(config.get("agent.confirm_timeout_sec", 30)):
+            return s[0]
+        return None
+
+    def can_answer(self, text: str) -> bool:
+        """Would ``text`` answer a question SAINT asked (pending or just set aside)?"""
+        if self.pending is not None:
+            return True
+        return self.set_aside() is not None and classify_reply(text) is not None
+
     def resolve(self, text: str) -> Optional[str]:
         """If ``text`` answers a pending confirmation, act on it and return
-        the spoken result; otherwise return None (and drop a stale pending
-        action if the user moved on to something else)."""
+        the spoken result; otherwise return None. Something else said instead
+        sets the question aside: a plain yes/no in the next few seconds still
+        answers it, anything later doesn't."""
         p = self.pending
         if p is None:
-            return None
+            p = self.set_aside()
+            answer = classify_reply(text) if p is not None else None
+            if answer is None:
+                return None
+            with self._lock:
+                self._set_aside = None
+                self._pending = p                # resolved below like a normal answer
         answer = classify_reply(text)
         if answer is None:
+            with self._lock:
+                self._set_aside = (p, time.time())
             self.clear("superseded")
             return None
         if not answer:
             self.clear("declined")
+            choices.clear()               # "no" answers the whole question (e.g. a list offered with it)
             log.info("agent.confirm.declined %s", p.description)
             return "Okay, I won't."
         self.clear("confirmed")

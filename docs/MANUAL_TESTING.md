@@ -25,6 +25,33 @@ I still cant give 1 word answers!!!!
 | Y | Music playing, in a conversation window: "pause" (one word) | Pauses — one-word commands no longer need "SAINT" in front |
 | Y | Music playing, SAINT idle: say just "skip" (one word, no wake word) | Skips (hot-word). With no music playing it is ignored |
 | ✅ | Synthetic "SAINT"/"Hey SAINT"/near-misses, clean and with music (4 voices) | 64/64 correct wake decisions |
+| 🔲 fixed — was: *I still can't give 1-word answers* (the audio was thrown away before speech recognition: "yes" is shorter than the 300 ms minimum) | "Close Notepad" → answer quickly: "Yes." / "No." / "Yep." / "Cancel." / "Uh, yeah." — with and without music | Each is heard. The status says **Waiting for your answer** while SAINT waits |
+| 🔲 new | Same question, answer after ~15 s | Still heard (the window now lasts as long as the question, up to 20 s) |
+| 🔲 new | Say "yes" with no question pending (no wake word) | Ignored |
+| 🔲 new | "Hey SAINT" then a very short/quiet mumble | The status shows **Didn't catch that — say it again** |
+| 🔲 new | "Search Spotify for Kendrick Lamar" → "play the second one" | Plays the second result ("yes" still plays the first, "no" drops the list) |
+| 🔲 fixed — was: *couldn't interrupt; "Open YouTube on my main screen" ignored 3×* | While SAINT talks, say "open YouTube on my main screen" | It stops talking and does it (opens YouTube / switches to the YouTube window, then moves it) |
+| 🔲 fixed — was: *interrupting a question lost it* | "Close Rocket League" → while it asks, "and also open YouTube" → then "yes" | Opens YouTube, then "yes" still closes Rocket League (a plain yes/no within ~12 s) |
+| 🔲 fixed — was: *it chimed after it finished talking* | Any question from SAINT | No chime; the status says **Waiting for your answer** (`voice.reply_chime: true` brings the chime back) |
+| 🔲 fixed — was: *it cut itself off / the task didn't happen* | Ask something that makes SAINT think for a second, stay quiet (music or a game playing) | It isn't interrupted by the room; talking over it still stops it |
+| 🔲 fixed — was: *couldn't press play in Rocket League* | Game in front, Spotify paused: "press play on Spotify" · "play my Spotify" | Resumes Spotify (the game keeps focus) |
+| 🔲 fixed — was: *played a stranger's "£" playlist* | "Play my playlist" | "Which playlist? A, B or C?" → answer with a name or "the second one" |
+| 🔲 fixed — was: *11-second question about which browser* | Two browser windows, one on YouTube: "open YouTube" | Switches to the YouTube window, no question. With no YouTube window: a short "Which browser window? 1, …, 2, …, or 3, a new window?" |
+| 🔲 fixed — was: *"close that notification" offered to close Claude* | "Close that notification" | Clears notifications — never offers to close an app you didn't name |
+| 🔲 fixed — was: *"Close, close, CS2" was ignored* | In a follow-up window: "Close, close, CS2" · "Smaller." · "My gym playlist." | Closes it (asks first) · shrinks the window · plays the playlist |
+
+## Game Mode (the Halo was upsetting games)
+
+| | Test | Expected |
+|---|---|---|
+| 🔲 | Halo on "always", then "Launch Rocket League" / start THE FINALS or Roblox yourself | The Halo, edge tab, action pill and mini player disappear *before* the game window shows; a notice "Game Mode … is running". The tray tooltip says Game Mode |
+| 🔲 | In the game: "Hey SAINT, skip this song" · "turn it down" · "what time is it" | All work |
+| 🔲 | In the game: "what's on my screen?" · "click play" | Refused politely (no screen capture, no clicks into the game) |
+| 🔲 | Quit the game | Within ~2 s: "Game Mode off", the Halo and mini player come back |
+| 🔲 | Watch a YouTube video in fullscreen | The Halo hides while it's fullscreen (no notice), comes back after |
+| 🔲 | "Game mode on" · "is game mode on?" · "game mode off" (no game running) | Turns on / answers / turns off |
+| 🔲 | Settings → Appearance → Halo & overlay → Game Mode off, start a game | Nothing is hidden (old behaviour) |
+| 🔲 | A game that isn't detected (not on Steam, not in your games folder) | Add its .exe to `game_mode.processes` in data/config.json, or say "game mode on" |
 
 ## Spotify
 
@@ -149,6 +176,7 @@ I still cant give 1 word answers!!!!
 | Y | "Turn off the mini player" · "show the mini player" (with and without a YouTube tab in front) | SAINT's mini player hides/shows; YouTube's miniplayer only when you say "YouTube mini player" |
 | Y | "Open the dashboard" · "go to history" · "go to settings" · "open settings" | SAINT's pages; plain "open settings" still opens Windows Settings |
 | Y | "Hide the halo" · "dark mode" · "minimize yourself" | Applied at once |
+| 🔲 | Settings > System > "Start with Windows" (or say "start with Windows"), sign out and back in | SAINT starts hidden in the tray; Task Manager > Startup apps lists "SAINT" with its icon |
 
 ## Stop, silence, status
 
@@ -166,8 +194,8 @@ I still cant give 1 word answers!!!!
 |---|---|---|
 | ✅ | "What games do I have" · "what are my biggest games" · "how big is Apex Legends" | Lists from Steam's files (verified live) |
 | Y | "Launch Terraria" · "start cs2" | Game starts through Steam |
-| 🔲 fixed — was: *"open my games folder" had SAINT unzipped into it; Apex won't launch* | "Open my games folder" · "launch Apex Legends" | Opens **C:\Games** (your games folder is now C:\Games; the SAINT-main folder in D:\Games came from an earlier "extract the latest download" test — delete it yourself if you like). Apex still needs D: added in Steam → Settings → Storage → "+" |
-| 🔲 fixed — was: *I had to open Steam myself* | With Steam **closed**: "Open my Steam library and search how many dudes" | "Starting Steam — I'll open your library as soon as it's up", then the library (and store search) opens by itself |
+| Y fixed — was: *"open my games folder" had SAINT unzipped into it; Apex won't launch* | "Open my games folder" · "launch Apex Legends" | Opens **C:\Games** (your games folder is now C:\Games; the SAINT-main folder in D:\Games came from an earlier "extract the latest download" test — delete it yourself if you like). Apex still needs D: added in Steam → Settings → Storage → "+" |
+| Y fixed — was: *I had to open Steam myself* | With Steam **closed**: "Open my Steam library and search how many dudes" | "Starting Steam — I'll open your library as soon as it's up", then the library (and store search) opens by itself |
 
 ## Files, storage and WinRAR (try removals on a test folder first)
 
@@ -175,7 +203,7 @@ I still cant give 1 word answers!!!!
 |---|---|---|
 | ✅ | "How much space is left on E" · "how full are my drives" | Real numbers (verified live) |
 | ✅ | "What's taking up space on E" | Announces the biggest folders when the background scan ends (E: ≈ 50 s) |
-| 🔲 fixed — was: *follow-up questions didn't know what I meant* | "Clean up my Downloads" → "no" → "what did you find?" → "delete the old installers too" | Answers from the real result (no invented paths), then asks to recycle just the installers |
+| 🔲 fixed — was: *kinda works; "Uh, yeah, move the old installers to the recycling bin" was ignored* | "Clean up my Downloads" → "no" → "what did you find?" → "delete the old installers too" | Answers from the real result (no invented paths), then asks to recycle just the installers |
 | Y improved — was: *works; wants visual feedback / percent* | "What can I delete on E", then "what are you doing?" | A pill at the bottom of the screen fills up with the percent; "what are you doing?" says "about N% done" |
 | Y | "Empty the recycle bin" | Refuses, opens the Recycle Bin |
 | 🔲 fixed — was: *should go to C:\Games; couldn't move it from D: to C:* | "Extract the latest download to my games folder" → "open that folder" → "move it to the D drive" → "yes" → "move it back to my C: games folder" | Extracts into C:\Games\…, opens that folder, moves it (asks first) and back |
@@ -198,17 +226,17 @@ I still cant give 1 word answers!!!!
 | | Test | Expected |
 |---|---|---|
 | 🔲 | "Clean up my D drive" → wait for the result → "what did you find?" → "is that safe to delete?" → "delete it" | Talks about what it really found (e.g. D:\WUDownloadCache), then asks before recycling (Windows Update files in Windows itself → opens Disk Cleanup instead) |
-| 🔲 | "Take a screenshot of my left screen" → "open it" → "show it in Explorer" → "rename it to test shot" | Opens the picture, selects it in Explorer, renames it (keeps .png) |
-| 🔲 | "Make a new folder in my games folder called The Loop" → "copy the path" → paste somewhere | C:\Games\The Loop exists; the path is on the clipboard |
-| 🔲 | "Go to my most recent download and delete it" → "yes" | The newest finished download goes to the Recycle Bin (asks first; never presses Delete for you) |
-| 🔲 | "Open that folder" with nothing made in the last minutes | "I haven't made or opened a folder in the last few minutes…" — no "couldn't find an app called that folder" |
-| 🔲 | "Switch to Glod" (a mishearing) → "I said Claude btw" | Switches to Claude |
-| 🔲 | "Close that window" right after "open disk cleanup" | "Do you want me to close Disk Cleanup?" |
-| 🔲 | "Scroll down" → "scroll more" → "keep scrolling" | Each one moves further; plain "scroll down" now moves a real amount |
-| 🔲 | "Click on the loop layer" (a page link) | Clicks it — never turns on YouTube's loop, never clicks something else |
-| 🔲 | Automations → Learned → select a row → change it → Save; *New* → "gaming time" / "open Steam" + "open Discord" → Save → say "gaming time" | Edits stick; the new one runs both |
+| Y | "Take a screenshot of my left screen" → "open it" → "show it in Explorer" → "rename it to test shot" | Opens the picture, selects it in Explorer, renames it (keeps .png) |
+| Y | "Make a new folder in my games folder called The Loop" → "copy the path" → paste somewhere | C:\Games\The Loop exists; the path is on the clipboard |
+| Y | "Go to my most recent download and delete it" → "yes" | The newest finished download goes to the Recycle Bin (asks first; never presses Delete for you) |
+| Y | "Open that folder" with nothing made in the last minutes | "I haven't made or opened a folder in the last few minutes…" — no "couldn't find an app called that folder" |
+| Y | "Switch to Glod" (a mishearing) → "I said Claude btw" | Switches to Claude |
+|Y | "Close that window" right after "open disk cleanup" | "Do you want me to close Disk Cleanup?" |
+| Y | "Scroll down" → "scroll more" → "keep scrolling" | Each one moves further; plain "scroll down" now moves a real amount |
+| Y | "Click on the loop layer" (a page link) | Clicks it — never turns on YouTube's loop, never clicks something else |
+| Y | Automations → Learned → select a row → change it → Save; *New* → "gaming time" / "open Steam" + "open Discord" → Save → say "gaming time" | Edits stick; the new one runs both |
 | 🔲 | Do something that works, then "save that as game time" → say "game time" | Repeats it |
-| 🔲 | Restart SAINT twice | Spotify stays connected (no Connect click) |
+| Y | Restart SAINT twice | Spotify stays connected (no Connect click) |
 
 ## Learning (SAINT working things out)
 
@@ -218,12 +246,12 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 | | Test | Expected |
 |---|---|---|
 | Y | "Minimize all my windows and double left click the recycling bin" | Every window minimizes, then the Recycle Bin opens |
-| 🔲 fixed — was: *I can't give 1-word answers* | "Close Disk Cleanup" → just "Yeah." · "press enter" as a follow-up | Both are heard (they used to be dropped as low-confidence speech) |
+| Y fixed — was: *I can't give 1-word answers* | "Close Disk Cleanup" → just "Yeah." · "press enter" as a follow-up | Both are heard (they used to be dropped as low-confidence speech) |
 | Y | Something it doesn't know: "hop over to Discord" · "get Spotify onto my left monitor" | It works it out ("switch to discord"), does it, and says it'll remember |
-| 🔲 fixed — was: *it just played my liked songs* | "Play my gym playlist" → "no, I meant my moe playlist" (or "…spelled M-O-E") → later "play my gym playlist" (use your own names) | Plays it and remembers; the old wrong "liked songs" lesson was removed |
-| 🔲 check — was: *it asked but didn't play it* | "Play my party playlist" (none of yours) → "yes" within 30 s | Says "You don't have a playlist called party" and plays a public one after yes. (The log only showed you answering "no, I meant…" — tell me if yes fails) |
-| 🔲 changed — was: *sometimes it watches the wrong thing at the wrong time* | Something it can't do → it asks "Want to show me?" → "yes" → do it → "I'm all done" | Only starts watching after yes; "I'm all done" finishes it |
-| 🔲 fixed — was: *showed it how to open Bloxstrap, it didn't remember* | "Open Bloxstrap" · "open block strap" · "let me show you how to put Claude on my right screen" → drag it → "done" | Bloxstrap opens (taskbar pins are now known apps); the lesson becomes "move Claude to my right screen" |
+| Y fixed — was: *it just played my liked songs* | "Play my gym playlist" → "no, I meant my moe playlist" (or "…spelled M-O-E") → later "play my gym playlist" (use your own names) | Plays it and remembers; the old wrong "liked songs" lesson was removed |
+| Y check — was: *it asked but didn't play it* | "Play my party playlist" (none of yours) → "yes" within 30 s | Says "You don't have a playlist called party" and plays a public one after yes. (The log only showed you answering "no, I meant…" — tell me if yes fails) |
+| Y changed — was: *sometimes it watches the wrong thing at the wrong time* | Something it can't do → it asks "Want to show me?" → "yes" → do it → "I'm all done" | Only starts watching after yes; "I'm all done" finishes it |
+| 🔲 fixed — was: *it learned "open blockstrap" = switch to Bloxstrap, click MANUAL_TESTING.md, preview, open Bloxstrap, switch to Python* (clicks in the editor you started from and the switch back were kept) | "Forget that" for the old lesson, then "open block strap" → "yes, watch me" → open Bloxstrap → "done" · "let me show you how to put Claude on my right screen" → drag it → "done" | Learns just "open Bloxstrap" / "move Claude to my right screen". A lesson longer than 3 steps is read back and only kept after "yes" |
 | Y | "Forget that" right after it learned something | That request goes back to how it was |
 | Y | "Close the finals" / "close to area" (misheard) with the game running | "Do you want me to close THE FINALS / Terraria?" (the real name) → "yes" closes it; if the game ignores it, offers to force it to quit |
 | Y | "No, close the finals" while SAINT asks something else | Answers the question *and* closes it |
@@ -253,6 +281,13 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 | Y | Skip a song in the Spotify app itself | One `skips` row with source `app` within ~2 s |
 | Y | Say "skip" | Exactly one `skips` row, source `voice` |
 | Y | "More energetic" · "more like the last song" · "no more of this artist" | Picks change accordingly; the artist stops appearing |
+| 🔲 | "Play Tití Me Preguntó by Bad Bunny" (also misheard: "TT May Praguntha, bye Bad Bunny") | That song plays; within a few seconds 5 similar songs are in Spotify's queue; 5 more are added as the last queued ones play |
+| 🔲 | While a song plays: "queue more songs like this" | The song keeps playing; 5 similar songs are queued (nothing is skipped) |
+| 🔲 | "Play Spanish music" · "play a Spanish playlist" · "play a playlist called Dominican Dembow" | A playlist plays (not a single track) |
+| 🔲 | "I'm feeling chill, play something" · "make me a hype queue" · "play something for my mood" | First song starts, 5 more queued — mostly your own songs that fit the mood; the queue keeps going |
+| 🔲 | "Turn on the lyrics" / the lyrics button on the mini player · "hide the lyrics" | Mini player grows, the sung line is bold and follows the song; hides again |
+| 🔲 | Music with lyrics playing, wait for a follow-up window, let the song sing a line that sounds like a command | Ignored (log: `activation.rejected reason=song_lyrics`) |
+| 🔲 | "Smart shuffle on" while a single song (not a playlist) plays | Says Smart Shuffle needs a playlist or Liked Songs — no 12 s of button clicking |
 
 ## History
 

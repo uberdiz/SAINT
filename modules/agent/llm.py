@@ -126,7 +126,7 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
             spoken.append(tok)
             on_token(tok)
 
-        guard = ReplyGuard(emit)
+        guard = ReplyGuard(emit, user_text)
         with resp:
             for line in resp.iter_lines():
                 if cancel_flag is not None and cancel_flag.is_set():
@@ -190,6 +190,7 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
             else:
                 event_bus.emit_event(EventType.AGENT_INTENT, {"intent": f"llm:{tool.name}", "source": "llm"})
                 log.info("llm.tool_call tool=%s args=%s", tool.name, _log_args(args))
+                args = repair_args(tool, args)
                 res = registry.execute(tool.name, **args)
                 log.info("llm.tool_result tool=%s ok=%s error=%s", tool.name, res.success, (res.error or "")[:120])
                 info["tool_calls"].append({"tool": tool.name, "success": res.success, "error": res.error})
@@ -228,6 +229,34 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
             on_token(" ")
             spoken.append(" ")
     return "".join(spoken), info
+
+
+_SCHEMA_KEYS = {"properties", "required", "type", "description", "additionalProperties", "title"}
+
+
+def repair_args(tool, args: Dict) -> Dict:
+    """Small local models sometimes send the parameter *schema* back as the
+    arguments ({"properties": {"query": "kpop"}, "required": [...], "type":
+    "object"} — logged ×5 for spotify.play_query). Unwrap the values; drop the
+    schema keywords the tool doesn't take. Real arguments pass unchanged."""
+    if not isinstance(args, dict):
+        return {}
+    params = set(tool.parameters or {}) if getattr(tool, "parameters", None) is not None else None
+    if params is None or not (set(args) & _SCHEMA_KEYS - params):
+        return args
+    fixed = {k: v for k, v in args.items() if k not in _SCHEMA_KEYS or k in params}
+    props = args.get("properties")
+    if isinstance(props, dict) and "properties" not in params:
+        for k, v in props.items():
+            if k not in params or k in fixed:
+                continue
+            if isinstance(v, dict):               # {"type": "string", "value"/"default"/"example": ...}
+                v = next((v[x] for x in ("value", "default", "example", "const") if x in v), None)
+                if v is None:
+                    continue
+            fixed[k] = v
+    log.info("llm.args_repaired tool=%s %s -> %s", tool.name, sorted(args), sorted(fixed))
+    return fixed
 
 
 def _any_ok(info: Dict) -> bool:
