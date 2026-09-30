@@ -481,3 +481,12 @@ def test_context_from_other_devices_reaches_the_language_model_prompt():
     assert "2 min ago, on Junior's iPhone" in text and "call mom" in text
     feed.add("old", "x", ts=time.time() - 3600)
     assert "old" not in feed.describe()
+
+
+def test_reminder_message_isnt_mangled_when_the_time_words_overlap():
+    """"this evening" contains "evening": both matches used to be cut out of the text, one after the other."""
+    from datetime import datetime
+    from modules.automation.timeparse import extract_reminder
+    rem = extract_reminder("remind me this evening to call mom", datetime(2026, 9, 30, 12, 0))
+    assert rem["message"] == "Call mom" and rem["schedule"]["type"] == "once"
+    assert extract_reminder("remind me on saturday morning to go running", datetime(2026, 9, 30, 12, 0))["message"] == "Go running"
