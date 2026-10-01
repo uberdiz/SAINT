@@ -51,6 +51,6 @@ final class JSONFile<Value: Codable> {
     }
 }
 
-extension String {
+public extension String {
     var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
 }

@@ -45,7 +45,10 @@ final class TimeParseTests: XCTestCase {
             switch want["type"] as? String {
             case "once":
                 guard case .once(let at) = schedule else { XCTFail("“\(text)” should be a one-off"); continue }
-                XCTAssertEqual(at, date(want), "“\(text)” time")
+                // the reference records minutes ("in 90 seconds" is 12:01:30, saved as 12:01)
+                let parts: Set<Calendar.Component> = [.year, .month, .day, .hour, .minute]
+                XCTAssertEqual(calendar.dateComponents(parts, from: at), calendar.dateComponents(parts, from: date(want)),
+                               "“\(text)” time")
             case "interval":
                 guard case .interval(let every, _) = schedule else { XCTFail("“\(text)” should repeat every so often"); continue }
                 XCTAssertEqual(every, want["every_sec"] as? Int, "“\(text)” interval")

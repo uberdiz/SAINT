@@ -172,7 +172,9 @@ final class LinkTests: XCTestCase {
         XCTAssertEqual(r.brain.memory.search("dog").first?.value, "Rex")
         let manifest = try await r.pc.call("sync.manifest", ["manifest": ["clock": 0, "items": [String: Any]()]])
         XCTAssertEqual(manifest["ok"] as? Bool, true)
-        XCTAssertEqual((((manifest["d"] as? JSONObject)?["items"]) as? [Any])?.count ?? 0, 1)
+        // the phone offers everything it has: the new memory, and its language settings
+        let offered = (((manifest["d"] as? JSONObject)?["items"]) as? [JSONObject]) ?? []
+        XCTAssertEqual(offered.filter { $0["k"] as? String == "memory" }.count, 1)
     }
 
     func testAFriendsSAINTCannotUseTheConnectionToGiveThePhoneOrders() async throws {
