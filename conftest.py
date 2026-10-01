@@ -33,7 +33,7 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
         "learning": {"planner": False, "watch_and_learn": False, "watch_after_failure": False,
                      "from_mistakes": False},
         "audio": {"voicemeeter": {"enabled": "off"}},
-        "game_mode": {"enabled": False},          # never react to games running on this PC
+        "game_mode": {"enabled": False, "detect": False},   # never react to games running on this PC
         "spotify": {"client_id": ""},
         "logging": {"level": "Errors Only"},
     }, f)

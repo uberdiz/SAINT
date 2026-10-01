@@ -16,6 +16,11 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
     @Published private(set) var lastError: String?
 
     static let redirectURI = "saint://spotify-callback"
+    /// Spotify's "redirect_uri: Not matching configuration" page means this exact URI isn't in the app's Redirect
+    /// URIs on developer.spotify.com — a dashboard setting, so all SAINT can do is say exactly what to add.
+    static let redirectHelp = "If Spotify said “redirect_uri: Not matching configuration”, open your app on "
+        + "developer.spotify.com/dashboard → Settings → Redirect URIs, add saint://spotify-callback exactly, and Save. "
+        + "One Spotify app can serve your PC and your iPhone: keep the PC's URI there too and use the same Client ID."
     private static let scopes = ["user-read-playback-state", "user-modify-playback-state", "user-read-currently-playing",
                                  "user-library-modify", "user-library-read", "playlist-read-private", "user-top-read",
                                  "user-read-private"]
@@ -78,6 +83,10 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
                 session.start()
             }
             let items = URLComponents(url: callback, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            if let denied = items.first(where: { $0.name == "error" })?.value {
+                lastError = denied == "access_denied" ? "You didn't allow SAINT to use Spotify." : "Spotify said: \(denied)."
+                return
+            }
             guard items.first(where: { $0.name == "state" })?.value == state,
                   let code = items.first(where: { $0.name == "code" })?.value else {
                 lastError = "Spotify didn't confirm the sign-in. Try again."
@@ -88,7 +97,11 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             lastError = nil
             await loadProfile()
         } catch {
-            if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin { return }
+            if (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin {
+                // Closed before Spotify sent you back — usually because Spotify showed an error page.
+                lastError = "The Spotify sign-in was closed. " + SpotifyService.redirectHelp
+                return
+            }
             lastError = "Couldn't sign in to Spotify: \(error.localizedDescription)"
         }
     }
@@ -113,14 +126,14 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.httpBody = form.map { "\($0.key)=\(SpotifyService.formEncode($0.value))" }.joined(separator: "&").data(using: .utf8)
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["access_token"] as? String else {
-            throw LinkError.remote(code: "spotify", message: "Spotify refused the sign-in.")
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard (response as? HTTPURLResponse)?.statusCode == 200, let token = json?["access_token"] as? String else {
+            let reason = (json?["error_description"] as? String) ?? (json?["error"] as? String) ?? "no reason given"
+            throw LinkError.remote(code: "spotify", message: "Spotify refused the sign-in (\(reason)).")
         }
         accessToken = token
-        expiry = Date().addingTimeInterval(((json["expires_in"] as? Double) ?? 3600) - 60)
-        if let refresh = json["refresh_token"] as? String { keychain.setString(refresh, account: refreshKey) }
+        expiry = Date().addingTimeInterval(((json?["expires_in"] as? Double) ?? 3600) - 60)
+        if let refresh = json?["refresh_token"] as? String { keychain.setString(refresh, account: refreshKey) }
         DispatchQueue.main.async { self.connected = true }
     }
 
@@ -225,6 +238,44 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         let artists = ((item["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
         return Playing(name: (item["name"] as? String) ?? "", artist: artists.joined(separator: ", "),
                        id: (item["id"] as? String) ?? "", isPlaying: (obj["is_playing"] as? Bool) ?? false)
+    }
+
+    /// What the Now Playing card shows.
+    struct NowPlayingInfo: Equatable {
+        var title: String
+        var artist: String
+        var album: String
+        var artworkURL: URL?
+        var progressMs: Int
+        var durationMs: Int
+        var isPlaying: Bool
+        var device: String
+        var fetchedAt = Date()
+
+        /// Where the song is now, counting the time since it was fetched.
+        func position(at date: Date = Date()) -> Double {
+            let elapsed = isPlaying ? date.timeIntervalSince(fetchedAt) * 1000 : 0
+            return min(Double(durationMs), Double(progressMs) + elapsed)
+        }
+    }
+
+    /// The full player state, or nil when nothing is playing (or Spotify isn't reachable).
+    func fetchNowPlaying() async -> NowPlayingInfo? {
+        guard connected, let (status, json) = try? await api("GET", "/v1/me/player"), status == 200,
+              let obj = json as? [String: Any], let item = obj["item"] as? [String: Any] else { return nil }
+        let artists = ((item["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }
+        let album = item["album"] as? [String: Any]
+        let images = (album?["images"] as? [[String: Any]]) ?? []
+        let art = (images.first?["url"] as? String).flatMap { URL(string: $0) }
+        return NowPlayingInfo(title: (item["name"] as? String) ?? "", artist: artists.joined(separator: ", "),
+                              album: (album?["name"] as? String) ?? "", artworkURL: art,
+                              progressMs: (obj["progress_ms"] as? Int) ?? 0, durationMs: (item["duration_ms"] as? Int) ?? 0,
+                              isPlaying: (obj["is_playing"] as? Bool) ?? false,
+                              device: ((obj["device"] as? [String: Any])?["name"] as? String) ?? "")
+    }
+
+    func seek(toMs ms: Int) async {
+        _ = try? await control("PUT", "/v1/me/player/seek", query: ["position_ms": String(max(0, ms))])
     }
 
     // MARK: searching

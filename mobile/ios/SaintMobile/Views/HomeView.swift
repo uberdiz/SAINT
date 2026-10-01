@@ -17,7 +17,7 @@ struct HomeView: View {
         switch voice.phase {
         case .off: return model.permissionsOK ? "Not listening — tap the orb" : "Needs microphone access"
         case .listening: return "Listening for “SAINT”"
-        case .capturing: return "Go ahead…"
+        case .capturing: return "Go ahead… (tap to stop)"
         case .thinking: return "Thinking…"
         case .speaking: return "Speaking"
         }
@@ -63,11 +63,21 @@ struct HomeView: View {
     private var header: some View {
         VStack(spacing: 6) {
             Button { model.listenOnce() } label: {
-                OrbView(phase: model.thinking ? .thinking : voice.phase, level: voice.level, speaking: speaker.isSpeaking)
+                OrbView(phase: model.thinking ? .thinking : voice.phase, level: voice.level, speaking: speaker.isSpeaking,
+                        error: voice.problem != nil)
                     .frame(height: 220)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Talk to SAINT")
+            .accessibilityLabel(voice.phase == .capturing ? "Stop listening" : "Talk to SAINT")
+            .contextMenu {
+                Button {
+                    model.setAlwaysListening(!settings.alwaysListening)
+                } label: {
+                    Label(settings.alwaysListening ? "Stop listening for “SAINT”" : "Listen for “SAINT”",
+                          systemImage: settings.alwaysListening ? "ear.trianglebadge.exclamationmark" : "ear")
+                }
+                Button { speaker.stop() } label: { Label("Stop talking", systemImage: "speaker.slash") }
+            }
             Text(statusText)
                 .font(.system(.headline, design: .rounded))
                 .foregroundStyle(.secondary)
@@ -78,6 +88,11 @@ struct HomeView: View {
                 .lineLimit(3)
                 .padding(.horizontal, 24)
                 .frame(minHeight: 56)
+            if !voice.route.isEmpty && voice.phase != .off {
+                Pill(text: voice.route, icon: voice.callQuality ? "phone.fill" : "headphones",
+                     tint: voice.callQuality ? .orange : .secondary)
+                    .accessibilityLabel("Audio: \(voice.route)")
+            }
             if let problem = voice.problem {
                 Label(problem, systemImage: "exclamationmark.triangle")
                     .font(.footnote)

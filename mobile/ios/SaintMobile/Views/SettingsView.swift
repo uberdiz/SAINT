@@ -47,6 +47,8 @@ struct SettingsView: View {
             Toggle("Keep the screen on while SAINT is open", isOn: $settings.keepScreenOn)
             Toggle("Chime when I'm heard", isOn: $settings.chime)
             Toggle("Haptics", isOn: $settings.haptics)
+            Toggle("Use my headset's microphone", isOn: $settings.useHeadsetMic)
+            Stepper("Snooze reminders for \(settings.snoozeMinutes) min", value: $settings.snoozeMinutes, in: 1...60)
             VStack(alignment: .leading) {
                 Text("Wait this long after I stop talking: \(settings.endpointSeconds, specifier: "%.1f")s")
                 Slider(value: $settings.endpointSeconds, in: 0.7...2.5, step: 0.1)
@@ -58,7 +60,9 @@ struct SettingsView: View {
         } footer: {
             Text("SAINT keeps the microphone open so it can hear its name, like “Hey Siri”. Speech is recognised on this phone where iOS allows it. "
                  + "Siri's own wake phrase can't be changed — SAINT's word only works while SAINT is running. "
-                 + "Locked screen: it keeps listening as long as SAINT stays open in the background.")
+                 + "Locked screen: it keeps listening as long as SAINT stays open in the background. "
+                 + "With AirPods, SAINT listens through the iPhone's microphone so music keeps full quality; "
+                 + "“Use my headset's microphone” talks through the AirPods instead, but iOS switches them to call quality while listening.")
         }
     }
 
@@ -164,7 +168,8 @@ struct SettingsView: View {
         } header: {
             Text("Spotify")
         } footer: {
-            Text("Create a free app at developer.spotify.com/dashboard, add the redirect URI above, and paste its client ID. Controlling playback needs Spotify Premium.")
+            Text("Create a free app at developer.spotify.com/dashboard, add the redirect URI above, and paste its client ID. Controlling playback needs Spotify Premium. "
+                 + SpotifyService.redirectHelp)
         }
     }
 

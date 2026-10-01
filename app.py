@@ -23,6 +23,13 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
+# Packaged SAINT.exe: the speech models ship next to it (packaging/windows/build.py)
+# in the Hugging Face cache layout, so it works offline and needs no first download.
+if getattr(sys, "frozen", False):
+    _models = os.path.join(os.path.dirname(sys.executable), "models", "hf", "hub")
+    if os.path.isdir(_models) and not os.environ.get("HF_HUB_CACHE"):
+        os.environ["HF_HUB_CACHE"] = _models
+
 # Qt 6 owns per-monitor DPI awareness; only the rounding policy is set here
 # (it must be configured before the QApplication exists).
 try:

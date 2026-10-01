@@ -6,8 +6,10 @@ struct OrbView: View {
     let phase: VoiceEngine.Phase
     let level: Float
     var speaking = false
+    var error = false
 
     private var color: Color {
+        if error && phase == .off { return Theme.error }
         if speaking { return Theme.speaking }
         switch phase {
         case .off: return Theme.idle

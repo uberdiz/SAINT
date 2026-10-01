@@ -34,7 +34,7 @@ ACCENTS = ["#feaa34", "#f97316", "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#e
 
 class SettingsUI(QWidget):
     CATEGORIES = ["General", "Voice", "AI", "Wake Word", "Spotify", "Memory", "Automation",
-                  "Desktop Control", "Appearance", "Advanced"]
+                  "Desktop Control", "Gaming Mode", "Appearance", "Advanced"]
 
     def __init__(self, on_appearance_changed: Callable = None, on_theme_changed: Callable = None):
         super().__init__()
@@ -181,7 +181,7 @@ class SettingsUI(QWidget):
 
         for builder in (self._build_general, self._build_voice, self._build_ai, self._build_wake,
                         self._build_spotify, self._build_memory, self._build_automation,
-                        self._build_desktop, self._build_appearance, self._build_advanced):
+                        self._build_desktop, self._build_gaming, self._build_appearance, self._build_advanced):
             builder()
         self.nav.setCurrentRow(0)
 
@@ -593,7 +593,9 @@ class SettingsUI(QWidget):
         self._row(f, "Spotify", self._check("modules.spotify", "Enable Spotify control"))
         self._row(f, "Client ID", self._line("spotify.client_id", "from developer.spotify.com/dashboard"))
         self._row(f, "Redirect URI", self._line("spotify.redirect_uri", "http://127.0.0.1:8888/callback"),
-                  "Add exactly this URI to your Spotify app's Redirect URIs.")
+                  "Add exactly this URI to your Spotify app's Redirect URIs. Using SAINT on your iPhone too? "
+                  "Add saint://spotify-callback to the same app as well (and use the same Client ID there) — "
+                  "otherwise Spotify says “redirect_uri: Not matching configuration”.")
         self.sp_status = QLabel("")
         self.sp_connect = QPushButton("Connect Spotify")
         self.sp_connect.setObjectName("Primary")
@@ -943,16 +945,68 @@ class SettingsUI(QWidget):
                                                        "does something",
                               live="Action notifications {state}."))
         self._row(f, "Edge tab", self._check("overlay.edge_tab", "Reveal a SAINT tab at the top edge"))
-        self._row(f, "Game Mode",
-                  self._check("game_mode.enabled", "Hide the Halo and pop-ups while a game or fullscreen app runs",
-                              live="Game Mode detection {state}."),
+        self._row(f, "Over games",
+                  self._check("game_mode.protect_overlays", "Hide the Halo and pop-ups while a game runs",
+                              live="Overlays over games: {state}."),
                   "Anti-cheat treats see-through windows on top of a game as a cheat overlay, and they stop true "
-                  "fullscreen. While a game runs SAINT also won't capture the screen or click inside the game. "
-                  "Voice and music keep working. Say “game mode on / off” any time.")
+                  "fullscreen. This applies whether or not Gaming Mode is on (Settings > Gaming Mode).")
         self._row(f, "Overlay hotkey", self._line("overlay.hotkey", "alt+`"),
                   "Works from anywhere. Combine ctrl / alt / shift / win with a key, e.g. alt+` or ctrl+alt+s.")
         lay.addWidget(box)
         self._add_page(w, lay)
+
+    # ---- GAMING MODE ---------------------------------------------------
+    def _build_gaming(self):
+        from core.game_mode import FEATURE_DEFAULTS, FEATURE_LABELS, game_mode
+        w, lay = self._new_page("Gaming Mode")
+        box, f = self._section("Gaming Mode",
+                               "Gaming Mode is yours to switch: a game running doesn't turn it on unless Auto "
+                               "Gaming Mode is on. Say “gaming mode on / off”, use the tray menu, or the switch here.")
+        self.gaming_switch = Switch("Gaming Mode")
+        self.gaming_switch.setChecked(game_mode.active)
+        self.gaming_switch.toggled.connect(lambda on: None if self._loading else game_mode.set_manual(on))
+        self._row(f, "Now", self.gaming_switch, "Takes effect immediately.")
+        self._row(f, "Auto Gaming Mode",
+                  self._check("game_mode.enabled", "Turn Gaming Mode on when a game starts",
+                              live="Auto Gaming Mode {state}."))
+        self._row(f, "Game detection",
+                  self._check("game_mode.detect", "Notice running games (Steam libraries, your games folder, "
+                                                  "known games)"),
+                  "Needed for Auto Gaming Mode, for keeping overlays off games, and for “what am I playing?”.")
+        mons = ["auto"] + [str(i) for i in range(1, 5)]
+        self._row(f, "SAINT's monitor",
+                  self._combo("game_mode.saint_monitor",
+                              ["Automatic (any monitor without the game)"] + [f"Monitor {i}" for i in range(1, 5)],
+                              data=mons),
+                  "Where SAINT's window, overlay and mini player go while Gaming Mode is on.")
+        self._row(f, "Gaming workspace",
+                  self._check("game_mode.workspace_spotify", "“Set up my gaming workspace” also opens Spotify"))
+        lay.addWidget(box)
+
+        box, f = self._section("While Gaming Mode is on",
+                               "Each part of SAINT can stay on or switch off while you play.")
+        for key, default in FEATURE_DEFAULTS.items():
+            ck = f"game_mode.features.{key}"
+            if key == "notifications":
+                combo = QComboBox()
+                for label, value in (("All", "all"), ("Minimal — errors and reminders", "minimal"), ("Off", "off")):
+                    combo.addItem(label, value)
+                self._bind(ck, combo.currentData,
+                           lambda v, c=combo, d=default: c.setCurrentIndex(max(0, c.findData(v or d))))
+                self._row(f, FEATURE_LABELS[key], combo)
+                continue
+            sw = Switch(FEATURE_LABELS[key])
+            self._bind(ck, sw.isChecked, lambda v, s=sw, d=default: s.setChecked(d if v is None else bool(v)))
+            self._row(f, "", sw)
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+        def sync(ev):
+            if ev.type == EventType.GAME_MODE and self.gaming_switch.isChecked() != bool(ev.payload.get("active")):
+                self.gaming_switch.blockSignals(True)
+                self.gaming_switch.setChecked(bool(ev.payload.get("active")))
+                self.gaming_switch.blockSignals(False)
+        ui_bus.event.connect(sync)
 
     def _set_accent(self, color):
         c = QColor(color or "#feaa34")

@@ -50,6 +50,9 @@ class OutputPolicy:
         return max(0, int(round((self._silent_until - time.time()) / 60)))
 
     def should_speak(self, text: str, source: str = "reply") -> bool:
+        from core.game_mode import game_mode
+        if not game_mode.feature("voice") and source not in _ALWAYS_SOURCES:
+            return False                       # Gaming Mode setting: replies on screen only
         if not self.silent:
             return True
         if source in _ALWAYS_SOURCES:

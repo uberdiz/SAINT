@@ -255,7 +255,7 @@ class Recorder:
         if os.name != "nt" or not config.get("learning.watch_and_learn", True):
             return False
         from core.game_mode import game_mode
-        if game_mode.active:                  # never poll the keyboard while a game runs
+        if game_mode.busy:                    # never poll the keyboard while a game runs
             log.info("learning.watch.skipped game_mode game=%r", game_mode.game)
             return False
         if self.active:
@@ -621,7 +621,7 @@ def can_watch() -> bool:
     if os.name != "nt" or not config.get("learning.watch_and_learn", True):
         return False
     from core.game_mode import game_mode
-    return not game_mode.active
+    return not game_mode.busy
 
 
 def offer(phrase: str) -> bool:

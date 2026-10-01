@@ -25,6 +25,11 @@ final class AppSettings: ObservableObject {
     @Published var useClaude: Bool { didSet { defaults.set(useClaude, forKey: "useClaude") } }
     @Published var claudeModel: String { didSet { defaults.set(claudeModel, forKey: "claudeModel") } }
     @Published var onboarded: Bool { didSet { defaults.set(onboarded, forKey: "onboarded") } }
+    /// Listen through a Bluetooth headset's own microphone. Off by default: that switches AirPods to the
+    /// phone-call profile, which makes music sound like a call (VoiceEngine.configureSession).
+    @Published var useHeadsetMic: Bool { didSet { defaults.set(useHeadsetMic, forKey: "useHeadsetMic") } }
+    /// Minutes a reminder is snoozed for from its notification.
+    @Published var snoozeMinutes: Int { didSet { defaults.set(snoozeMinutes, forKey: "snoozeMinutes") } }
 
     var claudeKey: String {
         get { keychain.string("claude.api.key") ?? "" }
@@ -54,6 +59,8 @@ final class AppSettings: ObservableObject {
         useClaude = bool("useClaude", false)
         claudeModel = d.string(forKey: "claudeModel") ?? "claude-haiku-4-5-20251001"
         onboarded = bool("onboarded", false)
+        useHeadsetMic = bool("useHeadsetMic", false)
+        snoozeMinutes = d.object(forKey: "snoozeMinutes") == nil ? 10 : max(1, d.integer(forKey: "snoozeMinutes"))
     }
 
     static func defaultDeviceName() -> String {

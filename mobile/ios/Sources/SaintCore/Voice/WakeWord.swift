@@ -6,13 +6,22 @@ import Foundation
 /// near-miss in others (sein, seint, saint). So the match is a list of spellings, per language, plus whatever
 /// the user adds. Only the text *after* the wake word is the command.
 public enum WakeWord {
-    public static let base: Set<String> = ["saint", "saints", "saynt", "sainte", "seint", "seynt", "sain", "sant"]
+    /// "sain" (French for healthy), "sant" (Catalan/Italian place names) and German "sein" used to be here too:
+    /// everyday words, so ordinary speech woke SAINT and became a command (2026-10-01).
+    public static let base: Set<String> = ["saint", "saints", "saynt", "sainte", "seint", "seynt"]
     /// Spellings the recogniser tends to produce for "saint" in other languages' models.
     public static let perLanguage: [String: Set<String>] = [
         "es": ["sein", "seinte", "seint"],
         "pt": ["seint", "sein", "seinti"],
-        "de": ["seint", "sehnt"],
+        "de": ["seint"],
         "it": ["seint", "sein"],
+    ]
+    /// "Saint Louis", "Saint Patrick's Day": a name, not SAINT being called.
+    public static let nameFollowers: Set<String> = [
+        "louis", "patrick", "patrick's", "patricks", "paul", "pauls", "peter", "petersburg", "john", "johns", "george",
+        "lucia", "kitts", "tropez", "laurent", "martin", "nicholas", "valentine", "valentine's", "valentines", "anthony",
+        "francis", "jude", "mary", "mary's", "marys", "helena", "moritz", "michael", "andrews", "andrew", "augustine",
+        "denis", "etienne", "germain", "barth", "barts", "thomas", "vincent", "joseph", "lawrence", "clair", "cloud",
     ]
 
     public struct Match: Equatable {
@@ -49,6 +58,7 @@ public enum WakeWord {
         for (i, m) in found.enumerated() where accepted.contains(words[i]) {
             let leading = words[0..<i].allSatisfy { fillers.contains($0) }
             if !(i == 0 || leading || (pauseBefore?(i) ?? false)) { continue }
+            if i + 1 < words.count && nameFollowers.contains(words[i + 1]) && !(pauseBefore?(i + 1) ?? false) { continue }
             let end = m.range.location + m.range.length
             return Match(command: ns.substring(from: end).trimmingCharacters(in: edge), wakeEnd: end)
         }

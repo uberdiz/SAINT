@@ -29,13 +29,17 @@ def _game_mode(t: str) -> Intent:
     def run() -> Reply:
         from core.game_mode import game_mode
         if re.match(r"^(?:is|are you in|what'?s)\b", t) or t.endswith(("status", "on or off")):
-            return Reply(f"Game Mode is on for {game_mode.game}." if game_mode.active else "Game Mode is off.")
+            if game_mode.active:
+                return Reply(f"Gaming Mode is on{f' for {game_mode.game}' if game_mode.game else ''}.")
+            if game_mode.running:
+                return Reply(f"Gaming Mode is off. {game_mode.game} is running; say “gaming mode on” if you want it.")
+            return Reply("Gaming Mode is off.")
         value = _value(t)
         on = (not game_mode.active) if value == "toggle" else value == "on"
         game_mode.set_manual(True if on else False)
         if on:
-            return Reply("Game Mode on. The Halo and pop-ups are off; I'm still listening.")
-        return Reply("Game Mode off.")
+            return Reply("Gaming Mode on. I'm still listening; your Gaming Mode settings apply until you turn it off.")
+        return Reply("Gaming Mode off.")
     return Intent("ui.game_mode", run, "ui")
 
 _WHEN_WINDOWS = (r"(?:(?:automatically\s+)?(?:when|with|at|on)\s+(?:windows\s+)?(?:starts?|start ?up|boots?|boot ?up|"

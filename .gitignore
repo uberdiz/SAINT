@@ -51,3 +51,7 @@ docs/*_output.txt
 *.swp
 Thumbs.db
 .DS_Store
+
+# Windows build output (packaging/windows/build.py)
+build/
+dist/

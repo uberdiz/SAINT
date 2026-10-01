@@ -575,6 +575,10 @@ class VoiceModule(BaseModule):
             assistant_state.return_to_rest()
 
     def _on_wake_word(self, score: float, source: str = "model"):
+        from core.game_mode import game_mode
+        if not game_mode.feature("wake_word"):            # Gaming Mode setting: wake word off
+            log.info("voice.wake_word.ignored gaming_mode score=%.3f", score)
+            return
         self._last_wake_time = time.monotonic()
         log.info("voice.wake_word.detected score=%.3f source=%s", score, source)
         event_bus.emit_event(EventType.VOICE_WAKE_WORD, {

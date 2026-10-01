@@ -11,10 +11,20 @@ final class ReminderCenter: NSObject, UNUserNotificationCenterDelegate {
     private let limit = 60
     /// Called when a notification arrives while SAINT is open, so it can be spoken too.
     var onForegroundNotification: ((String, String) -> Void)?
+    /// How long "Snooze" on a reminder waits (Settings).
+    var snoozeMinutes: (() -> Int)?
+    private let categoryID = "saint.reminder"
+    private let snoozeAction = "saint.snooze"
+    private let snoozePrefix = "saintsnooze."          // not "saint.": reschedule() mustn't remove snoozed ones
 
     override init() {
         super.init()
         center.delegate = self
+        // Like the Clock and Reminders apps: Snooze and Dismiss right on the notification.
+        let snooze = UNNotificationAction(identifier: snoozeAction, title: "Snooze", options: [])
+        let dismiss = UNNotificationAction(identifier: "saint.dismiss", title: "Dismiss", options: [.destructive])
+        center.setNotificationCategories([UNNotificationCategory(identifier: categoryID, actions: [snooze, dismiss],
+                                                                 intentIdentifiers: [], options: [.customDismissAction])])
     }
 
     func requestAuthorization() async -> Bool {
@@ -47,6 +57,7 @@ final class ReminderCenter: NSObject, UNUserNotificationCenterDelegate {
         content.body = plan.body
         content.sound = .default
         content.threadIdentifier = "saint.reminders"
+        content.categoryIdentifier = categoryID
         return content
     }
 
@@ -85,5 +96,22 @@ final class ReminderCenter: NSObject, UNUserNotificationCenterDelegate {
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         onForegroundNotification?(notification.request.content.title, notification.request.content.body)
         completionHandler([.banner, .list, .sound])
+    }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if response.actionIdentifier == snoozeAction {
+            let original = response.notification.request.content
+            let content = UNMutableNotificationContent()
+            content.title = original.title
+            content.body = original.body
+            content.sound = .default
+            content.threadIdentifier = original.threadIdentifier
+            content.categoryIdentifier = categoryID
+            let minutes = max(1, snoozeMinutes?() ?? 10)
+            let trigger = UNTimeIntervalNotificationTrigger(timeInterval: TimeInterval(minutes * 60), repeats: false)
+            center.add(UNNotificationRequest(identifier: snoozePrefix + UUID().uuidString, content: content, trigger: trigger))
+        }
+        completionHandler()
     }
 }

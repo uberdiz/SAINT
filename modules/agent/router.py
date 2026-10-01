@@ -1730,7 +1730,9 @@ def route(text: str) -> Optional[Intent]:
     from modules.agent.refer_intents import parse_refer
     # parse_link first: "send this prompt to Gian's PC on Claude: open the door and lock it" is one
     # request, whatever words the prompt itself contains.
-    for parser in (parse_link, parse_open_path, parse_social, parse_web, parse_files_task, parse_refer,
+    # parse_task: "continue what we were doing", "do the same for Discord", "set up my gaming workspace".
+    from modules.agent.task_intents import parse_task
+    for parser in (parse_link, parse_task, parse_open_path, parse_social, parse_web, parse_files_task, parse_refer,
                    parse_automation, parse_taskmgr, parse_memory):
         try:
             intent = parser(text)
@@ -1775,7 +1777,8 @@ def _observe(label: str) -> str:
     return obs
 
 
-def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]] = None) -> Reply:
+def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]] = None,
+             task: Optional[str] = None) -> Reply:
     """Execute a multi-step plan: OBSERVE -> ACT -> VERIFY -> (retry) -> next.
 
     Each step's tool verifies its own effect (window focused/moved, page
@@ -1784,6 +1787,9 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
     (pages loading, windows appearing); a second failure stops the plan and
     says exactly where. If a step needs the user to choose (e.g. which
     browser window), the rest of the plan continues after the answer.
+
+    ``task``: the task_memory id recording each step, so "continue what we
+    were doing" can pick up a plan that stopped (modules/agent/task_memory.py).
     """
     from modules.agent.confirm import choices
     from core.activity import activity
@@ -1792,7 +1798,7 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
     tok = cancel.token()
     activity.begin("a multi-step request", [step_label(it.name) for it in intents])
     try:
-        return _run_plan_steps(intents, start, replies, tok, choices, activity)
+        return _run_plan_steps(intents, start, replies, tok, choices, activity, task)
     finally:
         activity.end()
 
@@ -1818,13 +1824,16 @@ def step_label(intent_name: str) -> str:
     return "working on " + " ".join(words)
 
 
-def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
+def _run_plan_steps(intents, start, replies, tok, choices, activity, task=None) -> Reply:
+    from modules.agent.task_memory import task_memory, RUNNING, DONE, FAILED
     for i in range(start, len(intents)):
         it = intents[i]
         if tok.cancelled:
             log.info("agent.plan.cancelled before step %d/%d", i + 1, len(intents))
+            task_memory.finish(task, "stopped", "you said stop")
             return Reply(" ".join(replies + ["Stopped."]).strip(), ok=False)
         activity.step(i)
+        task_memory.step(task, i, RUNNING)
         before = _observe(f"before {it.name}") if it.domain in ("desktop", "browser") else ""
         t0 = time.perf_counter()
         r = it.run()
@@ -1834,6 +1843,7 @@ def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
             # Reassess instead of blindly repeating: wait for the UI, look again, retry once.
             time.sleep(1.2)
             if tok.cancelled:
+                task_memory.finish(task, "stopped", "you said stop")
                 return Reply(" ".join(replies + ["Stopped."]).strip(), ok=False)
             after = _observe(f"retry {it.name}")
             log.info("agent.retry %s (screen %s)", it.name, "changed" if after != before else "unchanged")
@@ -1845,9 +1855,11 @@ def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
 
             def resume(value, original=original, nxt=i + 1):
                 first = original(value)
-                rest = run_plan(intents, nxt, [])
+                task_memory.step(task, nxt - 1, DONE)
+                rest = run_plan(intents, nxt, [], task=task)
                 return (first + " " + rest.text).strip()
             pending.run = resume
+            task_memory.finish(task, "waiting", r.text)
             return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
         if r.expects_reply and confirmations.pending is not None and i < len(intents) - 1:
             # Same for a yes/no question ("You don't have a browser open. Should I open Opera?").
@@ -1856,21 +1868,28 @@ def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
 
             def resume_yes(original_run=original_run, nxt=i + 1):
                 first = original_run()
-                rest = run_plan(intents, nxt, [])
+                task_memory.step(task, nxt - 1, DONE)
+                rest = run_plan(intents, nxt, [], task=task)
                 return (first + " " + rest.text).strip()
             action.run = resume_yes
+            task_memory.finish(task, "waiting", r.text)
             return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
         if it.name == "screen.locate" and i + 1 < len(intents) and intents[i + 1].name == "desktop.click_last":
             r.text = re.sub(r'\s*Say "click it" if you want me to\.$', "", r.text)
         replies.append(r.text)
         if not r.ok:
+            task_memory.step(task, i, FAILED, r.text)
+            task_memory.finish(task, "failed", r.text)
             if i < len(intents) - 1:
                 replies.append("I stopped there.")
             return Reply(" ".join(replies), ok=False)
+        task_memory.step(task, i, DONE)
         if r.expects_reply:
+            task_memory.finish(task, "waiting", r.text)
             return Reply(" ".join(replies), ok=True, expects_reply=True)
         if it.domain in ("desktop", "browser") and i < len(intents) - 1:
             time.sleep(0.4)          # let the UI settle before observing again
+    task_memory.finish(task, "done")
     return Reply(" ".join(replies))
 
 
@@ -1897,20 +1916,27 @@ def _route_composite(text: str) -> Optional[Intent]:
     from modules.agent.context import desktop_context
     saved = desktop_context.domain()
     intents: List[Intent] = []
-    for p in parts:
+    sources: List[dict] = []                 # the words each step came from (task memory)
+    for n, p in enumerate(parts):
         steps = _route_steps(p)
         if steps is None:
             desktop_context.note_domain(saved)
             return None
         for it in steps:
             intents.append(it)
+            sources.append({"text": p, "part": n})
             if it.domain in ("browser", "spotify", "steam"):
                 desktop_context.note_domain(it.domain)
     desktop_context.note_domain(saved)
     if len(intents) < 2:
         return None
     log.info("agent.plan %s", [i.name for i in intents])
-    return Intent("composite:" + "+".join(i.name for i in intents), lambda: run_plan(intents), "composite")
+
+    def run():
+        from modules.agent.task_memory import task_memory
+        task = task_memory.begin(text, [dict(src, label=step_label(it.name)) for it, src in zip(intents, sources)])
+        return run_plan(intents, task=task)
+    return Intent("composite:" + "+".join(i.name for i in intents), run, "composite")
 
 
 # A new command starting mid-sentence: "open my browser search YouTube for X"

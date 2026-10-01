@@ -187,6 +187,13 @@ class Agent:
             # The learned way stopped working: work it out again below.
 
         intent = route(text)
+        from core.game_mode import game_mode
+        if intent is None and not game_mode.feature("ai_chat"):
+            return self._finish(text, "gaming.ai_off", Reply(
+                "AI chat is off in Gaming Mode. Commands like music, volume and timers still work.", ok=False), t0)
+        if intent is not None and intent.domain == "spotify" and not game_mode.feature("spotify"):
+            return self._finish(text, "gaming.spotify_off", Reply(
+                "Spotify control is off in Gaming Mode. Turn it on in Settings > Gaming Mode.", ok=False), t0)
         if intent is None:
             from modules.learning import planner
             if planner.worth_planning(text):

@@ -306,7 +306,12 @@ DEFAULT_CONFIG = {
     # click/type into the game. Voice, Spotify and volume keep working.
     # ------------------------------------------------------------------
     "game_mode": {
-        "enabled": True,                  # detect games automatically
+        "enabled": True,                  # Auto Gaming Mode: turn Gaming Mode on when a game starts
+        "detect": True,                   # notice running games at all (safety rules + "what am I playing")
+        "protect_overlays": True,         # no see-through top-most windows over a running game (anti-cheat)
+        "features": {},                   # per-feature Gaming Mode settings (core/game_mode.FEATURE_DEFAULTS)
+        "saint_monitor": "auto",          # where SAINT goes while gaming: "auto" (not the game's) or a monitor number
+        "workspace_spotify": True,        # "set up my gaming workspace" also opens Spotify
         "processes": [],                  # extra game .exe names ("mygame.exe")
         "folders": [],                    # extra folders whose programs are games
         "ignore": [],                     # .exe names that are never games

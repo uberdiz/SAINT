@@ -29,13 +29,14 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from core.version import VERSION_TUPLE as VERSION      # file version stamped into SAINT.exe
+
 log = logging.getLogger("saint.app_exe")
 
 ROOT = Path(__file__).resolve().parent.parent
 VENV = ROOT / ".venv"
 EXE_DIR = VENV / "SAINT"
 EXE = EXE_DIR / "SAINT.exe"
-VERSION = (2, 0, 0, 0)
 BOOT_PTH = "saint_exe.pth"
 BOOT_MODULE = "saint_exe_boot"
 

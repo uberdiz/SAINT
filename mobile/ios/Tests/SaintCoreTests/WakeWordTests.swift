@@ -24,6 +24,19 @@ final class WakeWordTests: XCTestCase {
         XCTAssertNil(WakeWord.find(in: "I went to the Saints game"))
     }
 
+    func testEverydayWordsAndNamesDoNotWakeSAINT() {
+        // ordinary words that used to count as the wake word
+        XCTAssertNil(WakeWord.find(in: "sant jordi is on Sunday"))
+        XCTAssertNil(WakeWord.find(in: "sain et sauf"))
+        XCTAssertNil(WakeWord.find(in: "sein Bruder kommt morgen", variants: WakeWord.variants(languages: ["de"])))
+        // a saint's name at the start of what was said
+        XCTAssertNil(WakeWord.find(in: "Saint Louis is lovely in spring"))
+        XCTAssertNil(WakeWord.find(in: "Saint Patrick's Day is next week"))
+        // but a pause after the word means it was SAINT being called, then a command
+        XCTAssertEqual(WakeWord.find(in: "Saint Louis Blues please", pauseBefore: { $0 == 1 })?.command, "Louis Blues please")
+        XCTAssertEqual(WakeWord.find(in: "saint play Louis Armstrong")?.command, "play Louis Armstrong")
+    }
+
     func testAPauseBeforeTheWordCountsAsTheStartOfASentence() {
         let text = "I was just saying that saint play jazz"
         XCTAssertNil(WakeWord.find(in: text))

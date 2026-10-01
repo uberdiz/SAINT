@@ -8,6 +8,7 @@ enum Theme {
     static let thinking = Color(red: 0.68, green: 0.42, blue: 1.0)
     static let speaking = Color(red: 1.0, green: 0.55, blue: 0.40)
     static let idle = Color.gray
+    static let error = Color(red: 1.0, green: 0.36, blue: 0.36)
 }
 
 /// A rounded card on a material, or Liquid Glass on iOS 26.

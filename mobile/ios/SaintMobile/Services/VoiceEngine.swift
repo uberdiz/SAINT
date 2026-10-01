@@ -27,6 +27,10 @@ final class VoiceEngine: ObservableObject {
     @Published private(set) var transcript = ""
     @Published private(set) var level: Float = 0
     @Published private(set) var problem: String?
+    /// Where the sound goes and comes from, e.g. "AirPods Pro · mic: iPhone", for the UI.
+    @Published private(set) var route = ""
+    /// True when a Bluetooth headset is in its hands-free (phone-call quality) profile.
+    @Published private(set) var callQuality = false
 
     /// Called with the command and the language it seems to be in.
     var onCommand: ((String, String) -> Void)?
@@ -48,6 +52,10 @@ final class VoiceEngine: ObservableObject {
     /// The requests the audio thread feeds. Kept apart from `sessions` (which the voice queue changes) behind a lock.
     private let sinkLock = NSLock()
     private var sinks: [SFSpeechAudioBufferRecognitionRequest] = []
+    /// The last ~0.7 s of microphone audio (behind `sinkLock`). A tap on the orb starts a new recogniser; it is
+    /// handed this first so the start of what you said isn't cut off.
+    private var preroll: [AVAudioPCMBuffer] = []
+    private var prerollFrames: AVAudioFrameCount = 0
 
     /// One speech recogniser, for one language, working on the shared microphone stream.
     private final class Recognition {
@@ -128,7 +136,7 @@ final class VoiceEngine: ObservableObject {
             self.wantsListening = true
             self.addObserversIfNeeded()
             self.stopRecognition()                  // start clean: nothing said a moment ago should count
-            self.startEngineAndRecognition()
+            self.startEngineAndRecognition(withPreroll: true)
             self.manual = true
             self.wakeSession = nil
             self.wakeEnd = 0
@@ -139,16 +147,52 @@ final class VoiceEngine: ObservableObject {
         }
     }
 
-    // MARK: audio engine
-
-    private func configureSession(speaking: Bool = false) throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default,
-                                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers])
-        try session.setActive(true, options: [])
+    /// The orb was tapped while listening for a command: stop listening. What was said so far is sent; if
+    /// nothing was said, SAINT goes back to waiting for its name.
+    func stopCapture() {
+        queue.async {
+            guard self.phaseValue == .capturing else { return }
+            if self.currentCommand().isEmpty { self.cancelCapture() } else { self.finishCommand() }
+        }
     }
 
-    private func startEngineAndRecognition() {
+    var isCapturing: Bool { phase == .capturing }
+
+    // MARK: audio engine
+
+    /// AirPods and other Bluetooth headsets have two modes: high-quality stereo (A2DP) that can't carry a
+    /// microphone, and the hands-free profile (HFP) used for phone calls, which can but makes *everything* —
+    /// music included — sound like a call. `.allowBluetooth` lets iOS pick HFP whenever the mic is open, which
+    /// is what made SAINT's listening sound like a phone call. So by default SAINT listens with the iPhone's own
+    /// microphone and keeps the headset on A2DP; "Use my headset's microphone" in Settings opts into HFP.
+    private func configureSession(speaking: Bool = false) throws {
+        let session = AVAudioSession.sharedInstance()
+        var options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
+        let headsetMic = settings?.useHeadsetMic ?? false
+        if headsetMic { options.insert(.allowBluetooth) }
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
+        try session.setActive(true, options: [])
+        if !headsetMic, let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try? session.setPreferredInput(builtIn)
+        }
+        publishRoute()
+    }
+
+    private func publishRoute() {
+        let route = AVAudioSession.sharedInstance().currentRoute
+        let output = route.outputs.first
+        let input = route.inputs.first
+        let hfp = route.outputs.contains { $0.portType == .bluetoothHFP } || route.inputs.contains { $0.portType == .bluetoothHFP }
+        var text = output?.portName ?? "No output"
+        if let input = input, input.portName != output?.portName { text += " · mic: \(input.portName)" }
+        if hfp { text += " · call quality" }
+        DispatchQueue.main.async {
+            self.route = text
+            self.callQuality = hfp
+        }
+    }
+
+    private func startEngineAndRecognition(withPreroll: Bool = false) {
         do {
             try configureSession()
         } catch {
@@ -177,7 +221,7 @@ final class VoiceEngine: ObservableObject {
             startTimer()
         }
         publishProblem(nil)
-        startRecognition()
+        startRecognition(withPreroll: withPreroll)
         if phaseValue != .capturing { setPhase(.listening) }
     }
 
@@ -202,12 +246,33 @@ final class VoiceEngine: ObservableObject {
             for i in 0..<n { sum += channel[i] * channel[i] }
             peak = n > 0 ? sqrt(sum / Float(n)) : 0
         }
+        let copy = VoiceEngine.copy(buffer)
         sinkLock.lock()
         let current = sinks
+        if let copy = copy {
+            preroll.append(copy)
+            prerollFrames += copy.frameLength
+            let keep = AVAudioFrameCount(buffer.format.sampleRate * 0.7)
+            while prerollFrames > keep, let first = preroll.first, preroll.count > 1 {
+                prerollFrames -= first.frameLength
+                preroll.removeFirst()
+            }
+        }
         sinkLock.unlock()
         for request in current { request.append(buffer) }
         let scaled = min(1, peak * 12)
         DispatchQueue.main.async { self.level = self.level * 0.6 + scaled * 0.4 }
+    }
+
+    private static func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let out = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength),
+              let src = buffer.floatChannelData, let dst = out.floatChannelData else { return nil }
+        out.frameLength = buffer.frameLength
+        let n = Int(buffer.frameLength)
+        for ch in 0..<Int(buffer.format.channelCount) {
+            dst[ch].update(from: src[ch], count: n)
+        }
+        return out
     }
 
     // MARK: recognisers
@@ -224,7 +289,7 @@ final class VoiceEngine: ObservableObject {
         sinkLock.unlock()
     }
 
-    private func startRecognition() {
+    private func startRecognition(withPreroll: Bool = false) {
         if !sessions.isEmpty { return }
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             publishProblem("Speech recognition isn't allowed. Turn it on in Settings → SAINT.")
@@ -241,11 +306,13 @@ final class VoiceEngine: ObservableObject {
             return
         }
         sessions = made
-        for s in made { begin(s) }
+        for s in made { begin(s, withPreroll: withPreroll) }
         refreshSinks()
     }
 
-    private func begin(_ s: Recognition) {
+    /// `withPreroll`: only for a tap (no wake word). Never for the wake-word recognisers, which would hear the
+    /// last "SAINT" again and wake twice.
+    private func begin(_ s: Recognition, withPreroll: Bool = false) {
         s.task?.cancel()
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -254,6 +321,12 @@ final class VoiceEngine: ObservableObject {
         if s.recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
         request.contextualStrings = ["SAINT", "Hey SAINT", "OK SAINT"] + (settings?.customWakeWords ?? "")
             .split(whereSeparator: { ",;\n".contains($0) }).map { String($0) }
+        if withPreroll {
+            sinkLock.lock()
+            let earlier = preroll
+            sinkLock.unlock()
+            for buffer in earlier { request.append(buffer) }
+        }
         s.request = request
         s.transcript = ""
         s.confidence = 0
@@ -471,6 +544,9 @@ final class VoiceEngine: ObservableObject {
                     self.queue.asyncAfter(deadline: .now() + 0.8) { self.startEngineAndRecognition() }
                 }
             }
+        }
+        center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.publishRoute()                    // AirPods in / out: show where the sound goes now
         }
         center.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
             guard let self = self else { return }

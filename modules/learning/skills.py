@@ -248,4 +248,8 @@ def run_steps(steps: List[str]):
         intents.append(it)
     if len(intents) == 1:
         return intents[0].run()
-    return run_plan(intents)
+    from modules.agent.router import step_label
+    from modules.agent.task_memory import task_memory
+    task = task_memory.begin(", then ".join(steps), [{"text": s, "part": i, "label": step_label(it.name)}
+                                                    for i, (s, it) in enumerate(zip(steps, intents))], kind="skill")
+    return run_plan(intents, task=task)

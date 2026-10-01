@@ -125,6 +125,12 @@ final class AppModel: ObservableObject {
         settings.$speechRate.sink { [weak self] rate in self?.speaker.rate = rate }.store(in: &cancellables)
         settings.$deviceName.sink { [weak self] name in self?.link.rename(to: name) }.store(in: &cancellables)
         settings.$keepScreenOn.sink { on in UIApplication.shared.isIdleTimerDisabled = on }.store(in: &cancellables)
+        settings.$useHeadsetMic.dropFirst().sink { [weak self] _ in
+            // re-open the audio session with the new Bluetooth profile
+            guard let self = self, self.voice.phase != .off else { return }
+            self.voice.start()
+        }.store(in: &cancellables)
+        reminderCenter.snoozeMinutes = { [settings] in settings.snoozeMinutes }
 
         NotificationCenter.default.publisher(for: .saintDataChanged)
             .debounce(for: .milliseconds(400), scheduler: DispatchQueue.main)
@@ -252,10 +258,15 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// The mic button: listen for one command right now.
+    /// The orb: tap to listen, tap again to stop. Tapping while SAINT talks cuts it off and listens.
     func listenOnce() {
         guard permissionsOK else {
             Task { await requestAllPermissions() }
+            return
+        }
+        if voice.isCapturing {
+            voice.stopCapture()
+            if settings.haptics { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
             return
         }
         speaker.stop()
