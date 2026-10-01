@@ -5,7 +5,8 @@ Which monitor SAINT's own windows (main window, mini player, overlay) go on.
 
 Monitors are numbered the way the rest of SAINT numbers them
 (modules/desktop/controller.py: left to right, "main" = primary), and a
-Windows monitor is matched to its Qt screen by device name ("\\\\.\\DISPLAY2"),
+Windows monitor is matched to its Qt screen by its top-left corner (Qt keeps
+each screen's origin in native pixels; QScreen.name() is the monitor model),
 so positions stay right with different scaling on each monitor.
 
 While gaming, SAINT keeps its windows off the game's monitor: the monitor in
@@ -28,21 +29,22 @@ def screens() -> List[QScreen]:
     return sorted(QGuiApplication.screens(), key=lambda s: (s.geometry().left(), s.geometry().top()))
 
 
-def _device_at(rect) -> str:
-    """Windows device name of the monitor showing most of a (l, t, r, b) rectangle."""
+def _monitor_origin(rect):
+    """Native top-left of the monitor showing most of a (l, t, r, b) rectangle."""
     try:
         import win32api
         hmon = win32api.MonitorFromRect(tuple(int(v) for v in rect), 2)        # MONITOR_DEFAULTTONEAREST
-        return str(win32api.GetMonitorInfo(hmon).get("Device", ""))
+        m = win32api.GetMonitorInfo(hmon).get("Monitor")
+        return (int(m[0]), int(m[1])) if m else None
     except Exception:
-        return ""
+        return None
 
 
 def screen_of_rect(rect) -> Optional[QScreen]:
     """The Qt screen showing a native (l, t, r, b) rectangle, e.g. a game window."""
-    dev = _device_at(rect)
+    origin = _monitor_origin(rect)
     for s in screens():
-        if dev and s.name().lower() == dev.lower():
+        if origin and (s.geometry().left(), s.geometry().top()) == origin:
             return s
     l, t, r, b = rect
     return QGuiApplication.screenAt(QPoint((l + r) // 2, (t + b) // 2))

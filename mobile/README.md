@@ -52,6 +52,14 @@ page — is in the rest of this repository. The phone and the PC share their lan
 
 ## Honest status
 
+**0.2.0 (build 2):** AirPods stay in full-quality audio while SAINT listens (it uses the iPhone's microphone
+unless you turn on "Use my headset's microphone"), and the current audio route is shown under the orb; tap the
+orb again to stop listening; the first moment of a tapped command is no longer cut off; everyday words
+("sant", "sain", German "sein") and names like "Saint Louis" no longer wake SAINT; Spotify sign-in explains
+"redirect_uri: Not matching configuration" (add `saint://spotify-callback` to your Spotify app); a Now Playing
+card (artwork, progress, swipe for next/previous, pull to refresh, long-press actions); Snooze / Dismiss on
+reminder notifications. Built and unit-tested by CI; not yet tried on a device.
+
 It builds, and its tests pass on a macOS runner (Xcode 16, run 36861798812 on the `ios-app` branch): the whole of
 SaintCore compiles, its test suite is green, and the SwiftUI app compiles into an unsigned `.ipa`. It has **not been run on a phone
 yet** — that is the next step, and the first launch will likely show things only a device reveals (permissions, audio routing,

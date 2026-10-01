@@ -46,6 +46,31 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
+**2.1 — Gaming Mode you control, multi-monitor, tasks that continue, and a real Windows app:**
+
+- **SAINT.exe and an installer.** `python packaging/windows/build.py` builds `build/windows/SAINT/SAINT.exe`
+  (no Python or terminal needed; speech models bundled, works offline) and `build/windows/SAINT-Setup.exe`
+  (per-user install, Start menu and optional desktop shortcut, clean uninstall; your settings and memory in
+  `%LOCALAPPDATA%\SAINT` are kept).
+- **Gaming Mode is a switch, not a side effect.** A game running no longer means Gaming Mode — turn it on by
+  voice ("gaming mode on"), from the tray or in Settings → Gaming Mode, or switch on *Auto Gaming Mode*.
+  Each part of SAINT has its own Gaming Mode setting: wake word, spoken replies, mini player, Spotify,
+  notifications (all / minimal / off), vision, screen automation, Halo, AI chat, performance mode, and
+  moving SAINT off the game's monitor. Anti-cheat safety (no see-through overlay on a game, no clicks into
+  it) applies to any running game.
+- **Multi-monitor.** While gaming, SAINT's window, overlay and mini player go to a monitor without the game
+  (or the one you pick). "Move the mini player to my second monitor", "put SAINT on the left screen".
+- **Mini player.** Shows what SAINT is doing (listening, thinking, the task step) and Gaming Mode. Right-click
+  for keep-on-top, opacity, size and monitor; drag its right edge to resize; ctrl+scroll to fade; it remembers
+  a separate position for Gaming Mode.
+- **Tasks that continue.** Multi-step requests are remembered step by step (even across a restart):
+  "where were we?", "continue what we were doing", "finish it", "do the same thing for Discord",
+  "set up my gaming workspace".
+- **Startup you can see.** Settings → System → *Startup* lists every subsystem (voice, speech output, AI model,
+  Spotify, Link, monitors…) with why it failed and a **Retry** button; one failing part never stops SAINT.
+
+**Earlier — Game Mode, Better Listening & Dialog State:**
+
 **Latest — Game Mode, Better Listening & Dialog State:**
 
 - **Game Mode:** SAINT automatically detects fullscreen and protected games. It hides overlays (like the Halo), pauses screen hashing, and prevents input injection so it stays out of your game's way and avoids anti-cheat flags. Settings restore when the game exits.
@@ -420,6 +445,21 @@ ollama pull llama3.1
 Models downloaded on first use: the faster-whisper STT model (e.g. `base.en`, ~150 MB) and the
 Kokoro TTS model and voices (~330 MB, from Hugging Face). The wake-word models ship with the repo in
 `data/wake/`.
+
+---
+
+## Building SAINT.exe and the installer
+
+```bat
+.venv\Scripts\pip install pyinstaller
+winget install JRSoftware.InnoSetup
+.venv\Scripts\python packaging\windows\build.py
+```
+
+- `build\windows\SAINT\SAINT.exe` — double-click to run (keep it with its `_internal` and `models` folders).
+- `build\windows\SAINT-Setup.exe` — installs to `%LOCALAPPDATA%\Programs\SAINT`, no admin rights needed.
+- The packaged app keeps its data in `%LOCALAPPDATA%\SAINT` (set `SAINT_DATA_DIR` to use another folder,
+  e.g. your source checkout's `data`). With the CUDA build of PyTorch the folder is about 5 GB.
 
 ---
 

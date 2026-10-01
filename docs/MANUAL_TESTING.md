@@ -315,3 +315,21 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 | I didnt hear it say when it was going to remove it and i missed to oppourtunity to remove it, it did skip it from then on but when i asked to remove it after it was skipped it removed the song that was playing, dont ask after the 4-5 time skipping just remove it. | Skip the same song early 2–3 times in one playlist | A quiet chat note; next time it comes up there it's skipped; "remove this song from the playlist" removes it (own playlists only) |
 | 🔲 | A planned action you didn't want → "no, I didn't ask for that" | "Sorry — I won't do that … again"; the skill is gone from Learned; data/learning_journal.jsonl has the complaint |
 | No it cant find Giancarlos in my instagram and if i do it in a browser it doesnt work I have to be on the desktop. | "Open what Gian sent me on Instagram" | Instagram (app or web inbox) opens and the chat with Gian is clicked |
+
+## 2.1: Gaming Mode, monitors, tasks, startup, SAINT.exe
+
+- [ ] Start a single-player game with *Auto Gaming Mode* off: Gaming Mode stays off, the Halo hides over the
+      game, "is gaming mode on?" says it's off and names the game.
+- [ ] "Gaming mode on": with two monitors, SAINT's window and the mini player move to the monitor without the
+      game; the mini player shows "Gaming Mode"; screen capture says vision is off.
+- [ ] Settings → Gaming Mode: turn *Spoken replies* off → replies appear on screen only; reminders still speak.
+- [ ] Notifications set to *Minimal*: a scene toast doesn't show; a reminder does.
+- [ ] "Set up my gaming workspace": Gaming Mode on, SAINT moved, mini player up, Spotify opened (if not running).
+- [ ] Mini player: right-click → opacity 75 %, Size → Wide, Move to monitor 2; drag the right edge; ctrl+scroll.
+- [ ] "Open notepad and move it to my second monitor" then "do the same thing for calculator".
+- [ ] Make a 3-step request fail in the middle, then "where were we?" and "continue what we were doing".
+- [ ] Stop Ollama, start SAINT: System → Startup shows the AI model failed with a Retry button; start Ollama,
+      press Retry → Running.
+- [ ] Double-click `build\windows\SAINT\SAINT.exe`: no console, SAINT icon in the taskbar, voice answers.
+- [ ] Run `SAINT-Setup.exe`, start from the Start menu, uninstall from Settings → Apps.
+

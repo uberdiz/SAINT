@@ -15,7 +15,11 @@ hidden = collect_submodules("core") + collect_submodules("modules") + collect_su
 # Libraries that load parts of themselves lazily.
 for pkg in ("kokoro", "misaki", "faster_whisper", "ctranslate2", "onnxruntime", "sounddevice", "pycaw", "comtypes",
             "uiautomation", "winrt", "keyring", "spacy", "en_core_web_sm", "phonemizer", "espeakng_loader",
-            "segno", "zeroconf", "cryptography", "psutil", "win32com", "pythoncom", "pywintypes"):
+            "segno", "zeroconf", "cryptography", "psutil", "win32com", "pythoncom", "pywintypes",
+            # spaCy and every plug-in it loads by entry point (Kokoro's English phonemiser)
+            "spacy_curated_transformers", "curated_transformers", "curated_tokenizers", "spacy_legacy",
+            "spacy_loggers", "thinc", "srsly", "catalogue", "confection", "blis", "cymem", "preshed", "murmurhash",
+            "wasabi", "weasel", "langcodes", "language_data", "num2words", "addict"):
     try:
         hidden += collect_submodules(pkg)
     except Exception:
@@ -38,6 +42,7 @@ for pkg in ("faster_whisper", "kokoro", "misaki", "espeakng_loader", "en_core_we
 
 # spaCy finds its English model (Kokoro's phonemiser needs it) and its plug-ins through package metadata.
 for pkg in ("en_core_web_sm", "spacy", "thinc", "catalogue", "confection", "srsly", "spacy_curated_transformers",
+            "spacy_legacy", "spacy_loggers", "curated_tokenizers",
             "curated_transformers", "misaki", "kokoro", "phonemizer", "huggingface_hub", "faster_whisper",
             "transformers", "tokenizers", "torch", "numpy", "regex", "tqdm", "requests", "packaging", "filelock",
             "safetensors", "pyyaml"):
@@ -62,6 +67,9 @@ a = Analysis(
     excludes=["tkinter", "matplotlib", "IPython", "jupyter", "notebook", "pytest", "tests", "tools",
               "PyQt5", "PyQt6", "PySide2"],
     noarchive=False,
+    # TorchScript (used by spaCy's transformer plug-in and Kokoro) compiles from the .py source files.
+    module_collection_mode={"curated_transformers": "pyz+py", "spacy_curated_transformers": "pyz+py",
+                            "kokoro": "pyz+py", "misaki": "pyz+py"},
 )
 pyz = PYZ(a.pure)
 
