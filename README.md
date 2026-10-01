@@ -257,6 +257,8 @@ with generated covers) — no personal data.</sub>
 - [Desktop control and permissions](#desktop-control-and-permissions)
 - [Screen awareness](#screen-awareness)
 - [Your PC, hands-free](#your-pc-hands-free)
+- [Languages](#languages)
+- [SAINT Link](#saint-link)
 - [Learning](#learning)
 - [The interface](#the-interface)
 - [Configuration](#configuration)
@@ -816,6 +818,79 @@ findings, an app opened, a playlist played. "It" / "that" on their own only reac
 reference ("that screenshot", "the folder you just extracted") reaches the full 30. Removing ("delete it")
 only ever points at something SAINT made or found — never at a folder it merely opened — and still asks.
 The same notes go to the language model as facts, so it doesn't invent results. Nothing is saved to disk.
+
+---
+
+## Languages
+
+`modules/lang` — SAINT understands Spanish, French, Portuguese, German and Italian as well as English, answers in the language you spoke, and copes with sentences that mix two ("pon some jazz", "recuérdame to call mom at 5").
+
+- **Per-word detection.** Each word votes for the languages it belongs to; words that several languages share ("no", "la", "a") go to whichever language the clearer words point at; names, titles and numbers don't vote at all (a capitalised word in mid-sentence is a name). A sentence is *mixed* when a second language has a real share of the votes. A one-word answer ("ok") keeps the language of the conversation for `language.sticky_minutes`.
+- **Commands.** Only the *shape* of a command is translated, into the canonical English the router already understands; what you named is copied exactly as you said it. `"pon música de Bad Bunny"` → `play Bad Bunny`; `"recuérdame llamar a mamá a las 5 de la tarde"` → `remind me at 5 pm to llamar a mamá`. Times and durations in any pack's language ("a las cinco y media", "um 17 Uhr", "às 5 da tarde") become the English time phrases `modules/automation/timeparse.py` reads.
+- **Replies.** SAINT's English replies go back through the language's phrasebook, sentence by sentence, with titles and names passed through untouched. What the phrasebook can't say is translated by your local model (`language.llm_translate`), so there is always an answer. Mixed requests are answered in the same mix (`language.mixed_mode: "mirror"`), or in your main language (`"dominant"`).
+- **Speech.** Kokoro speaks each language with its own voice, and a sentence that mixes two is split into stretches that each get the right voice. For recognition, turn on `language.multilingual_stt` (Whisper then auto-detects the language; it uses `voice.stt_model_multilingual`), and the wake phrase also works as "hola SAINT", "salut SAINT", and so on.
+- **Adding or fixing a language.** The packs are plain JSON in `modules/lang/lexicon/` (vocabulary, command patterns, time phrases, the reply phrasebook). The same files are used by the iPhone app, and `tests/data/lang_cases.json` is checked by both the Python and the Swift tests.
+
+```json
+"language": {
+  "auto_detect": true, "reply_in_user_language": true, "preferred": ["es", "en"],
+  "mixed_mode": "mirror", "llm_translate": true, "sticky_minutes": 10, "multilingual_stt": false
+}
+```
+
+---
+
+## SAINT Link
+
+`modules/link` — connect SAINT to your **phone**, your **other PCs**, and **friends' SAINTs** over `IP:port`, on the same network or any network where they can reach each other (a VPN or Tailscale works). **Off by default** — turn it on in *Devices*, or set `link.enabled`.
+
+### Two kinds of device
+
+| | **My device** (`own`) | **Collaborator** (a friend's SAINT) |
+|---|---|---|
+| Learned things (memories, skills, aliases, scenes, reminders, language settings) | synced both ways, automatically | never synced; you can *share* one thing, and the receiver decides whether to keep it |
+| What you're doing right now | shared, so "what did I just ask?" works on whichever device you're using (memory only, 30 minutes) | not shared |
+| Talk to its SAINT / control it | yes | no — only the closed list of automations below |
+| Files | yes | yes (executables are saved as `.unsafe`) |
+
+**Automations a collaborator can run on your PC** (each is `allow` / `ask` / `deny` per person, edited in *Devices → the person → Permissions*; "ask" waits for your yes, by voice or button):
+`send_prompt` (type a prompt into Claude, ChatGPT, Gemini, Copilot, Perplexity or Grok), `message` (SAINT reads it out), `open_url` (http/https only), `run_scene` (only scenes you shared), `play_music`, `ask` (a plain answer, not your tools). Nothing else is reachable: a friend cannot run arbitrary commands, read your files or use your PC's tools.
+
+### Voice
+
+- *"pair my phone"*, *"add Gian as a friend"* — opens a pairing window and shows a QR code and a code.
+- *"send this prompt to Gian's PC on Claude: summarise my notes"* · *"send a message to Gian: dinner is ready"* · *"play lofi on Gian's PC"* · *"open https://… on Gian's PC"*
+- *"ask my laptop to lock itself"* · *"ask Gian's SAINT what the capital of Peru is"*
+- *"send that to Gian"* (the file Explorer has selected) · *"accept what Gian shared"* · *"share this scene with Gian"*
+- *"what devices are connected?"* · *"sync my devices"* · *"unpair Gian"*
+
+The common ones work in the languages above too ("manda este prompt al PC de Gian en Claude: …").
+
+### Pairing and security
+
+- **Pairing** uses a one-time 128-bit code (the QR code holds it), valid for five minutes and for one device; ten wrong tries close the window. It is the pre-shared key of a Noise `XXpsk3` handshake, so someone on your Wi-Fi who never saw the code cannot pair, and the code itself is never sent.
+- **After pairing**, each device remembers the other's public key and reconnects with Noise `IK`: mutual authentication, forward secrecy, ChaCha20-Poly1305. A device that isn't in your list gets nothing and is counted as a failed probe. Device ids are the first 16 hex digits of the SHA-256 of the key, so an id can't be claimed without the key.
+- **Implementation.** `Noise_IK_25519_ChaChaPoly_SHA256` and `Noise_XXpsk3_25519_ChaChaPoly_SHA256` (Noise revision 34), written with the standard library so it runs where compiled packages are blocked by Application Control (it uses `cryptography` automatically when installed). It is cross-checked byte for byte against the `noiseprotocol` package, and the known-answer vectors in `tests/data/link_vectors.json` are checked by the iPhone app's tests too.
+- **A paired phone is you.** Your own devices can control this PC, so keep your phone locked, and unpair it from *Devices* if you lose it. For friends, start from the defaults (they can message you and send files; most everything else asks, or is off) and open up per person.
+- **Discovery** is mDNS (`_saint._tcp`, via `zeroconf`) plus a small UDP beacon on port 8766. Both only *advertise* an address; they carry no trust. Paired devices dial each other by the last address they saw, or you can type `IP:port`.
+- **Firewall.** Windows asks once to allow Python on private networks. The default port is 8765 (`link.port`).
+
+### Configuration
+
+```json
+"link": {
+  "enabled": false, "port": 8765, "bind": "0.0.0.0", "device_name": "", "discoverable": true,
+  "auto_connect": true, "sync_interval_sec": 60, "share_context": true, "announce": true,
+  "approval_timeout_sec": 60, "max_file_mb": 1024, "max_prompt_chars": 2000, "inbox_dir": "",
+  "prompt_targets": {}, "shared_scenes": []
+}
+```
+
+`link.prompt_targets` adds apps for "send this prompt to … on `<app>`": `{"notion": {"app": "Notion", "url": "https://www.notion.so", "wait": 4.0}}`. `link.shared_scenes` lists the scenes collaborators may run. Received files are in `data/link/inbox/<device>/`.
+
+### The iPhone app
+
+The iPhone app (SwiftUI) is the companion project **SAINT Mobile**: always listening for "SAINT", the same language layer, reminders, Spotify, and control of this PC from the phone. It dials *out* to this PC, so nothing on the phone listens for connections. Its `docs/IPHONE_SETUP.md` explains how to get it onto a phone, including from Windows without a Mac.
 
 ---
 
