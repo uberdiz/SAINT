@@ -86,14 +86,14 @@ def _said(feature: str, value: str) -> str:
 
 
 _PAGE_WORDS = (r"dashboard|home(?:\s+page)?|history|stats|statistics|automations?|scenes|memor(?:y|ies)|activity|"
-               r"console|logs|music|system|storage|settings|preferences")
+               r"console|logs|music|system|storage|devices|settings|preferences")
 _PAGE = re.compile(
     rf"^(?P<verb>open|go to|show(?: me)?|take me to|switch to|navigate to|bring up|pull up|jump to|back to|"
     rf"go back to)\s+(?:the\s+|my\s+|your\s+|{_OWN}\s+)?(?P<page>{_PAGE_WORDS})"
     rf"(?P<suffix>\s+(?:page|tab|screen|section|panel))?(?P<own>\s+(?:in|on|of)\s+saint)?$")
 # Pages whose names mean something else on their own ("open settings" = Windows Settings).
 _AMBIGUOUS = {"settings", "preferences", "music", "system", "memory", "memories", "activity", "home", "storage",
-              "logs", "console"}
+              "logs", "console", "devices"}
 
 
 def parse_saint_ui(text: str) -> Optional[Intent]:

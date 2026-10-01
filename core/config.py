@@ -104,6 +104,8 @@ DEFAULT_CONFIG = {
         "stt_device": "cuda",             # "cuda" | "cpu"
         "stt_compute_type": "float16",    # "float16" | "int8" | "float32"
         "stt_language": "en",
+        "stt_model_multilingual": "small",   # used when language.multilingual_stt is on
+        "stt_initial_prompt": "Hey SAINT. Hola SAINT. Play some música.",
         "stt_hotwords": "SAINT",          # biases Whisper toward spelling the wake word correctly
 
         # TTS
@@ -445,6 +447,42 @@ DEFAULT_CONFIG = {
         "store_conversations": False,     # do not blindly store every turn
         "retention_days": 30,             # Conversation history retention
         "max_conversation_turns": 100,
+    },
+
+    # ------------------------------------------------------------------
+    # SAINT Link (modules/link): connect your phone and other PCs, or a friend's
+    # SAINT, over IP:port. Nothing listens until "enabled" is on.
+    # ------------------------------------------------------------------
+    "link": {
+        "enabled": False,
+        "port": 8765,
+        "bind": "0.0.0.0",                # "127.0.0.1" = this PC only (for testing)
+        "device_name": "",                # blank = this PC's name
+        "discoverable": True,             # mDNS + a small UDP beacon so your phone finds this PC
+        "auto_connect": True,             # keep dialling paired devices
+        "sync_interval_sec": 60,
+        "share_context": True,            # tell your other devices what you just asked (memory only)
+        "announce": True,                 # speak "Gian sent you a file" and friends
+        "approval_timeout_sec": 60,       # how long a collaborator's request waits for your yes
+        "max_file_mb": 1024,
+        "max_prompt_chars": 2000,
+        "inbox_dir": "",                  # blank = data/link/inbox
+        "prompt_targets": {},             # extra apps for "send this prompt to ... on <app>"
+        "shared_scenes": [],              # scenes collaborators may run
+    },
+
+    # ------------------------------------------------------------------
+    # Languages (modules/lang): understand and answer in the user's language,
+    # including when two are mixed in one sentence.
+    # ------------------------------------------------------------------
+    "language": {
+        "auto_detect": True,              # work out the language of each request
+        "reply_in_user_language": True,   # answer in it (else always English)
+        "preferred": [],                  # e.g. ["es", "en"]: tie-breakers, and what the phone offers first
+        "mixed_mode": "mirror",           # "mirror" = answer in the mix you used, "dominant" = one language
+        "llm_translate": True,            # let the local model translate what the phrasebook can't
+        "sticky_minutes": 10,             # a one-word answer keeps the language of the conversation
+        "multilingual_stt": False,        # Whisper auto-detects the language (needs a multilingual model)
     },
 
     # ------------------------------------------------------------------

@@ -140,6 +140,15 @@ class SkillStore:
         event_bus.emit_event(EventType.AUTOMATION_UPDATED, {"id": skill.id, "title": key, "skill": True})
         return skill
 
+    def upsert(self, skill: Skill) -> Skill:
+        """Add or replace a skill by id, as it is (used when another device shares one; see modules/link)."""
+        with self._lock:
+            skills = [s for s in self._load() if s.id != skill.id]
+            skills.append(skill)
+            self._write(skills)
+        event_bus.emit_event(EventType.AUTOMATION_UPDATED, {"id": skill.id, "title": skill.phrase, "skill": True})
+        return skill
+
     def match(self, text: str) -> Optional[Skill]:
         key = norm(text)
         if not key:

@@ -11,6 +11,7 @@ from the UI, or on a schedule (a scheduler "command" automation that says
 scene can do anything a command can. Stored in data/scenes.json.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -152,7 +153,8 @@ class SceneStore:
                 continue
             if key not in existing:
                 try:
-                    self.save(Scene(d.name, list(d.steps), phrase=d.phrase))
+                    self.save(Scene(d.name, list(d.steps), phrase=d.phrase,
+                                    id=hashlib.md5(key.encode()).hexdigest()[:8]))   # same id on every device
                 except ValueError:
                     continue
             added.append(key)

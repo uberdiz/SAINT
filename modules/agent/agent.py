@@ -323,6 +323,11 @@ class Agent:
         if not text:
             return False
         try:
+            from modules import lang as _lang
+            text = _lang.analyze(text, update_state=False).routed_text
+        except Exception:
+            log.debug("agent.accepts_followup lang failed", exc_info=True)
+        try:
             from modules.agent.dictate import dictation
             from modules.agent.confirm import choices
             if dictation.active or confirmations.can_answer(text) or choices.pending is not None:

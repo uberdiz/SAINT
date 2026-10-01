@@ -1702,6 +1702,11 @@ def parse_open_path(text: str) -> Optional[Intent]:
     return Intent("desktop.open_path", run, "desktop")
 
 
+def parse_link(text: str) -> Optional[Intent]:
+    from modules.agent.link_intents import parse_link as parse
+    return parse(text)
+
+
 def route_single(text: str) -> Optional[Intent]:
     for parser in _SINGLE_PARSERS:
         try:
@@ -1723,8 +1728,10 @@ def route(text: str) -> Optional[Intent]:
     # made or found (modules/agent/recent.py) — before memory, so "delete the
     # junk" never means "forget a memory".
     from modules.agent.refer_intents import parse_refer
-    for parser in (parse_open_path, parse_social, parse_web, parse_files_task, parse_refer, parse_automation,
-                   parse_taskmgr, parse_memory):
+    # parse_link first: "send this prompt to Gian's PC on Claude: open the door and lock it" is one
+    # request, whatever words the prompt itself contains.
+    for parser in (parse_link, parse_open_path, parse_social, parse_web, parse_files_task, parse_refer,
+                   parse_automation, parse_taskmgr, parse_memory):
         try:
             intent = parser(text)
         except Exception:

@@ -265,7 +265,10 @@ def parse_schedule(text: str, now: Optional[datetime] = None) -> Tuple[Optional[
         elif at <= now:
             return None, text                # e.g. "today at 9" when it's already past
         rest = s
-        for mm in sorted([x for x in (tm, day_match, part) if x], key=lambda x: -x.start()):
+        spans = [x for x in (tm, day_match, part) if x]
+        # "this evening" contains "evening": cutting both would take a second bite out of the wrong place.
+        spans = [x for x in spans if not any(y is not x and y.start() <= x.start() and x.end() <= y.end() for y in spans)]
+        for mm in sorted(spans, key=lambda x: -x.start()):
             rest = rest[:mm.start()] + " " + rest[mm.end():]
         rest = re.sub(r"\s{2,}", " ", rest).strip(" ,.")
         return {"type": "once", "at": at.timestamp()}, rest
@@ -275,7 +278,7 @@ def parse_schedule(text: str, now: Optional[datetime] = None) -> Tuple[Optional[
 # ---------------------------------------------------------------------- #
 # Reminder phrasing
 # ---------------------------------------------------------------------- #
-def extract_reminder(text: str) -> Optional[Dict]:
+def extract_reminder(text: str, now: Optional[datetime] = None) -> Optional[Dict]:
     """'remind me at 5 PM to work on AIDE' -> {"schedule", "message"}.
 
     Returns None if the text isn't a reminder request. Returns a dict with
@@ -293,7 +296,7 @@ def extract_reminder(text: str) -> Optional[Dict]:
         work = re.sub(rf"\b{_NUM}[\s-]+{_UNIT}\s+(timer|alarm)\b", r"\3 in \1 \2", work, count=1, flags=re.I)
         work = re.sub(rf"\bfor\s+(?={_NUM}\s+{_UNIT})", "in ", work, count=1, flags=re.I)
         work = re.sub(r"\b(alarm|timer)\s+for\s+(?=\d)", r"\1 at ", work, count=1, flags=re.I)
-    schedule, rest = parse_schedule(work)
+    schedule, rest = parse_schedule(work, now)
     msg = rest
     msg = re.sub(r"^(?:hey\s+)?(?:saint[,\s]+)?(?:can you|could you|please|would you)?\s*", "", msg, flags=re.I)
     msg = re.sub(r"\b(?:remind me|set (?:a |an )?(?:reminder|timer|alarm)|create (?:a )?reminder|"
