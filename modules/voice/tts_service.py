@@ -377,9 +377,14 @@ class TTSService:
                 from modules.voice.tts import QwenTTS
                 self._engine = QwenTTS(**kwargs)
                 self._engine_type = "qwen"
-            elif backend == "kokoro":
-                from modules.voice.tts import KokoroTTS
-                self._engine = KokoroTTS(**kwargs)
+            elif backend in ("kokoro", "kokoro_onnx"):
+                from modules.voice import tts as _tts
+                engine = None
+                if backend == "kokoro_onnx" or not _tts._torch_available():
+                    from modules.voice import kokoro_onnx            # no PyTorch (packaged SAINT.exe)
+                    if kokoro_onnx.available():
+                        engine = kokoro_onnx.KokoroOnnxTTS(**kwargs)
+                self._engine = engine or _tts.KokoroTTS(**kwargs)
                 self._engine_type = "kokoro"
             else:
                 from modules.voice.tts import MockTTS

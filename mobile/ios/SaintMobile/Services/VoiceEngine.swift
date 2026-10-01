@@ -31,6 +31,11 @@ final class VoiceEngine: ObservableObject {
     @Published private(set) var route = ""
     /// True when a Bluetooth headset is in its hands-free (phone-call quality) profile.
     @Published private(set) var callQuality = false
+    @Published private(set) var inputName = "iPhone"
+    @Published private(set) var outputName = "iPhone"
+    /// Something worth writing in the Activity log ("Speech recognition failed: …"), rate-limited.
+    var onDiagnostic: ((String) -> Void)?
+    private var lastDiagnostic: [String: Date] = [:]
 
     /// Called with the command and the language it seems to be in.
     var onCommand: ((String, String) -> Void)?
@@ -69,6 +74,11 @@ final class VoiceEngine: ObservableObject {
         var segments: [SFTranscriptionSegment] = []
         var startedAt = Date()
         var failures = 0
+        /// When each word of ``transcript`` first appeared (our own clock: partial results carry no timestamps).
+        var wordTimes: [Date] = []
+        var lastChange = Date()
+        /// On-device recognition kept failing for this language: use Apple's servers instead.
+        var serverFallback = false
 
         init(code: String, locale: Locale, recognizer: SFSpeechRecognizer) {
             self.code = code
@@ -167,15 +177,31 @@ final class VoiceEngine: ObservableObject {
     /// microphone and keeps the headset on A2DP; "Use my headset's microphone" in Settings opts into HFP.
     private func configureSession(speaking: Bool = false) throws {
         let session = AVAudioSession.sharedInstance()
-        var options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers]
-        let headsetMic = settings?.useHeadsetMic ?? false
-        if headsetMic { options.insert(.allowBluetooth) }
+        let output = settings?.audioOutput ?? "auto"
+        let headsetMic = (settings?.useHeadsetMic ?? false) && output == "auto"
+        var options: AVAudioSession.CategoryOptions = [.mixWithOthers]
+        switch output {
+        case "speaker": options.insert(.defaultToSpeaker)                      // never the headphones
+        case "earpiece": break                                                // the receiver, held to your ear
+        default:
+            options.formUnion([.defaultToSpeaker, .allowBluetoothA2DP])       // headphones when connected
+            if headsetMic { options.insert(.allowBluetooth) }                 // AirPods mic: call quality
+        }
         try session.setCategory(.playAndRecord, mode: .default, options: options)
         try session.setActive(true, options: [])
+        try? session.overrideOutputAudioPort(output == "speaker" ? .speaker : .none)
         if !headsetMic, let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
             try? session.setPreferredInput(builtIn)
         }
         publishRoute()
+    }
+
+    /// Re-apply the input/output choice now (Settings changed it).
+    func applyAudioRoute() {
+        queue.async {
+            guard self.running else { self.publishRoute(); return }
+            do { try self.configureSession() } catch { self.publishProblem("Couldn't switch audio: \(error.localizedDescription)") }
+        }
     }
 
     private func publishRoute() {
@@ -186,10 +212,29 @@ final class VoiceEngine: ObservableObject {
         var text = output?.portName ?? "No output"
         if let input = input, input.portName != output?.portName { text += " · mic: \(input.portName)" }
         if hfp { text += " · call quality" }
+        let outName: String = {
+            switch output?.portType {
+            case .builtInSpeaker?: return "iPhone speaker"
+            case .builtInReceiver?: return "Earpiece"
+            case nil: return "No output"
+            default: return output?.portName ?? "Headphones"
+            }
+        }()
+        let inName = input?.portType == .builtInMic ? "iPhone" : (input?.portName ?? "None")
         DispatchQueue.main.async {
             self.route = text
             self.callQuality = hfp
+            self.outputName = outName
+            self.inputName = inName
         }
+    }
+
+    private func diagnose(_ key: String, _ text: String) {
+        let now = Date()
+        if let last = lastDiagnostic[key], now.timeIntervalSince(last) < 600 { return }
+        lastDiagnostic[key] = now
+        let handler = onDiagnostic
+        DispatchQueue.main.async { handler?(text) }
     }
 
     private func startEngineAndRecognition(withPreroll: Bool = false) {
@@ -279,7 +324,9 @@ final class VoiceEngine: ObservableObject {
 
     private func languageCodes() -> [String] {
         let codes = settings?.listenLanguages ?? AppSettings.defaultLanguages()
-        return Array((codes.isEmpty ? ["en"] : codes).prefix(2))
+        // One recogniser unless asked for two: several iPhones can't keep two live recognition tasks going, and
+        // then neither hears the wake word.
+        return Array((codes.isEmpty ? ["en"] : codes).prefix((settings?.listenBothLanguages ?? false) ? 2 : 1))
     }
 
     private func refreshSinks() {
@@ -318,7 +365,7 @@ final class VoiceEngine: ObservableObject {
         request.shouldReportPartialResults = true
         request.addsPunctuation = false
         request.taskHint = .unspecified
-        if s.recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
+        if s.recognizer.supportsOnDeviceRecognition && !s.serverFallback { request.requiresOnDeviceRecognition = true }
         request.contextualStrings = ["SAINT", "Hey SAINT", "OK SAINT"] + (settings?.customWakeWords ?? "")
             .split(whereSeparator: { ",;\n".contains($0) }).map { String($0) }
         if withPreroll {
@@ -331,6 +378,8 @@ final class VoiceEngine: ObservableObject {
         s.transcript = ""
         s.confidence = 0
         s.segments = []
+        s.wordTimes = []
+        s.lastChange = Date()
         s.startedAt = Date()
         s.task = s.recognizer.recognitionTask(with: request) { [weak self, weak s] result, error in
             guard let self = self, let s = s else { return }
@@ -365,7 +414,12 @@ final class VoiceEngine: ObservableObject {
     private func handle(_ result: SFSpeechRecognitionResult?, error: Error?, in s: Recognition) {
         guard sessions.contains(where: { $0 === s }) else { return }
         if let result = result {
-            s.transcript = result.bestTranscription.formattedString
+            let text = result.bestTranscription.formattedString
+            if text != s.transcript { s.lastChange = Date() }
+            let words = text.split(whereSeparator: { $0.isWhitespace }).count
+            if words < s.wordTimes.count { s.wordTimes.removeLast(s.wordTimes.count - words) }
+            while s.wordTimes.count < words { s.wordTimes.append(Date()) }
+            s.transcript = text
             s.segments = result.bestTranscription.segments
             if result.isFinal, !s.segments.isEmpty {
                 s.confidence = Double(s.segments.map { $0.confidence }.reduce(0, +)) / Double(s.segments.count)
@@ -379,6 +433,15 @@ final class VoiceEngine: ObservableObject {
         if error != nil && !(result?.isFinal ?? false) {
             // the task ended (a minute is the limit, or a hiccup): start a fresh one, backing off if it keeps failing
             s.failures += 1
+            if s.failures >= 3 && !s.serverFallback && s.recognizer.supportsOnDeviceRecognition {
+                // On-device recognition for this language isn't working (model not downloaded, Siri off…):
+                // Apple's servers still can.
+                s.serverFallback = true
+                diagnose("ondevice-\(s.code)", "On-device speech recognition kept failing (\(error?.localizedDescription ?? "unknown error")); using Apple's servers instead.")
+            }
+            if s.failures == 6 {
+                diagnose("failing-\(s.code)", "Speech recognition keeps failing: \(error?.localizedDescription ?? "unknown error"). Check Settings → Siri & Search and Settings → SAINT → Speech Recognition.")
+            }
             let delay = min(5.0, 0.2 * Double(s.failures * s.failures))
             queue.asyncAfter(deadline: .now() + delay) { [weak self, weak s] in
                 guard let self = self, let s = s, self.phaseValue == .listening || self.phaseValue == .capturing else { return }
@@ -389,12 +452,21 @@ final class VoiceEngine: ObservableObject {
         }
     }
 
+    /// Was there a pause before word ``index``? Final results carry timestamps; partial ones don't (they're all
+    /// zero), so we also use when each word first appeared. Without this, "SAINT" said after any earlier words in
+    /// the same recognition session never counted, which is why the wake word seemed not to work at all.
     private func pauseBefore(_ s: Recognition) -> (Int) -> Bool {
         let segs = s.segments
+        let times = s.wordTimes
+        let gap = 0.9 - 0.5 * min(1, max(0, settings?.wakeSensitivity ?? 0.5))      // 0.4 s (sensitive) … 0.9 s
         return { index in
-            guard index > 0, index < segs.count else { return false }
-            let previous = segs[index - 1]
-            return segs[index].timestamp - (previous.timestamp + previous.duration) >= 0.6
+            guard index > 0 else { return false }
+            if index < segs.count {
+                let previous = segs[index - 1]
+                if segs[index].timestamp > 0 && segs[index].timestamp - (previous.timestamp + previous.duration) >= gap { return true }
+            }
+            if index < times.count && times[index].timeIntervalSince(times[index - 1]) >= gap { return true }
+            return false
         }
     }
 
@@ -458,8 +530,13 @@ final class VoiceEngine: ObservableObject {
                 finishCommand()
             }
         } else if phaseValue == .listening {
-            // recognisers only run for about a minute: refresh them while nothing is being said
-            for s in sessions where now.timeIntervalSince(s.startedAt) > 50 && s.transcript.isEmpty { restart(s) }
+            for s in sessions {
+                if now.timeIntervalSince(s.startedAt) > 50 && s.transcript.isEmpty {
+                    restart(s)                    // recognisers only run for about a minute: refresh them while quiet
+                } else if !s.transcript.isEmpty && now.timeIntervalSince(s.lastChange) > 2.0 {
+                    restart(s)                    // someone talked (not to SAINT): start fresh, so the next "SAINT" is first
+                }
+            }
         }
     }
 

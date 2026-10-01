@@ -16,11 +16,56 @@ public enum MusicIntent: Equatable {
     case nowPlaying
     case like
     case shuffle(Bool)
+    case playLiked                     // "play my liked songs"
+    case playRecent                    // "play what I've been listening to today"
+    case recentSummary                 // "what did I listen to today?"
+    case topTrack                      // "what's the song I've played the most lately?"
+    case queue(String)                 // "add Levitating to the queue"
+    case addToPlaylist(String)         // "add this to my workout playlist"
+    case recommend                     // "what should I listen to?"
+    case transfer(String)              // "play it on my speaker" / "switch Spotify to my PC"
+    case seek(Int)                     // "skip ahead 30 seconds" (negative: back)
 }
 
 public protocol MusicService: AnyObject {
     /// Do it and answer in SAINT's English phrases ("Paused.", "Playing X by Y.", "Spotify isn't connected.").
     func perform(_ intent: MusicIntent) async -> String
+}
+
+/// Things the phone itself can do. Anything iOS doesn't let an app do directly goes through a Shortcut the user
+/// made (``shortcut``/``system``), and sending a text or placing a call is always confirmed by the user in
+/// Apple's own sheet.
+public enum PhoneIntent: Equatable {
+    case takePhoto(selfie: Bool)
+    case openCamera
+    case recordVideo
+    case flashlight(Bool?)             // nil: toggle
+    case brightness(Int)               // percent
+    case brightnessStep(up: Bool)
+    case call(String)                  // who (a contact name or a number)
+    case facetime(String)
+    case text(String)                  // "mom I'm on my way" — the app splits recipient and message by contact names
+    case openApp(String)
+    case navigate(String)
+    case battery
+    case system(String, Bool?)         // "low power mode", "wi-fi", "bluetooth", "do not disturb", "airplane mode", "dark mode"
+    case shortcut(String)
+    case openSettings
+    case webSearch(String)
+}
+
+public struct PhoneResult: Equatable {
+    public var text: String
+    public var ok: Bool
+    public init(_ text: String, ok: Bool = true) {
+        self.text = text
+        self.ok = ok
+    }
+}
+
+public protocol PhoneService: AnyObject {
+    /// Do it and answer in SAINT's English phrases, or nil when this phone can't (it's then tried on your PC).
+    func perform(_ intent: PhoneIntent) async -> PhoneResult?
 }
 
 public struct PeerInfo: Equatable, Identifiable {

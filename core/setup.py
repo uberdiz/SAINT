@@ -204,8 +204,17 @@ class SetupWizard:
 
     def _check_tts(self):
         tts_backend = config.get("voice.tts_backend", "kokoro")
-        if tts_backend == "kokoro":
-            # Try to import the kokoro package to verify it's available
+        if tts_backend in ("kokoro", "kokoro_onnx"):
+            # The ONNX voice (what SAINT.exe ships) needs no PyTorch; otherwise the kokoro package.
+            from modules.voice import kokoro_onnx
+            if kokoro_onnx.available():
+                self.results.append(CheckResult(
+                    name="TTS (Kokoro)",
+                    passed=True,
+                    message="Kokoro voice ready (onnxruntime)",
+                    details={"model_dir": str(kokoro_onnx.model_dir())}
+                ))
+                return
             try:
                 import kokoro
                 self.results.append(CheckResult(

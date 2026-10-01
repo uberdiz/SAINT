@@ -31,10 +31,10 @@ APP = OUT / "SAINT"
 
 from core.version import VERSION, VERSION_TUPLE  # noqa: E402
 
-# Hugging Face repos SAINT loads by default (Settings > Voice): Whisper base.en and Kokoro.
+# Hugging Face repos SAINT loads by default (Settings > Voice): Whisper base.en. The voice (Kokoro on
+# onnxruntime, data/tts/kokoro-onnx) is bundled by saint.spec.
 MODELS = {
     "Systran/faster-whisper-{stt}": None,                       # everything in the snapshot
-    "hexgrad/Kokoro-82M": ("config.json", "kokoro-v1_0.pth", "voices/"),
 }
 
 
@@ -133,6 +133,8 @@ def main():
     ap.add_argument("--no-models", action="store_true")
     ap.add_argument("--stt-model", default="base.en")
     args = ap.parse_args()
+    from tools.get_kokoro_onnx import ensure as ensure_voice
+    ensure_voice()                                   # the ONNX voice the spec bundles
     make_icon()
     make_version_file()
     pyinstaller()

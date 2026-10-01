@@ -1,65 +1,78 @@
 import SwiftUI
 
-/// SAINT's presence: a soft, breathing orb that follows the microphone while it listens, brightens when it
-/// hears its name, swirls while it thinks and pulses while it speaks.
+/// SAINT's presence: the logo inside rings coloured by state (the desktop's state colours) — orange and calm while
+/// it waits for its name, teal and following your voice while it listens, swirling while it thinks, pulsing while
+/// it speaks, red on a problem. Respects Reduce Motion.
 struct OrbView: View {
     let phase: VoiceEngine.Phase
     let level: Float
     var speaking = false
     var error = false
+    /// Compact form for the talk button (no outer halos).
+    var compact = false
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var color: Color {
         if error && phase == .off { return Theme.error }
         if speaking { return Theme.speaking }
         switch phase {
         case .off: return Theme.idle
-        case .listening: return Theme.listening
-        case .capturing: return Theme.capturing
+        case .listening: return Theme.ready
+        case .capturing: return Theme.listening
         case .thinking: return Theme.thinking
         case .speaking: return Theme.speaking
         }
     }
 
     private var energy: Double {
+        if speaking { return 0.6 }
         switch phase {
-        case .off: return 0.05
-        case .listening: return 0.25 + Double(level) * 0.6
-        case .capturing: return 0.55 + Double(level) * 0.9
-        case .thinking: return 0.5
+        case .off: return 0.0
+        case .listening: return 0.15 + Double(level) * 0.4
+        case .capturing: return 0.45 + Double(level) * 1.2
+        case .thinking: return 0.45
         case .speaking: return 0.6
         }
     }
 
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion || phase == .off)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
-            Canvas { canvas, size in
-                let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                let base = min(size.width, size.height) * 0.30
-                let swirl = phase == .thinking ? 2.2 : 1.0
-                canvas.addFilter(.blur(radius: 18))
-                for i in 0..<4 {
-                    let a = t * (0.5 + Double(i) * 0.23) * swirl + Double(i) * 1.7
-                    let wobble = base * (0.18 + 0.22 * energy)
-                    let x = center.x + cos(a) * wobble
-                    let y = center.y + sin(a * 1.3) * wobble
-                    let radius = base * (0.78 + 0.18 * sin(t * 1.4 + Double(i))) * (1 + 0.28 * energy)
-                    let rect = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
-                    let shade = color.opacity(0.55 - Double(i) * 0.08)
-                    canvas.fill(Path(ellipseIn: rect), with: .color(shade))
+            GeometryReader { geo in
+                let d = min(geo.size.width, geo.size.height)
+                let pulse = reduceMotion ? 0 : (phase == .thinking ? sin(t * 4) * 0.04 : sin(t * 2.2) * 0.025)
+                ZStack {
+                    if !compact {
+                        ForEach(0..<3, id: \.self) { i in
+                            let base = d * (0.62 + 0.19 * Double(i))
+                            let size = base * (1 + energy * 0.12 * Double(i + 1) + pulse)
+                            Circle()
+                                .fill(color.opacity(0.07 + 0.05 * Double(2 - i)))
+                                .frame(width: size, height: size)
+                        }
+                    }
+                    if phase == .thinking && !reduceMotion {
+                        let spin = d * (compact ? 1.12 : 0.56)
+                        Circle()
+                            .trim(from: 0, to: 0.28)
+                            .stroke(color, style: StrokeStyle(lineWidth: compact ? 2 : 3, lineCap: .round))
+                            .frame(width: spin, height: spin)
+                            .rotationEffect(.radians(t * 3))
+                    }
+                    let core = d * (compact ? 1 : 0.49)
+                    Circle()
+                        .fill(Theme.accentSoft)
+                        .overlay(Circle().strokeBorder(color, lineWidth: compact ? 1.5 : 2.5))
+                        .frame(width: core, height: core)
+                        .shadow(color: color.opacity(phase == .off ? 0 : 0.5), radius: compact ? 10 : 18)
+                        .scaleEffect(1 + (compact ? energy * 0.06 : 0) + pulse)
+                    SaintLogo(size: d * (compact ? 0.64 : 0.32))
                 }
-            }
-            .overlay {
-                Circle()
-                    .fill(RadialGradient(colors: [color.opacity(0.9), color.opacity(0.25)], center: .center, startRadius: 4, endRadius: 90))
-                    .frame(width: 120, height: 120)
-                    .scaleEffect(1 + 0.12 * energy + 0.03 * sin(t * 2))
-                    .blur(radius: 2)
-                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1).frame(width: 120, height: 120)
-                        .scaleEffect(1 + 0.12 * energy + 0.03 * sin(t * 2)))
+                .frame(width: geo.size.width, height: geo.size.height)
             }
         }
-        .animation(.easeInOut(duration: 0.4), value: phase)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: phase)
         .accessibilityHidden(true)
     }
 }

@@ -269,8 +269,13 @@ class DevicesPage(Page):
             self.qr.set_matrix(info.get("matrix"))
             addr = info["addresses"][0] if info["addresses"] else "this PC's IP address"
             who = "your phone or other PC" if role == "own" else "your friend"
+            ts = info.get("tailscale") or ""
+            away = (f"\nFrom anywhere (Tailscale): {ts}:{info['port']} — the code includes it." if ts else
+                    "\nTo reach this PC away from home, install Tailscale on this PC and your phone, then show "
+                    "the code again.")
+            qr = "" if info.get("matrix") else "\n(The QR code needs the segno package — type the address instead.)"
             self.how.setText(f"On {who}, open SAINT → Devices and scan this code, or type the address and code "
-                             f"below.\n\nAddress: {addr}:{info['port']}")
+                             f"below.\n\nAddress: {addr}:{info['port']}{away}{qr}")
             self.code.setText(info["code"])
             self.offer_box.setVisible(True)
             self.enable.setChecked(True)
@@ -308,8 +313,10 @@ class DevicesPage(Page):
             self.enable.setChecked(link.enabled)
             self.enable.blockSignals(False)
         if running:
-            addrs = link.status()["addresses"]
-            set_chip(self.status, f"Listening on {addrs[0] if addrs else '…'}:{link.node.port}", "ok")
+            st = link.status()
+            addrs = st["addresses"]
+            remote = " · Tailscale on" if st.get("tailscale") else ""
+            set_chip(self.status, f"Listening on {addrs[0] if addrs else '…'}:{link.node.port}{remote}", "ok")
         else:
             set_chip(self.status, "Off", "")
         self.add_card.setEnabled(True)
@@ -382,6 +389,9 @@ class DevicesPage(Page):
                 b = QPushButton("Send file…")
                 b.clicked.connect(lambda _=False, i=d["id"]: self._send_file(i))
                 h.addWidget(b)
+            b = QPushButton("Rename…")
+            b.clicked.connect(lambda _=False, i=d["id"], n=d["name"]: self._rename(i, n))
+            h.addWidget(b)
             b = QPushButton("Permissions…")
             b.clicked.connect(lambda _=False, dev=d: self._permissions(dev))
             h.addWidget(b)
@@ -412,6 +422,14 @@ class DevicesPage(Page):
         dlg = PermissionsDialog(device, self)
         if dlg.exec() == QDialog.Accepted:
             dlg.apply()
+            self.refresh()
+
+    def _rename(self, peer_id, name):
+        from PySide6.QtWidgets import QInputDialog
+        new, ok = QInputDialog.getText(self, "Rename device", "Name for this device:", text=name)
+        if ok and new.strip() and new.strip() != name:
+            _link().rename_peer(peer_id, new)
+            self._say(f"Renamed to {' '.join(new.split())[:40]}. Say it by that name, e.g. “lock {new.strip()}”.")
             self.refresh()
 
     def _remove(self, peer_id, name):

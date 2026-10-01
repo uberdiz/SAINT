@@ -19,6 +19,8 @@ struct DevicesView: View {
                             NavigationLink { DeviceDetailView(peer: peer) } label: { DeviceRow(peer: peer) }
                         }
                     }
+                    .listRowBackground(Theme.surface)
+                    remoteSection
                 }
                 if !friends.isEmpty {
                     Section("Friends' SAINTs") {
@@ -26,6 +28,7 @@ struct DevicesView: View {
                             NavigationLink { DeviceDetailView(peer: peer) } label: { DeviceRow(peer: peer) }
                         }
                     }
+                    .listRowBackground(Theme.surface)
                 }
                 let unpaired = model.nearby.filter { found in !model.peers.contains(where: { $0.id == found.id }) }
                 if !unpaired.isEmpty {
@@ -37,13 +40,14 @@ struct DevicesView: View {
                                 HStack {
                                     Image(systemName: "dot.radiowaves.left.and.right").foregroundStyle(Theme.accent)
                                     VStack(alignment: .leading) {
-                                        Text(found.name.isEmpty ? "SAINT" : found.name)
-                                        Text("\(found.host):\(found.port) — tap to pair").font(.caption).foregroundStyle(.secondary)
+                                        Text(found.name.isEmpty ? "SAINT" : found.name).foregroundStyle(Theme.text)
+                                        Text("\(found.host):\(found.port) — tap to pair").font(.caption).foregroundStyle(Theme.muted)
                                     }
                                 }
                             }
                         }
                     }
+                    .listRowBackground(Theme.surface)
                 }
                 if !model.inbox.isEmpty {
                     Section("Received files") {
@@ -63,8 +67,12 @@ struct DevicesView: View {
                             }
                         }
                     }
+                    .listRowBackground(Theme.surface)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .saintBackground()
+            .tint(Theme.accent)
             .navigationTitle("Devices")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -85,16 +93,52 @@ struct DevicesView: View {
     private var emptyState: some View {
         Section {
             VStack(spacing: 10) {
-                Image(systemName: "desktopcomputer.and.iphone").font(.system(size: 44)).foregroundStyle(Theme.accent)
-                Text("Link your PC").font(.system(.title3, design: .rounded, weight: .bold))
-                Text("On your PC open SAINT → Devices → turn on Link, then scan its code here. Your PC and phone will share what they learn, and you can control your PC by voice.")
-                    .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Add a device") { pairing = true }.buttonStyle(.borderedProminent)
+                Image(systemName: "laptopcomputer.and.iphone").font(.system(size: 44)).foregroundStyle(Theme.accent)
+                    .frame(width: 88, height: 88)
+                    .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                Text("Link your PC").font(.system(size: 20, weight: .bold)).foregroundStyle(Theme.text)
+                Text("On your PC open SAINT → Devices → “Pair a phone / device”, then scan its code here. Your PC and phone share what they learn, the phone's activity shows up in your PC's History, and you can control your PC by voice.")
+                    .font(.subheadline).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+                Button { pairing = true } label: {
+                    Text("Add a device").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.onAccent)
+                        .padding(.horizontal, 22).padding(.vertical, 11)
+                        .background(Theme.accent, in: Capsule())
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
         }
         .listRowBackground(Color.clear)
+    }
+
+    /// Reaching your PC away from home: through Tailscale (the PC puts its Tailscale address in the pairing code).
+    private var remoteSection: some View {
+        let remote = own.compactMap { peer -> (PeerInfo, String)? in
+            guard let host = model.remoteHost(of: peer.id) else { return nil }
+            return (peer, host)
+        }.first
+        return Section {
+            if let r = remote {
+                SettingRow(icon: "globe", title: "Reachable from anywhere",
+                           subtitle: "\(r.0.name) over Tailscale (\(r.1)). Keep Tailscale on, on this iPhone too.",
+                           iconTint: Theme.success, tile: Theme.successSoft)
+                    .listRowInsets(EdgeInsets())
+            } else {
+                SettingRow(icon: "wifi", title: "Only on your Wi-Fi",
+                           subtitle: "Install Tailscale on your PC and this iPhone (same account), then pair again — or add the PC's Tailscale address in its page.",
+                           iconTint: Theme.accent, tile: Theme.accentSoft) {
+                    Link(destination: URL(string: "https://tailscale.com/download/ios")!) {
+                        Text("Get").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.onAccent)
+                            .padding(.horizontal, 12).padding(.vertical, 6).background(Theme.accent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .listRowInsets(EdgeInsets())
+            }
+        } header: {
+            Text("Away from home")
+        }
+        .listRowBackground(Theme.surface)
     }
 }
 
@@ -107,10 +151,13 @@ struct DeviceRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: icon).font(.title3).foregroundStyle(peer.online ? Theme.accent : .secondary).frame(width: 30)
+            Image(systemName: icon).font(.system(size: 17, weight: .medium))
+                .foregroundStyle(peer.online ? Theme.accent : Theme.muted)
+                .frame(width: 36, height: 36)
+                .background(peer.online ? Theme.accentSoft : Theme.raised, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
-                Text(peer.name).font(.system(.body, design: .rounded, weight: .medium))
-                Text(peer.online ? "Connected" : "Offline").font(.caption).foregroundStyle(peer.online ? .green : .secondary)
+                Text(peer.name).font(.system(size: 15.5, weight: .medium)).foregroundStyle(Theme.text)
+                Text(peer.online ? "Connected" : "Offline").font(.caption).foregroundStyle(peer.online ? Theme.success : Theme.muted)
             }
         }
     }
@@ -180,6 +227,9 @@ struct PairSheet: View {
                     Section { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .saintBackground()
+            .tint(Theme.accent)
             .navigationTitle("Add a device")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
@@ -231,6 +281,10 @@ struct DeviceDetailView: View {
     @State private var promptText = ""
     @State private var messageText = ""
     @State private var confirmUnpair = false
+    @State private var renaming = false
+    @State private var newName = ""
+    @State private var editingRemote = false
+    @State private var remoteHost = ""
 
     private var live: PeerInfo { model.peers.first(where: { $0.id == peer.id }) ?? peer }
 
@@ -252,7 +306,7 @@ struct DeviceDetailView: View {
                     DeviceRow(peer: live)
                     Spacer()
                     if live.online {
-                        Pill(text: "Online", tint: .green)
+                        Pill(text: "Online", tint: Theme.success, fill: Theme.successSoft)
                     } else {
                         Button("Connect") { Task { _ = try? await model.link.connect(peerID: live.id); model.refresh() } }
                             .buttonStyle(.bordered)
@@ -276,11 +330,46 @@ struct DeviceDetailView: View {
                 }
             }
             Section {
+                Button { newName = live.name; renaming = true } label: { Label("Rename…", systemImage: "pencil") }
+                Button { remoteHost = model.remoteHost(of: live.id) ?? ""; editingRemote = true } label: {
+                    Label(model.remoteHost(of: live.id).map { "Away-from-home address: \($0)" } ?? "Add an away-from-home address…",
+                          systemImage: "globe")
+                }
+            } footer: {
+                Text("The away-from-home address is the PC's Tailscale address (100.x.y.z, shown on the PC's Devices page). "
+                     + "SAINT tries it whenever your Wi-Fi address doesn't answer.")
+            }
+            Section {
                 Button("Unpair this device", role: .destructive) { confirmUnpair = true }
             }
         }
+        .listRowBackground(Theme.surface)
+        .scrollContentBackground(.hidden)
+        .saintBackground()
+        .tint(Theme.accent)
         .navigationTitle(live.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { newName = live.name; renaming = true } label: { Image(systemName: "pencil") }
+                    .accessibilityLabel("Rename")
+            }
+        }
+        .alert("Rename device", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Save") { model.renamePeer(live.id, to: newName) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Only on this phone. To rename this iPhone everywhere, use Settings → This phone.")
+        }
+        .alert("Away-from-home address", isPresented: $editingRemote) {
+            TextField("100.x.y.z or name.ts.net", text: $remoteHost)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Save") { model.setRemoteHost(live.id, host: remoteHost) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Your PC's Tailscale address. Leave empty to remove it.")
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
             if case .success(let url) = result { Task { await model.send(file: url, to: live.id) } }
         }

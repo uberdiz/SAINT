@@ -224,9 +224,10 @@ class LinkService:
         offer = self.pairing.create(role, label)
         addrs = lan_addresses()
         host = addrs[0] if addrs else "127.0.0.1"
-        uri = offer.uri(host, self.node.port, self.identity.name)
+        uri = offer.uri(host, self.node.port, self.identity.name, alternates=addrs[1:])
         return {"code": offer.code, "uri": uri, "port": self.node.port, "addresses": addrs, "role": role,
-                "expires": offer.expires, "matrix": qr_matrix(uri), "name": self.identity.name}
+                "expires": offer.expires, "matrix": qr_matrix(uri), "name": self.identity.name,
+                "tailscale": tailscale_address(addrs)}
 
     def pair(self, text: str, role: Optional[str] = None) -> Peer:
         """Join another device's pairing window. ``text`` is the ``saint://pair?...``
@@ -236,7 +237,15 @@ class LinkService:
             self.node.start("0.0.0.0", int(config.get("link.port", DEFAULT_PORT))) if self.enabled else None
         if text.lower().startswith("saint://"):
             info = parse_pair_uri(text)
-            return self.node.pair(info["host"], info["port"], info["token"], role or info["role"])
+            last = None
+            for host in [info["host"]] + info.get("alternates", []):     # home address first, then Tailscale
+                try:
+                    return self.node.pair(host, info["port"], info["token"], role or info["role"])
+                except LinkError as e:
+                    if e.code not in ("unreachable", "timeout", "closed"):
+                        raise
+                    last = e
+            raise last or LinkError("Couldn't reach that device.", "unreachable")
         parts = text.replace(",", " ").split()
         if len(parts) < 2:
             raise LinkError("Give me the address and the code, like “192.168.1.20:8765 ABCD-EFGH-…”.", "bad_args")
@@ -257,8 +266,9 @@ class LinkService:
 
     def status(self) -> dict:
         offer = self.pairing.current
+        addrs = lan_addresses() if self.node.running else []
         return {"enabled": self.enabled, "running": self.node.running, "port": self.node.port,
-                "addresses": lan_addresses() if self.node.running else [], "device": self.identity.hello(),
+                "addresses": addrs, "tailscale": tailscale_address(addrs), "device": self.identity.hello(),
                 "devices": self.devices(), "pending_approvals": self.approvals.pending(),
                 "pairing": None if offer is None else {"role": offer.role, "expires": offer.expires},
                 "discovery": self._discovery.backends if self._discovery else [],
@@ -530,6 +540,16 @@ class SharedInbox:
 
 _link: Optional[LinkService] = None
 _link_lock = threading.Lock()
+
+
+def tailscale_address(addrs: List[str]) -> str:
+    """This PC's Tailscale address (100.64.0.0/10), if Tailscale is running — the phone uses it
+    to reach SAINT from anywhere."""
+    for a in addrs:
+        parts = a.split(".")
+        if len(parts) == 4 and parts[0] == "100" and parts[1].isdigit() and 64 <= int(parts[1]) <= 127:
+            return a
+    return ""
 
 
 def get_link() -> LinkService:

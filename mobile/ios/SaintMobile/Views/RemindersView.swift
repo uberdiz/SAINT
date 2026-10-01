@@ -64,6 +64,9 @@ struct RemindersView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .saintBackground()
+            .tint(Theme.accent)
             .navigationTitle("Reminders")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

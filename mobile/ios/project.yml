@@ -14,8 +14,8 @@ settings:
   base:
     # SaintCore is plain Swift 5; the app was written without strict concurrency checking.
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.2.0"
-    CURRENT_PROJECT_VERSION: "2"
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: "3"
     CODE_SIGN_STYLE: Automatic
     # Put your Apple ID's team here to run on your phone from Xcode (a free account works), or leave it empty:
     # the CI build and Sideloadly sign the app themselves.
@@ -66,11 +66,13 @@ targets:
           - audio
         NSMicrophoneUsageDescription: SAINT listens for its name and your commands. Audio is processed on this phone where iOS allows it.
         NSSpeechRecognitionUsageDescription: SAINT turns what you say into commands, on this phone where possible.
-        NSCameraUsageDescription: Scan the pairing code that SAINT shows on your PC.
+        NSCameraUsageDescription: Scan the pairing code that SAINT shows on your PC, take photos and videos when you ask, and switch the flashlight.
+        NSContactsUsageDescription: So “call mom” or “text Alex I'm on my way” finds the right person. Your contacts stay on this phone.
+        NSPhotoLibraryAddUsageDescription: Photos and videos SAINT takes for you are saved to your library.
         NSLocalNetworkUsageDescription: SAINT finds your PC and your other devices on your Wi-Fi and talks to them over an encrypted link.
         NSBonjourServices:
           - _saint._tcp
-        # saint://pair?… (pairing links) and saint://spotify-callback (Spotify sign-in)
+        # saint://pair?… (pairing links), saint://spotify-callback (Spotify sign-in), saint://shortcut-done (back from Shortcuts)
         CFBundleURLTypes:
           - CFBundleURLName: app.saint.mobile
             CFBundleURLSchemes:

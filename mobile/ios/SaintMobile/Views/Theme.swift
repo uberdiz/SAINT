@@ -1,48 +1,83 @@
 import SwiftUI
 
-/// The look: system colours and materials, big rounded type, and Liquid Glass where the OS has it.
+/// SAINT's look, the same as the desktop app (ui/theme.py): near-black surfaces, hairline borders, one accent —
+/// SAINT orange — and colour reserved for state. Designed in Figma ("SAINT for iPhone — UI 2.0").
 enum Theme {
-    static let accent = Color(red: 0.36, green: 0.52, blue: 1.0)
-    static let listening = Color(red: 0.31, green: 0.55, blue: 1.0)
-    static let capturing = Color(red: 0.20, green: 0.85, blue: 0.75)
-    static let thinking = Color(red: 0.68, green: 0.42, blue: 1.0)
-    static let speaking = Color(red: 1.0, green: 0.55, blue: 0.40)
-    static let idle = Color.gray
-    static let error = Color(red: 1.0, green: 0.36, blue: 0.36)
-}
-
-/// A rounded card on a material, or Liquid Glass on iOS 26.
-struct GlassCard: ViewModifier {
-    var radius: CGFloat = 22
-
-    func body(content: Content) -> some View {
-        #if compiler(>=6.2)
-        if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-        } else {
-            fallback(content)
-        }
-        #else
-        fallback(content)
-        #endif
+    static func hex(_ value: UInt32) -> Color {
+        Color(red: Double((value >> 16) & 0xff) / 255, green: Double((value >> 8) & 0xff) / 255, blue: Double(value & 0xff) / 255)
     }
 
-    private func fallback(_ content: Content) -> some View {
+    // surfaces and text (desktop dark palette)
+    static let bg = hex(0x0a0b0d)
+    static let surface = hex(0x121318)
+    static let surface2 = hex(0x18191e)
+    static let raised = hex(0x1e1f25)
+    static let border = hex(0x1f2127)
+    static let borderStrong = hex(0x2b2d34)
+    static let text = hex(0xeceef2)
+    static let muted = hex(0x8a8f98)
+    static let faint = hex(0x555a63)
+
+    // the accent
+    static let accent = hex(0xfeaa34)
+    static let accentSoft = hex(0x382b1c)
+    static let accentLine = hex(0x5a4220)
+    static let onAccent = hex(0x16120a)
+
+    // status
+    static let success = hex(0x4cc38a)
+    static let successSoft = hex(0x1b2f2a)
+    static let danger = hex(0xf06a6a)
+    static let dangerSoft = hex(0x33191b)
+    static let info = hex(0x8b9cff)
+    static let infoSoft = hex(0x22243a)
+
+    // assistant states (desktop state_color)
+    static let ready = accent                 // waiting for "SAINT"
+    static let listening = hex(0x5eead4)      // hearing a command
+    static let capturing = listening
+    static let thinking = hex(0x8b9cff)
+    static let working = hex(0xc084fc)
+    static let speaking = hex(0xff8a5c)
+    static let idle = faint
+    static let error = danger
+}
+
+/// A card on SAINT's surface with a hairline border, like the desktop's cards.
+struct GlassCard: ViewModifier {
+    var radius: CGFloat = 16
+    var fill: Color = Theme.surface
+    var stroke: Color = Theme.border
+
+    func body(content: Content) -> some View {
         content
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(.white.opacity(0.08)))
+            .background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(stroke, lineWidth: 1))
     }
 }
 
 extension View {
-    func glassCard(radius: CGFloat = 22) -> some View { modifier(GlassCard(radius: radius)) }
+    func glassCard(radius: CGFloat = 16, fill: Color = Theme.surface, stroke: Color = Theme.border) -> some View {
+        modifier(GlassCard(radius: radius, fill: fill, stroke: stroke))
+    }
 
-    /// The soft background behind every screen.
+    /// The background behind every screen.
     func saintBackground() -> some View {
-        background(
-            LinearGradient(colors: [Color(.systemBackground), Color(.secondarySystemBackground)], startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
-        )
+        background(Theme.bg.ignoresSafeArea())
+    }
+
+    /// Close the keyboard from anywhere.
+    func hideKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
+    /// Drag down anywhere on the screen to put the keyboard away.
+    func dismissKeyboardOnDragDown() -> some View {
+        simultaneousGesture(DragGesture(minimumDistance: 24).onEnded { value in
+            if value.translation.height > 40 && abs(value.translation.width) < value.translation.height {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            }
+        })
     }
 }
 
@@ -51,27 +86,118 @@ struct SectionTitle: View {
     init(_ text: String) { self.text = text }
     var body: some View {
         Text(text)
-            .font(.system(.footnote, design: .rounded, weight: .semibold))
-            .foregroundStyle(.secondary)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Theme.faint)
             .textCase(.uppercase)
             .tracking(0.6)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
 struct Pill: View {
     let text: String
     var icon: String?
-    var tint: Color = .secondary
+    var tint: Color = Theme.muted
+    var fill: Color?
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 6) {
             if let icon = icon { Image(systemName: icon).imageScale(.small) }
             Text(text).lineLimit(1)
         }
-        .font(.system(.caption, design: .rounded, weight: .medium))
+        .font(.system(size: 12, weight: .medium))
         .foregroundStyle(tint)
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        .background(tint.opacity(0.12), in: Capsule())
+        .background(fill ?? Theme.surface2, in: Capsule())
+    }
+}
+
+/// "Done" / "Failed" / "On PC" / "Queued".
+struct StatusChip: View {
+    let status: String
+
+    private var style: (String, Color, Color) {
+        switch status {
+        case "done": return ("Done", Theme.success, Theme.successSoft)
+        case "failed": return ("Failed", Theme.danger, Theme.dangerSoft)
+        case "sent": return ("On PC", Theme.info, Theme.infoSoft)
+        case "queued": return ("Queued", Theme.accent, Theme.accentSoft)
+        default: return ("Info", Theme.muted, Theme.surface2)
+        }
+    }
+
+    var body: some View {
+        let (label, tint, fill) = style
+        Text(label)
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(fill, in: Capsule())
+    }
+}
+
+/// The desktop's settings rows: an icon tile, a title and an optional subtitle, something on the right.
+struct SettingRow<Right: View>: View {
+    let icon: String
+    let title: String
+    var subtitle: String? = nil
+    var iconTint: Color = Theme.text
+    var tile: Color = Theme.raised
+    @ViewBuilder var right: () -> Right
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(iconTint)
+                .frame(width: 32, height: 32)
+                .background(tile, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 15)).foregroundStyle(Theme.text)
+                if let subtitle = subtitle {
+                    Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            right()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
+    }
+}
+
+extension SettingRow where Right == EmptyView {
+    init(icon: String, title: String, subtitle: String? = nil, iconTint: Color = Theme.text, tile: Color = Theme.raised) {
+        self.init(icon: icon, title: title, subtitle: subtitle, iconTint: iconTint, tile: tile, right: { EmptyView() })
+    }
+}
+
+/// A group of rows in one card, separated by hairlines.
+struct CardList<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+    var body: some View {
+        VStack(spacing: 0) { content() }
+            .glassCard(radius: 16)
+    }
+}
+
+struct RowDivider: View {
+    var body: some View { Rectangle().fill(Theme.border).frame(height: 1) }
+}
+
+/// SAINT's logo (the orange star) from the asset catalog.
+struct SaintLogo: View {
+    var size: CGFloat = 28
+    var body: some View {
+        Image("SaintLogo")
+            .resizable()
+            .interpolation(.high)
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
     }
 }

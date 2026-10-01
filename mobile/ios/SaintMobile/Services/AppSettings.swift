@@ -30,6 +30,14 @@ final class AppSettings: ObservableObject {
     @Published var useHeadsetMic: Bool { didSet { defaults.set(useHeadsetMic, forKey: "useHeadsetMic") } }
     /// Minutes a reminder is snoozed for from its notification.
     @Published var snoozeMinutes: Int { didSet { defaults.set(snoozeMinutes, forKey: "snoozeMinutes") } }
+    /// Where SAINT's voice and sounds play: "auto" (headphones when connected), "speaker" or "earpiece".
+    @Published var audioOutput: String { didSet { defaults.set(audioOutput, forKey: "audioOutput") } }
+    /// 0 (only clear "SAINT"s) … 1 (wakes most easily).
+    @Published var wakeSensitivity: Double { didSet { defaults.set(wakeSensitivity, forKey: "wakeSensitivity") } }
+    /// Listen in both chosen languages at once (two recognisers; some iPhones can't run two reliably).
+    @Published var listenBothLanguages: Bool { didSet { defaults.set(listenBothLanguages, forKey: "listenBothLanguages") } }
+    /// The playlist "add this to my playlist" used last.
+    @Published var lastPlaylist: String { didSet { defaults.set(lastPlaylist, forKey: "lastPlaylist") } }
 
     var claudeKey: String {
         get { keychain.string("claude.api.key") ?? "" }
@@ -61,6 +69,10 @@ final class AppSettings: ObservableObject {
         onboarded = bool("onboarded", false)
         useHeadsetMic = bool("useHeadsetMic", false)
         snoozeMinutes = d.object(forKey: "snoozeMinutes") == nil ? 10 : max(1, d.integer(forKey: "snoozeMinutes"))
+        audioOutput = d.string(forKey: "audioOutput") ?? "auto"
+        wakeSensitivity = d.object(forKey: "wakeSensitivity") == nil ? 0.5 : d.double(forKey: "wakeSensitivity")
+        listenBothLanguages = bool("listenBothLanguages", false)
+        lastPlaylist = d.string(forKey: "lastPlaylist") ?? ""
     }
 
     static func defaultDeviceName() -> String {

@@ -16,8 +16,14 @@ public final class Brain {
     public let settings: SettingsStore
     public let lang: LangEngine
     public let feed: ContextFeed
+    /// What SAINT did on this phone (the Activity tab; synced to your PC).
+    public let actions: ActionLog
 
     public var music: MusicService?
+    /// The phone itself: camera, flashlight, calls, texts, apps, Shortcuts.
+    public var phone: PhoneService?
+    /// This phone's name, written into the activity log.
+    public var deviceName = "iPhone"
     public var pc: PCBridge?
     public var model: LanguageModel?
     /// Send what the phone can't do itself to your PC, before trying the on-device model.
@@ -31,6 +37,8 @@ public final class Brain {
     private var pending: Pending?
     private var translations: [String: String] = [:]
     private var history: [(user: String, reply: String)] = []
+    /// What kind of request the last route handled (music, phone, reminder, memory, pc, chat), for the log.
+    private var routeKind = "chat"
 
     public init(directory: URL?, lang: LangEngine = LangEngine(), feed: ContextFeed = ContextFeed()) {
         memory = MemoryStore(directory: directory)
@@ -39,13 +47,14 @@ public final class Brain {
         scenes = SceneStore(directory: directory)
         reminders = ReminderStore(directory: directory)
         settings = SettingsStore(directory: directory)
+        actions = ActionLog(directory: directory)
         self.lang = lang
         self.feed = feed
         settings.apply(to: &self.lang.settings)
     }
 
     /// The stores the sync engine exchanges with your PC.
-    public var adapters: [SyncAdapter] { [memory, skills, aliases, scenes, reminders, settings] }
+    public var adapters: [SyncAdapter] { [memory, skills, aliases, scenes, reminders, settings, actions] }
 
     public func reloadSettings() { settings.apply(to: &lang.settings) }
 
@@ -101,6 +110,34 @@ public final class Brain {
         static let playILike = R(#"play something i(?:'d| would) like"#)
         static let playSome = R(#"play some (.+)"#)
         static let play = R(#"(?:play|put on) (.+)"#)
+        static let playLiked = R(#"(?:play|shuffle) (?:my |all my )?(?:liked|saved|favou?rite) (?:songs|tracks|music)|play my likes|play (?:the )?songs i(?:'ve)? liked"#)
+        static let playRecent = R(#"play (?:what|the (?:songs|music) )i(?:'ve| have)? (?:been )?(?:listening to|listened to|played|playing)(?: today| lately| recently| this week)?|play my recent(?:ly played)?(?: songs| tracks| music)?"#)
+        static let recentSummary = R(#"what (?:did|have) i (?:been )?(?:listen(?:ed|ing)? to|play(?:ed|ing)?)(?: today| lately| recently| yesterday| this week)?|what(?:'s| is| was) my listening (?:history|today)"#)
+        static let topTrack = R(#"what(?:'s| is| was) (?:the )?(?:song|track) i(?:'ve| have)? (?:played|listened to|been playing|been listening to) (?:the )?most(?: lately| recently| this week| this month)?|what(?:'s| is) my (?:most played|top|favou?rite) (?:song|track)(?: lately| recently| right now)?"#)
+        static let queue = R(#"(?:add|put) (.+?) (?:to|in|on|into) (?:the |my )?queue|queue(?: up)? (.+)|play (.+?) next"#)
+        static let addToPlaylist = R(#"(?:add|save|put) (?:this|this song|this track|it|the song|that|that song) (?:to|in|into|on) (?:my |the )?(.+?)(?: playlist)?"#)
+        static let recommend = R(#"what should i (?:listen to|play)(?: now| next)?|recommend (?:me )?(?:a song|some music|something(?: to listen to)?|music)|(?:any )?(?:music |song )?recommendations"#)
+        static let transfer = R(#"(?:switch|move|transfer|send) (?:the )?(?:music|spotify|playback|it|this) to (?:my |the )?(.+)|play (?:it|this|the music) on (?:my |the )?(.+)"#)
+        static let seek = R(#"(?:skip|go|jump|fast forward)(?: ahead| forward)? (\d{1,3}) seconds?|(?:go |jump )?back (\d{1,3}) seconds?|rewind (\d{1,3}) seconds?"#)
+
+        // the phone itself
+        static let photo = R(#"take (?:a |me a |another )?(?:picture|photo|pic|snapshot|selfie)(?: of (?:me|this|that|us))?|snap (?:a )?(?:picture|photo|pic|selfie)|(?:take|snap) (?:a )?(?:selfie|front) (?:picture|photo)"#)
+        static let selfie = Rx(#"selfie|front|of me|of us"#) ?? Rx("a^")!
+        static let camera = R(#"open (?:the |my )?camera(?: app)?|(?:launch|start) (?:the )?camera"#)
+        static let video = R(#"(?:record|take|start recording|shoot) (?:a )?video"#)
+        static let torch = R(#"(?:turn |switch )?(on|off) (?:the |my )?(?:flash ?light|torch|flash)|(?:turn |switch )?(?:the |my )?(?:flash ?light|torch|flash) (on|off)|(?:toggle )?(?:the )?(?:flash ?light|torch)"#)
+        static let brightness = R(#"(?:set |turn )?(?:the |my )?(?:screen )?brightness(?: to| at)? (\d{1,3})\s*(?:%|percent)?"#)
+        static let brighter = R(#"(?:make (?:the |my )?screen |make it )?(brighter|dimmer|darker)|(?:turn )?(?:the |my )?(?:screen )?brightness (up|down)|turn (up|down) (?:the )?brightness"#)
+        static let call = R(#"(?:call|phone|ring|dial)(?: up)? (.+)"#)
+        static let facetime = R(#"face ?time (.+)|(?:video call|video chat) (.+)"#)
+        static let text = R(#"(?:text|imessage|send (?:a )?(?:text|message|imessage)(?: to)?|message) (.+)"#)
+        static let openApp = R(#"(?:open|launch|go to) (?:the |my )?(.+?)(?: app)?"#)
+        static let navigate = R(#"(?:navigate|get directions|directions|give me directions|take me|drive me|route me)(?: to)? (.+)|how do i get to (.+)"#)
+        static let battery = R(#"(?:what(?:'s| is) )?(?:my |the )?battery(?: level| percentage| life)?|how much battery(?: do i have)?(?: left)?|how(?:'s| is) my battery"#)
+        static let system = R(#"(?:turn |switch )?(on|off) (?:the |my )?(low power(?: mode)?|wi-?fi|bluetooth|do not disturb|airplane mode|dark mode|focus(?: mode)?|(?:personal )?hotspot)|(?:turn |switch )?(?:the |my )?(low power(?: mode)?|wi-?fi|bluetooth|do not disturb|airplane mode|dark mode|focus(?: mode)?|(?:personal )?hotspot) (on|off)|(enable|disable|activate|deactivate) (?:the |my )?(low power(?: mode)?|wi-?fi|bluetooth|do not disturb|airplane mode|dark mode|focus(?: mode)?|(?:personal )?hotspot)"#)
+        static let shortcut = R(#"run (?:the |my )?(.+?) shortcut|run shortcut (.+)"#)
+        static let settingsApp = R(#"open (?:the |my )?(?:phone |iphone )?settings(?: app)?"#)
+        static let webSearch = R(#"(?:search|google|look up)(?: the web| google| online)?(?: for)? (.+)"#)
 
         // reminders
         static let remList = R(#"(?:what|which) (?:reminders|timers|alarms)(?: do i have| are (?:set|there))?(?: today| now)?|(?:list|show|read) (?:me )?(?:my |the )?(?:reminders|timers|alarms)|what(?:'s| is) on my (?:reminders|schedule)"#)
@@ -192,6 +229,7 @@ public final class Brain {
         reply.source = outcome.source
         history.append((user: utterance, reply: text))
         if history.count > 6 { history.removeFirst(history.count - 6) }
+        logAction(utterance, outcome: outcome, reply: text)
         return reply
     }
 
@@ -205,20 +243,32 @@ public final class Brain {
     // MARK: routing
 
     private func route(_ command: String, turn: LangTurn, original: String) async -> Outcome {
+        routeKind = "chat"
         if let p = pending {
             pending = nil
             if let o = await resolvePending(p, command: command, turn: turn, original: original) { return o }
         }
-        if let o = await linkCommands(command, turn: turn, original: original) { return o }
-        if let o = await skillsAndScenes(command, turn: turn, original: original) { return o }   // what you taught beats built-in small talk
+        if let o = await linkCommands(command, turn: turn, original: original) { routeKind = "pc"; return o }
+        if let o = await skillsAndScenes(command, turn: turn, original: original) { routeKind = "skill"; return o }   // what you taught beats built-in small talk
         if let o = basics(command) { return o }
-        if let o = reminderCommands(command, turn: turn) { return o }
-        if let o = memoryCommands(command) { return o }
-        if let o = await musicCommands(command) { return o }
+        if let o = reminderCommands(command, turn: turn) { routeKind = "reminder"; return o }
+        if let o = memoryCommands(command) { routeKind = "memory"; return o }
+        // The phone before music ("open Spotify" opens the app) and before "that needs your PC".
+        if let o = await phoneCommands(command) { routeKind = "phone"; return o }
+        if let o = await musicCommands(command) { routeKind = "music"; return o }
         if P.pcOnly.matches(command) {
+            routeKind = "pc"
             return await forwardToOwnPC(original, turn: turn, because: "That one needs your PC.")
         }
         return await fallback(command, turn: turn, original: original)
+    }
+
+    private func logAction(_ utterance: String, outcome: Outcome, reply: String) {
+        if utterance.trimmed.isEmpty { return }
+        let kind = outcome.source == "pc" ? "pc" : routeKind
+        let status = !outcome.ok ? "failed" : (outcome.source == "pc" ? "sent" : "done")
+        actions.add(ActionEntry(request: utterance.trimmed, action: reply.isEmpty ? outcome.text : reply, kind: kind,
+                                status: status, source: outcome.source, device: deviceName))
     }
 
     private func resolvePending(_ p: Pending, command: String, turn: LangTurn, original: String) async -> Outcome? {
@@ -476,6 +526,29 @@ public final class Brain {
         if let h = Brain.hit(P.setVolume, command), let n = Int(h.group(1)) { return .volume(min(100, max(0, n))) }
         if P.nowPlaying.matches(command) { return .nowPlaying }
         if P.like.matches(command) { return .like }
+        if P.playLiked.matches(command) { return .playLiked }
+        if P.playRecent.matches(command) { return .playRecent }
+        if P.recentSummary.matches(command) { return .recentSummary }
+        if P.topTrack.matches(command) { return .topTrack }
+        if P.recommend.matches(command) { return .recommend }
+        if let h = Brain.hit(P.seek, command) {
+            if let n = Int(h.group(1)) { return .seek(n) }
+            if let n = Int(h.group(2).isEmpty ? h.group(3) : h.group(2)) { return .seek(-n) }
+        }
+        if let h = Brain.hit(P.addToPlaylist, command) {
+            let name = h.group(1)
+            if !["liked songs", "likes", "favorites", "favourites", "queue"].contains(name.lowercased()) { return .addToPlaylist(name) }
+        }
+        if let h = Brain.hit(P.queue, command) {
+            let what = [h.group(1), h.group(2), h.group(3)].first { !$0.isEmpty } ?? ""
+            if !what.isEmpty && !["the", "a", "the song", "the next song", "something", "song", "it"].contains(what.lowercased()) {
+                return .queue(what)
+            }
+        }
+        if let h = Brain.hit(P.transfer, command) {
+            let target = h.group(1).isEmpty ? h.group(2) : h.group(1)
+            if !target.isEmpty { return .transfer(target) }
+        }
         if let h = Brain.hit(P.shuffle, command) { return .shuffle(h.group(1).lowercased() == "on") }
         if let h = Brain.hit(P.playAlbum, command) { return .playAlbum(h.group(1)) }
         if let h = Brain.hit(P.playPlaylist, command) { return .playPlaylist(h.group(1)) }
@@ -499,6 +572,58 @@ public final class Brain {
         guard let service = music else { return Outcome("Spotify isn't connected.", ok: false) }
         let text = await service.perform(intent)
         return Outcome(text, ok: !text.lowercased().contains("isn't"))
+    }
+
+    // MARK: the phone itself
+
+    static func systemName(_ raw: String) -> String {
+        let s = raw.lowercased()
+        if s.hasPrefix("low power") { return "low power mode" }
+        if s.replacingOccurrences(of: "-", with: "") == "wifi" { return "wi-fi" }
+        if s.hasPrefix("focus") { return "focus" }
+        if s.hasSuffix("hotspot") { return "hotspot" }
+        return s
+    }
+
+    func phoneIntent(_ command: String) -> PhoneIntent? {
+        if P.camera.matches(command) { return .openCamera }
+        if P.photo.matches(command) { return .takePhoto(selfie: P.selfie.search(command) != nil) }
+        if P.video.matches(command) { return .recordVideo }
+        if let h = Brain.hit(P.torch, command) {
+            let v = (h.group(1).isEmpty ? h.group(2) : h.group(1)).lowercased()
+            return .flashlight(v.isEmpty ? nil : v == "on")
+        }
+        if let h = Brain.hit(P.brightness, command), let n = Int(h.group(1)) { return .brightness(min(100, max(0, n))) }
+        if let h = Brain.hit(P.brighter, command) {
+            let w = [h.group(1), h.group(2), h.group(3)].first { !$0.isEmpty }?.lowercased() ?? ""
+            return .brightnessStep(up: w == "brighter" || w == "up")
+        }
+        if let h = Brain.hit(P.system, command) {
+            if !h.group(1).isEmpty { return .system(Brain.systemName(h.group(2)), h.group(1).lowercased() == "on") }
+            if !h.group(3).isEmpty { return .system(Brain.systemName(h.group(3)), h.group(4).lowercased() == "on") }
+            let verb = h.group(5).lowercased()
+            return .system(Brain.systemName(h.group(6)), verb == "enable" || verb == "activate")
+        }
+        if P.battery.matches(command) { return .battery }
+        if let h = Brain.hit(P.shortcut, command) { return .shortcut(h.group(1).isEmpty ? h.group(2) : h.group(1)) }
+        if P.settingsApp.matches(command) { return .openSettings }
+        if let h = Brain.hit(P.facetime, command) { return .facetime(h.group(1).isEmpty ? h.group(2) : h.group(1)) }
+        if let h = Brain.hit(P.call, command) {
+            let who = h.group(1)
+            if who.lowercased().hasPrefix("me ") { return nil }               // "call me Seb" is a name, not a call
+            return .call(who)
+        }
+        if let h = Brain.hit(P.text, command) { return .text(h.group(1)) }
+        if let h = Brain.hit(P.navigate, command) { return .navigate(h.group(1).isEmpty ? h.group(2) : h.group(1)) }
+        if let h = Brain.hit(P.webSearch, command) { return .webSearch(h.group(1)) }
+        if let h = Brain.hit(P.openApp, command) { return .openApp(h.group(1)) }
+        return nil
+    }
+
+    private func phoneCommands(_ command: String) async -> Outcome? {
+        guard let intent = phoneIntent(command), let service = phone else { return nil }
+        guard let result = await service.perform(intent) else { return nil }    // not something this phone does
+        return Outcome(result.text, ok: result.ok)
     }
 
     // MARK: your PC and your friends' SAINTs

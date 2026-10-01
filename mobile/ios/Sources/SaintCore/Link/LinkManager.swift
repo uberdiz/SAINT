@@ -74,6 +74,13 @@ public final class LinkManager: PCBridge {
 
     public func rename(to name: String) { identity.name = String(name.prefix(40)) }
 
+    /// Your own name for a paired device ("Gaming PC"); only on this phone.
+    public func renamePeer(_ peerID: String, to name: String) {
+        let clean = name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        guard !clean.isEmpty else { return }
+        peerStore.update(peerID) { $0.name = String(clean.prefix(40)) }
+    }
+
     // MARK: starting and stopping
 
     /// Keep every paired device connected, and sync whenever something changes.
@@ -206,27 +213,70 @@ public final class LinkManager: PCBridge {
         return nil
     }
 
+    /// Where to try, in order: the last address that worked (or a Wi-Fi hint), then the PC's other addresses —
+    /// so away from home the phone reaches it through Tailscale without being told.
+    func candidates(of peer: LinkPeer) -> [(host: String, port: Int)] {
+        var out: [(host: String, port: Int)] = []
+        if let first = address(of: peer) { out.append(first) }
+        let port = out.first?.port ?? (peer.port > 0 ? peer.port : 8765)
+        for h in [peer.host] + (peer.altHosts ?? []) where !h.isEmpty && !out.contains(where: { $0.host == h }) {
+            out.append((h, port))
+        }
+        return out
+    }
+
     private func dial(peerID: String) async throws -> LinkConnection {
         guard let peer = peerStore.get(peerID) else { throw LinkError.notConnected }
-        guard let (host, port) = address(of: peer) else {
+        let tries = candidates(of: peer)
+        guard !tries.isEmpty else {
             throw LinkError.unreachable("I don't know where \(peer.name) is yet.")
         }
-        let transport = makeTransport(host, port)
-        do {
-            let connection = try await LinkConnection.connect(transport: transport, identity: identity, peer: peer)
-            peerStore.update(peer.id) { $0.host = host; $0.port = port; $0.lastSeen = Date() }
-            attach(connection, peer: peer)
-            return connection
-        } catch {
-            transport.close()
-            if let link = error as? LinkError { throw link }
-            throw LinkError.unreachable("Couldn't reach \(peer.name) at \(host):\(port).")
+        var lastError: Error = LinkError.unreachable("Couldn't reach \(peer.name).")
+        for (host, port) in tries {
+            let transport = makeTransport(host, port)
+            do {
+                let connection = try await LinkConnection.connect(transport: transport, identity: identity, peer: peer)
+                peerStore.update(peer.id) { $0.host = host; $0.port = port; $0.lastSeen = Date() }
+                attach(connection, peer: peer)
+                return connection
+            } catch {
+                transport.close()
+                if let link = error as? LinkError {
+                    switch link {
+                    case .unreachable, .closed, .timeout:
+                        lastError = link             // nothing there: try the next address
+                    default:
+                        throw link                   // reached it, but it refused us: another address won't help
+                    }
+                } else {
+                    lastError = LinkError.unreachable("Couldn't reach \(peer.name) at \(host):\(port).")
+                }
+            }
         }
+        throw lastError
     }
 
     @discardableResult
     public func pair(link: Pairing.PairLink) async throws -> LinkPeer {
-        try await pair(host: link.host, port: link.port, token: link.token, role: link.role)
+        var lastError: Error = LinkError.unreachable("Couldn't reach that PC.")
+        for host in [link.host] + link.alternates {
+            do {
+                let peer = try await pair(host: host, port: link.port, token: link.token, role: link.role)
+                let others = ([link.host] + link.alternates).filter { $0 != host }
+                peerStore.update(peer.id) { $0.altHosts = others }
+                return peerStore.get(peer.id) ?? peer
+            } catch {
+                lastError = error
+                if let link = error as? LinkError {
+                    switch link {
+                    case .unreachable, .closed, .timeout: continue
+                    default: throw error
+                    }
+                }
+                continue                             // a transport error: try the next address
+            }
+        }
+        throw lastError
     }
 
     @discardableResult

@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 import Network
 import UserNotifications
+import MessageUI
 import SaintCore
 
 struct ChatMessage: Identifiable, Equatable {
@@ -13,6 +14,8 @@ struct ChatMessage: Identifiable, Equatable {
     var source = "phone"          // "phone", "pc" or "model"
     var ok = true
     var date = Date()
+    var kind = ""                 // what SAINT did: music, phone, reminder, memory, pc, skill, chat
+    var status = ""               // done, failed, sent (ran on the PC)
 }
 
 struct ReceivedFile: Identifiable, Equatable {
@@ -37,6 +40,8 @@ struct TransferState: Equatable {
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
+    enum Tab: Hashable { case talk, music, activity, devices, settings }
+
     let keychain: Keychain
     let settings: AppSettings
     let brain: Brain
@@ -45,6 +50,7 @@ final class AppModel: ObservableObject {
     let speaker = Speaker()
     let spotify: SpotifyService
     let reminderCenter = ReminderCenter()
+    let phoneActions = PhoneActions()
 
     @Published var messages: [ChatMessage] = []
     @Published var thinking = false
@@ -52,7 +58,16 @@ final class AppModel: ObservableObject {
     @Published var nearby: [BonjourBrowser.Found] = []
     @Published var inbox: [ReceivedFile] = []
     @Published var transfer: TransferState?
-    @Published var banner: String?
+    @Published var banner: String? { didSet { if banner != nil { bannerID = UUID() } } }
+    /// Changes with every banner, so a new one stays up for its full time.
+    @Published private(set) var bannerID = UUID()
+    @Published var tab: Tab = .talk
+    @Published var showListening = false
+    @Published var cameraRequest: CameraRequest?
+    @Published var messageDraft: MessageDraft?
+    /// The Shortcut SAINT just started ("SAINT Low Power On"); saint://shortcut-done says how it went.
+    @Published var pendingShortcut: String?
+    @Published var lastSync: Date?
     @Published var dataVersion = 0
     @Published var pendingPair: Pairing.PairLink?
     @Published var permissionsOK = VoiceEngine.permissionsGranted
@@ -92,6 +107,8 @@ final class AppModel: ObservableObject {
 
         brain.music = spotify
         brain.pc = link
+        brain.phone = phoneActions
+        brain.deviceName = settings.deviceName
         brain.preferPC = settings.preferPC
         brain.model = ModelChain { [settings] in
             var providers: [LanguageModel] = []
@@ -111,6 +128,10 @@ final class AppModel: ObservableObject {
     // MARK: wiring
 
     private func wire() {
+        phoneActions.model = self
+        voice.onDiagnostic = { [weak self] text in
+            self?.log(request: "(listening)", action: text, kind: "voice", ok: false)
+        }
         link.onEvent = { [weak self] event in Task { @MainActor in self?.handle(event) } }
         voice.onCommand = { [weak self] text, language in
             Task { @MainActor in await self?.heard(text, language: language) }
@@ -123,7 +144,14 @@ final class AppModel: ObservableObject {
         settings.$preferPC.sink { [weak self] on in self?.brain.preferPC = on }.store(in: &cancellables)
         settings.$shareContext.sink { [weak self] on in self?.link.shareContext = on }.store(in: &cancellables)
         settings.$speechRate.sink { [weak self] rate in self?.speaker.rate = rate }.store(in: &cancellables)
-        settings.$deviceName.sink { [weak self] name in self?.link.rename(to: name) }.store(in: &cancellables)
+        settings.$deviceName.sink { [weak self] name in
+            self?.link.rename(to: name)
+            self?.brain.deviceName = name
+        }.store(in: &cancellables)
+        settings.$audioOutput.dropFirst().removeDuplicates().sink { [weak self] _ in
+            // next runloop: the new value is stored by then, and the engine reads it from settings
+            DispatchQueue.main.async { self?.voice.applyAudioRoute() }
+        }.store(in: &cancellables)
         settings.$keepScreenOn.sink { on in UIApplication.shared.isIdleTimerDisabled = on }.store(in: &cancellables)
         settings.$useHeadsetMic.dropFirst().sink { [weak self] _ in
             // re-open the audio session with the new Bluetooth profile
@@ -233,7 +261,12 @@ final class AppModel: ObservableObject {
         let reply = await brain.handle(text, hint: language)
         thinking = false
         if !reply.text.isEmpty {
-            messages.append(ChatMessage(role: .saint, text: reply.text, language: reply.language, source: reply.source, ok: reply.ok))
+            var message = ChatMessage(role: .saint, text: reply.text, language: reply.language, source: reply.source, ok: reply.ok)
+            if let entry = brain.actions.all().first, entry.request == text {
+                message.kind = entry.kind
+                message.status = entry.status
+            }
+            messages.append(message)
         }
         trimTranscript()
         link.shareTurn(user: text, reply: reply.text)
@@ -271,6 +304,7 @@ final class AppModel: ObservableObject {
         }
         speaker.stop()
         voice.listenNow()
+        showListening = true
     }
 
     private func trimTranscript() {
@@ -309,6 +343,7 @@ final class AppModel: ObservableObject {
             banner = "Paired with \(peer.name)."
             pendingPair = nil
         case .synced(let peer, let received, let sent):
+            lastSync = Date()
             if received > 0 { banner = "Learned \(received) thing\(received == 1 ? "" : "s") from \(peer)." }
             _ = sent
             dataVersion += 1
@@ -327,7 +362,71 @@ final class AppModel: ObservableObject {
 
     func handleOpen(_ url: URL) {
         guard url.scheme == "saint" else { return }
-        if url.host == "pair", let link = try? Pairing.parse(link: url.absoluteString) { pendingPair = link }
+        switch url.host {
+        case "pair":
+            if let link = try? Pairing.parse(link: url.absoluteString) { pendingPair = link }
+        case "shortcut-done", "shortcut-error":
+            // Back from the Shortcuts app (x-callback-url).
+            let name = pendingShortcut ?? "The shortcut"
+            pendingShortcut = nil
+            let ok = url.host == "shortcut-done"
+            let error = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?
+                .first { $0.name == "errorMessage" }?.value
+            let text = ok ? "\u{201C}\(name)\u{201D} ran."
+                          : "\u{201C}\(name)\u{201D} didn't run\(error.map { ": \($0)" } ?? ""). Make a Shortcut with exactly that name (Settings \u{2192} Phone control)."
+            banner = text
+            log(request: "Shortcut", action: text, kind: "phone", ok: ok)
+        default:
+            break
+        }
+    }
+
+    // MARK: things the phone did outside a conversation turn
+
+    private func log(request: String, action: String, kind: String, ok: Bool) {
+        brain.actions.add(ActionEntry(request: request, action: action, kind: kind, status: ok ? "done" : "failed",
+                                      device: settings.deviceName))
+        dataVersion += 1
+    }
+
+    /// Apple's message sheet closed.
+    func messageFinished(_ draft: MessageDraft, result: MessageComposeResult) {
+        messageDraft = nil
+        let request = "Text \(draft.name)"
+        switch result {
+        case .sent:
+            banner = "Text sent to \(draft.name)."
+            log(request: request, action: "Sent: \(draft.body)", kind: "phone", ok: true)
+        case .failed:
+            banner = "The text to \(draft.name) didn't send."
+            log(request: request, action: "The message failed to send", kind: "phone", ok: false)
+        default:
+            log(request: request, action: "You cancelled the message", kind: "phone", ok: true)
+        }
+    }
+
+    /// SAINT's camera saved a photo or video.
+    func cameraSaved(_ what: String) {
+        banner = what == "video" ? "Video saved to Photos." : "Photo saved to Photos."
+        log(request: what == "video" ? "Record a video" : "Take a picture", action: "Saved the \(what) to Photos",
+            kind: "phone", ok: true)
+    }
+
+    /// A button on the Music tab did something.
+    func logMusic(intent: MusicIntent, result: String) {
+        let lower = result.lowercased()
+        let failed = ["isn't", "couldn't", "can't", "didn't", "not found", "no active"].contains { lower.contains($0) }
+        log(request: "Music tab", action: result, kind: "music", ok: !failed)
+    }
+
+    /// The Activity log as tab-separated text, for sharing.
+    func activityExport() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let lines = brain.actions.all().map { e in
+            [f.string(from: e.ts), e.kind, e.status, e.source, e.request, e.action].joined(separator: "\t")
+        }
+        return (["time\tkind\tstatus\twhere\tyou asked\tSAINT did"] + lines).joined(separator: "\n")
     }
 
     func pair(address: String, code: String, role: String) async -> String? {
@@ -354,6 +453,39 @@ final class AppModel: ObservableObject {
     func unpair(_ id: String) {
         link.unpair(id)
         peers = link.peers
+    }
+
+    /// Your own name for a paired device ("Gaming PC").
+    func renamePeer(_ id: String, to name: String) {
+        link.renamePeer(id, to: name)
+        peers = link.peers
+        dataVersion += 1
+    }
+
+    /// The address SAINT tries when the Wi-Fi one doesn't answer (a Tailscale 100.x address or MagicDNS name).
+    func remoteHost(of id: String) -> String? {
+        _ = dataVersion
+        guard let peer = link.peerStore.get(id) else { return nil }
+        let hosts = [peer.host] + (peer.altHosts ?? [])
+        return hosts.first { Self.isTailscale($0) } ?? peer.altHosts?.first
+    }
+
+    func setRemoteHost(_ id: String, host: String) {
+        let clean = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        link.peerStore.update(id) { peer in
+            var alts = (peer.altHosts ?? []).filter { !Self.isTailscale($0) && $0 != clean }
+            if !clean.isEmpty { alts.insert(clean, at: 0) }
+            peer.altHosts = alts.isEmpty ? nil : alts
+        }
+        dataVersion += 1
+        link.reconnectNow()
+    }
+
+    /// 100.64.0.0/10 (Tailscale's addresses) or a MagicDNS name.
+    static func isTailscale(_ host: String) -> Bool {
+        if host.hasSuffix(".ts.net") { return true }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        return parts.count == 4 && parts[0] == 100 && (64...127).contains(parts[1])
     }
 
     /// Say something to your PC's SAINT directly (the Control tab).

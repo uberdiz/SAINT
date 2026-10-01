@@ -61,6 +61,8 @@ public struct LinkPeer: Codable, Equatable, Identifiable {
     public var autoConnect: Bool
     public var added: Date
     public var lastSeen: Date?
+    /// More addresses to try when ``host`` doesn't answer (another network, Tailscale). Optional: older saves lack it.
+    public var altHosts: [String]? = nil
 
     public init(id: String, name: String, publicKey: String, role: String, platform: String = "", host: String = "",
                 port: Int = 0, nicknames: [String] = [], autoConnect: Bool = true, added: Date = Date(), lastSeen: Date? = nil) {

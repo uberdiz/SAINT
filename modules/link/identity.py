@@ -375,9 +375,14 @@ class PairingOffer:
     def valid(self) -> bool:
         return not self.used and self.failures < 10 and time.time() < self.expires
 
-    def uri(self, host: str, port: int, name: str = "") -> str:
+    def uri(self, host: str, port: int, name: str = "", alternates=()) -> str:
+        """``alternates``: this PC's other addresses (its Tailscale 100.x address), which the
+        phone tries when ``host`` doesn't answer — that's how it reaches the PC away from home."""
         q = {"h": host, "p": str(port), "t": base64.b32encode(self.token).decode().rstrip("="),
              "r": self.role, "n": name}
+        alt = [a for a in alternates if a and a != host]
+        if alt:
+            q["a"] = ",".join(alt)
         return "saint://pair?" + urllib.parse.urlencode(q)
 
 
@@ -393,8 +398,9 @@ def parse_pair_uri(uri: str) -> dict:
     except (KeyError, ValueError) as e:
         raise ValueError("That pairing link is incomplete.") from e
     role = q.get("r", OWN)
+    alternates = [a.strip() for a in q.get("a", "").split(",") if a.strip() and a.strip() != host]
     return {"host": host, "port": port, "token": token, "role": role if role in (OWN, COLLABORATOR) else OWN,
-            "name": q.get("n", "")}
+            "name": q.get("n", ""), "alternates": alternates}
 
 
 def parse_address(text: str, default_port: int = 8765) -> tuple:

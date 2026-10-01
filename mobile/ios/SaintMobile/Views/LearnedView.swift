@@ -82,6 +82,9 @@ struct LearnedView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .saintBackground()
+            .tint(Theme.accent)
             .navigationTitle("Learned")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

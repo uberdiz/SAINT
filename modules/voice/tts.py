@@ -21,7 +21,6 @@ near-instantaneous TTFB on a modern GPU and enables word-by-word UI updates.
 """
 
 import os
-import torch
 import threading
 import time
 from typing import Optional, Callable, Tuple, List, Union
@@ -29,6 +28,15 @@ from typing import Optional, Callable, Tuple, List, Union
 import numpy as np
 
 from core.audio_echo import playback_monitor
+
+try:                        # PyTorch Kokoro / Qwen; the packaged app speaks through ONNX instead
+    import torch
+except ImportError:         # pragma: no cover - packaged build
+    torch = None
+
+
+def _torch_available() -> bool:
+    return torch is not None
 
 
 # ---------------------------------------------------------------------------
@@ -467,8 +475,6 @@ class KokoroTTS(TTSEngine):
         sentence-level audio tensor that we play while the next chunk is being
         generated — giving ~30-40x realtime throughput on a modern GPU.
         """
-        import sounddevice as sd
-        import torch
         import time
         import logging
 
@@ -503,7 +509,9 @@ class KokoroTTS(TTSEngine):
                 if result.audio is None:
                     continue
 
-                samples = result.audio.cpu().numpy()
+                audio = result.audio
+                # A torch tensor (PyTorch Kokoro) or already numpy (ONNX Kokoro).
+                samples = audio.cpu().numpy() if hasattr(audio, "cpu") else np.asarray(audio, dtype=np.float32)
                 if len(samples) == 0:
                     continue
 
@@ -1100,7 +1108,19 @@ class MockTTS(TTSEngine):
 
 def make_tts(backend: str = "kokoro", **kwargs) -> TTSEngine:
     """Factory."""
-    if backend == "kokoro":
+    if backend in ("kokoro", "kokoro_onnx"):
+        # The same voice through onnxruntime when asked for, or when PyTorch isn't
+        # there (the packaged SAINT.exe ships without it — modules/voice/kokoro_onnx.py).
+        try:
+            if backend == "kokoro_onnx" or not _torch_available():
+                from modules.voice import kokoro_onnx
+            if (backend == "kokoro_onnx" or not _torch_available()) and kokoro_onnx.available():
+                import logging
+                logging.info("TTS initialized: model=kokoro (onnxruntime), voice=%s", kwargs.get("voice", "af_heart"))
+                return kokoro_onnx.KokoroOnnxTTS(**kwargs)
+        except Exception as e:
+            import logging
+            logging.warning(f"Kokoro ONNX unavailable ({e}); trying PyTorch Kokoro.")
         try:
             tts = KokoroTTS(**kwargs)
             import logging

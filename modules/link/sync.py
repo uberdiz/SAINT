@@ -288,8 +288,68 @@ class SettingsAdapter(Adapter):
         return []
 
 
+class ActionLogAdapter(Adapter):
+    """What SAINT did on your phone (the iPhone's Activity tab). Kept here so it shows up in
+    History, and so a sync never reads a missing entry as "deleted on the PC"."""
+    kind = "actionlog"
+    KEEP_DAYS = 30
+
+    def __init__(self, path: Optional[str] = None):
+        self.path = path or str(data_path("link", "phone_activity.json"))
+        self._lock = threading.Lock()
+
+    def _load(self) -> Dict[str, dict]:
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save(self, entries: Dict[str, dict]):
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(entries, f, ensure_ascii=False)
+        os.replace(tmp, self.path)
+
+    def entries(self) -> List[dict]:
+        with self._lock:
+            items = [dict(v, id=k) for k, v in self._load().items()]
+        return sorted(items, key=lambda e: e.get("ts", 0), reverse=True)
+
+    def snapshot(self) -> Dict[str, dict]:
+        cutoff = time.time() - self.KEEP_DAYS * 86400
+        with self._lock:
+            return {k: v for k, v in self._load().items() if float(v.get("ts", 0) or 0) >= cutoff}
+
+    def apply_batch(self, changes):
+        new = []
+        with self._lock:
+            entries = self._load()
+            for uid, data in changes:
+                if data is None:
+                    entries.pop(uid, None)
+                    continue
+                if uid not in entries:
+                    new.append(data)
+                entries[uid] = {k: data.get(k) for k in ("ts", "request", "action", "kind", "status", "source", "device")}
+            cutoff = time.time() - self.KEEP_DAYS * 86400
+            entries = {k: v for k, v in entries.items() if float(v.get("ts", 0) or 0) >= cutoff}
+            self._save(entries)
+        try:
+            from core.history import history
+            for d in sorted(new, key=lambda e: e.get("ts", 0)):
+                history.append({"ts": float(d.get("ts") or time.time()), "source": "iphone",
+                                "user": d.get("request", ""), "reply": d.get("action", ""), "tools": [],
+                                "device": d.get("device", ""), "ok": d.get("status") != "failed"})
+        except Exception:
+            log.exception("link.actionlog.history_failed")
+        return []
+
+
 def default_adapters() -> List[Adapter]:
-    return [MemoryAdapter(), SkillAdapter(), AliasAdapter(), SceneAdapter(), ReminderAdapter(), SettingsAdapter()]
+    return [MemoryAdapter(), SkillAdapter(), AliasAdapter(), SceneAdapter(), ReminderAdapter(), SettingsAdapter(),
+            ActionLogAdapter()]
 
 
 # ---------------------------------------------------------------------- #

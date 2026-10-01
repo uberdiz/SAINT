@@ -14,6 +14,9 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
     @Published private(set) var connected = false
     @Published private(set) var accountName = ""
     @Published private(set) var lastError: String?
+    /// What's playing (the Music tab and the mini player), refreshed while those are on screen.
+    @Published private(set) var nowPlaying: NowPlayingInfo?
+    @Published private(set) var upNext: [QueueTrack] = []
 
     static let redirectURI = "saint://spotify-callback"
     /// Spotify's "redirect_uri: Not matching configuration" page means this exact URI isn't in the app's Redirect
@@ -23,7 +26,9 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         + "One Spotify app can serve your PC and your iPhone: keep the PC's URI there too and use the same Client ID."
     private static let scopes = ["user-read-playback-state", "user-modify-playback-state", "user-read-currently-playing",
                                  "user-library-modify", "user-library-read", "playlist-read-private", "user-top-read",
-                                 "user-read-private"]
+                                 "user-read-private", "user-read-recently-played", "playlist-modify-private",
+                                 "playlist-modify-public"]
+    private static let grantedKey = "spotify.grantedScopes"
 
     private let keychain: Keychain
     private let settings: AppSettings
@@ -132,6 +137,7 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             throw LinkError.remote(code: "spotify", message: "Spotify refused the sign-in (\(reason)).")
         }
         accessToken = token
+        if let granted = json?["scope"] as? String { UserDefaults.standard.set(granted, forKey: SpotifyService.grantedKey) }
         expiry = Date().addingTimeInterval(((json?["expires_in"] as? Double) ?? 3600) - 60)
         if let refresh = json?["refresh_token"] as? String { keychain.setString(refresh, account: refreshKey) }
         DispatchQueue.main.async { self.connected = true }
@@ -259,6 +265,72 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         }
     }
 
+    struct QueueTrack: Identifiable, Equatable {
+        var id: String
+        var title: String
+        var artist: String
+        var artworkURL: URL?
+    }
+
+    struct SpotifyDevice: Identifiable, Equatable {
+        var id: String
+        var name: String
+        var type: String
+        var active: Bool
+        var symbol: String {
+            switch type.lowercased() {
+            case "smartphone": return "iphone"
+            case "computer": return "laptopcomputer"
+            case "speaker": return "hifispeaker"
+            case "tv": return "tv"
+            default: return "music.note"
+            }
+        }
+    }
+
+    /// Scopes added after the first release (recently played, editing playlists) need a fresh sign-in.
+    private func missingScope(_ scope: String) -> Bool {
+        guard let granted = UserDefaults.standard.string(forKey: SpotifyService.grantedKey) else { return false }
+        return !granted.split(separator: " ").contains(Substring(scope))
+    }
+
+    @MainActor
+    func refreshNow() async {
+        let info = await fetchNowPlaying()
+        if info != nowPlaying { nowPlaying = info }
+    }
+
+    @MainActor
+    func refreshUpNext() async {
+        guard connected, let (status, json) = try? await api("GET", "/v1/me/player/queue"), status == 200,
+              let obj = json as? [String: Any] else { return }
+        let items = (obj["queue"] as? [[String: Any]]) ?? []
+        upNext = items.prefix(10).enumerated().map { i, t in
+            QueueTrack(id: "\(i)-\((t["id"] as? String) ?? "")", title: (t["name"] as? String) ?? "",
+                       artist: SpotifyService.artists(t), artworkURL: SpotifyService.art(t))
+        }
+    }
+
+    func devices() async -> [SpotifyDevice] {
+        guard let (_, json) = try? await api("GET", "/v1/me/player/devices") else { return [] }
+        let list = ((json as? [String: Any])?["devices"] as? [[String: Any]]) ?? []
+        return list.compactMap { d in
+            guard let id = d["id"] as? String else { return nil }
+            return SpotifyDevice(id: id, name: (d["name"] as? String) ?? "Device", type: (d["type"] as? String) ?? "",
+                                 active: (d["is_active"] as? Bool) ?? false)
+        }
+    }
+
+    static func artists(_ track: [String: Any]) -> String {
+        ((track["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.joined(separator: ", ")
+    }
+
+    static func art(_ track: [String: Any]) -> URL? {
+        let images = ((track["album"] as? [String: Any])?["images"] as? [[String: Any]]) ?? []
+        return (images.last(where: { (($0["width"] as? Int) ?? 0) >= 64 })?["url"] as? String ?? images.first?["url"] as? String)
+            .flatMap { URL(string: $0) }
+    }
+
     /// The full player state, or nil when nothing is playing (or Spotify isn't reachable).
     func fetchNowPlaying() async -> NowPlayingInfo? {
         guard connected, let (status, json) = try? await api("GET", "/v1/me/player"), status == 200,
@@ -285,6 +357,7 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         var name: String
         var by: String
         var uri: String
+        var artistID = ""         // tracks: the first artist, for "keep playing more of them"
     }
 
     private func search(_ q: String, types: [String], limit: Int = 5) async throws -> [Hit] {
@@ -296,7 +369,9 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         }
         for t in items("tracks") {
             let by = ((t["artists"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String }.joined(separator: ", ")
-            hits.append(Hit(kind: "track", name: (t["name"] as? String) ?? "", by: by, uri: (t["uri"] as? String) ?? ""))
+            let artistID = ((t["artists"] as? [[String: Any]])?.first?["id"] as? String) ?? ""
+            hits.append(Hit(kind: "track", name: (t["name"] as? String) ?? "", by: by, uri: (t["uri"] as? String) ?? "",
+                            artistID: artistID))
         }
         for a in items("artists") { hits.append(Hit(kind: "artist", name: (a["name"] as? String) ?? "", by: "", uri: (a["uri"] as? String) ?? "")) }
         for a in items("albums") {
@@ -317,7 +392,7 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             disconnect()
             return "Spotify isn't connected."
         } catch SpotifyError.premium {
-            return "Spotify Premium is needed to control playback."
+            return "Spotify said no. Controlling playback needs Spotify Premium — if you have it, sign in to Spotify again in Settings."
         } catch SpotifyError.noDevice {
             return "Open Spotify on a device first, then try again."
         } catch SpotifyError.busy {
@@ -383,6 +458,88 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             if tracks.isEmpty { return try await playQuery(genre) }
             try await control("PUT", "/v1/me/player/play", body: ["uris": tracks.shuffled().map { $0.uri }])
             return "Playing \(genre)."
+        case .playLiked:
+            let uris = try await likedURIs(limit: 50)
+            guard !uris.isEmpty else { return "You haven't liked any songs on Spotify yet." }
+            try await control("PUT", "/v1/me/player/play", body: ["uris": uris.shuffled()])
+            return "Playing your liked songs."
+        case .playRecent, .recentSummary:
+            if missingScope("user-read-recently-played") { return "Sign in to Spotify again in Settings so I can see what you've played." }
+            let (_, json) = try await api("GET", "/v1/me/player/recently-played", query: ["limit": "50"])
+            let items = ((json as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+            let iso = ISO8601DateFormatter()
+            iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let cal = Calendar.current
+            let today = items.filter { item in
+                let s = (item["played_at"] as? String) ?? ""
+                let date = iso.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+                return date.map { cal.isDateInToday($0) } ?? false
+            }
+            let pool = today.isEmpty ? items : today
+            let tracks = pool.compactMap { $0["track"] as? [String: Any] }
+            if tracks.isEmpty { return "You haven't played anything on Spotify lately." }
+            if intent == .recentSummary {
+                var counts: [String: Int] = [:]
+                for t in tracks { counts[SpotifyService.artists(t).components(separatedBy: ", ").first ?? "", default: 0] += 1 }
+                let top = counts.sorted { $0.value > $1.value }.prefix(2).map { $0.key }.filter { !$0.isEmpty }
+                let when = today.isEmpty ? "Lately" : "Today"
+                let last = tracks.first.map { " The last one was \(($0["name"] as? String) ?? "") by \(SpotifyService.artists($0))." } ?? ""
+                return "\(when) you played \(tracks.count) song\(tracks.count == 1 ? "" : "s"), mostly \(top.joined(separator: " and "))." + last
+            }
+            var seen = Set<String>()
+            let uris = tracks.compactMap { $0["uri"] as? String }.filter { seen.insert($0).inserted }
+            try await control("PUT", "/v1/me/player/play", body: ["uris": uris])
+            return today.isEmpty ? "Playing what you've listened to lately." : "Playing what you've listened to today."
+        case .topTrack:
+            let (_, json) = try await api("GET", "/v1/me/top/tracks", query: ["limit": "1", "time_range": "short_term"])
+            guard let t = ((json as? [String: Any])?["items"] as? [[String: Any]])?.first else {
+                return "I don't know your favourites yet. Listen to a few things first."
+            }
+            return "Your most played song lately is \((t["name"] as? String) ?? "") by \(SpotifyService.artists(t))."
+        case .queue(let query):
+            guard let hit = try await search(query, types: ["track"], limit: 3).first(where: { $0.kind == "track" }) else {
+                return "I didn't find anything for that on Spotify."
+            }
+            try await control("POST", "/v1/me/player/queue", query: ["uri": hit.uri])
+            return "Added \(hit.name) by \(hit.by) to the queue."
+        case .addToPlaylist(let name):
+            if missingScope("playlist-modify-private") { return "Sign in to Spotify again in Settings so I can edit your playlists." }
+            guard let now = try await current() else { return "Spotify isn't playing anything right now." }
+            guard let list = try await myPlaylist(named: name) else { return "I couldn't find a playlist called \(name)." }
+            try await api("POST", "/v1/playlists/\(list.id)/tracks", body: ["uris": ["spotify:track:\(now.id)"]])
+            DispatchQueue.main.async { self.settings.lastPlaylist = list.name }
+            return "Added \(now.name) to \(list.name)."
+        case .recommend:
+            // Spotify closed its recommendations to new apps: mix your favourites you haven't played lately.
+            let (_, top) = try await api("GET", "/v1/me/top/tracks", query: ["limit": "50", "time_range": "long_term"])
+            let favourites = ((top as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+            var recent = Set<String>()
+            if !missingScope("user-read-recently-played"), let (_, rj) = try? await api("GET", "/v1/me/player/recently-played", query: ["limit": "50"]) {
+                for item in ((rj as? [String: Any])?["items"] as? [[String: Any]]) ?? [] {
+                    if let uri = (item["track"] as? [String: Any])?["uri"] as? String { recent.insert(uri) }
+                }
+            }
+            let picks = favourites.filter { !recent.contains(($0["uri"] as? String) ?? "") }.shuffled().prefix(25)
+            guard let first = picks.first else { return "Listen to a few more things and I'll have ideas for you." }
+            try await control("PUT", "/v1/me/player/play", body: ["uris": picks.compactMap { $0["uri"] as? String }])
+            return "How about \((first["name"] as? String) ?? "this") by \(SpotifyService.artists(first))? Playing favourites you haven't heard in a while."
+        case .transfer(let target):
+            let list = await devices()
+            let t = fold(target)
+            let pick = list.first { fold($0.name).contains(t) || t.contains(fold($0.name)) }
+                ?? list.first { d in
+                    (["phone", "iphone", "my phone", "this phone"].contains(t) && d.type == "Smartphone")
+                        || (["pc", "computer", "desktop", "laptop", "my pc"].contains(t) && d.type == "Computer")
+                        || (t.contains("speaker") && d.type == "Speaker")
+                }
+            guard let device = pick else { return "I can't find a Spotify device called \(target). Open Spotify on it first." }
+            try await api("PUT", "/v1/me/player", body: ["device_ids": [device.id], "play": true])
+            return "Playing on \(device.name)."
+        case .seek(let seconds):
+            let (_, json) = try await api("GET", "/v1/me/player")
+            let progress = ((json as? [String: Any])?["progress_ms"] as? Int) ?? 0
+            try await control("PUT", "/v1/me/player/seek", query: ["position_ms": String(max(0, progress + seconds * 1000))])
+            return seconds >= 0 ? "Skipped ahead \(seconds) seconds." : "Went back \(-seconds) seconds."
         case .playSomethingILike:
             let (_, json) = try await api("GET", "/v1/me/top/tracks", query: ["limit": "30", "time_range": "medium_term"])
             let items = ((json as? [String: Any])?["items"] as? [[String: Any]]) ?? []
@@ -394,8 +551,51 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
         }
     }
 
+    /// A track, then more from that artist, so the music keeps going (the desktop queues the same way).
+    private func playTrackAndMore(_ track: Hit) async throws {
+        var uris = [track.uri]
+        if !track.artistID.isEmpty, let (_, json) = try? await api("GET", "/v1/artists/\(track.artistID)/top-tracks",
+                                                                   query: ["market": "from_token"]) {
+            let more = (((json as? [String: Any])?["tracks"] as? [[String: Any]]) ?? []).compactMap { $0["uri"] as? String }
+            uris += more.filter { $0 != track.uri }.shuffled()
+        }
+        try await control("PUT", "/v1/me/player/play", body: ["uris": Array(uris.prefix(30))])
+    }
+
+    private func likedURIs(limit: Int) async throws -> [String] {
+        let (_, json) = try await api("GET", "/v1/me/tracks", query: ["limit": String(limit)])
+        let items = ((json as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+        return items.compactMap { ($0["track"] as? [String: Any])?["uri"] as? String }
+    }
+
+    private func myPlaylist(named name: String) async throws -> (id: String, name: String, uri: String)? {
+        let (_, json) = try await api("GET", "/v1/me/playlists", query: ["limit": "50"])
+        let mine = ((json as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+        let wanted = fold(name.replacingOccurrences(of: " playlist", with: ""))
+        let words = wanted.split(separator: " ").map(String.init).filter { !["my", "the", "music", "songs", "mix"].contains($0) }
+        let scored = mine.compactMap { p -> (Int, [String: Any])? in
+            let n = fold((p["name"] as? String) ?? "")
+            if n == wanted { return (100, p) }
+            if n.contains(wanted) || wanted.contains(n) { return (50, p) }
+            let hits = words.filter { n.contains($0) }.count
+            return hits > 0 ? (hits * 10, p) : nil
+        }.sorted { $0.0 > $1.0 }
+        guard let best = scored.first?.1, let id = best["id"] as? String, let uri = best["uri"] as? String else { return nil }
+        return (id, (best["name"] as? String) ?? name, uri)
+    }
+
     private func playQuery(_ raw: String) async throws -> String {
         var q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // "my gym music", "my coding playlist": one of your playlists first.
+        if q.lowercased().hasPrefix("my ") {
+            if ["my liked songs", "my likes", "my favorites", "my favourites"].contains(q.lowercased()) {
+                return try await run(.playLiked)
+            }
+            if let list = try await myPlaylist(named: String(q.dropFirst(3))) {
+                try await control("PUT", "/v1/me/player/play", body: ["context_uri": list.uri])
+                return "Playing your \(list.name) playlist."
+            }
+        }
         var wantedArtist: String?
         if let range = q.range(of: " by ", options: .caseInsensitive) {
             let title = String(q[q.startIndex..<range.lowerBound])
@@ -411,8 +611,8 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             return "Playing \(artist.name)."
         }
         if let track = hits.first(where: { $0.kind == "track" }) {
-            try await control("PUT", "/v1/me/player/play", body: ["uris": [track.uri]])
-            return "Playing \(track.name) by \(track.by)."
+            try await playTrackAndMore(track)
+            return "Playing \(track.name) by \(track.by), then more from \(track.by.components(separatedBy: ", ").first ?? track.by)."
         }
         if let artist = hits.first(where: { $0.kind == "artist" }) {
             try await control("PUT", "/v1/me/player/play", body: ["context_uri": artist.uri])
@@ -443,15 +643,20 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
 
     /// Spotify closed its recommendations endpoint to new apps, so "something like X" plays X's radio playlist,
     /// or X's own music when there isn't one.
-    private func playLike(_ seed: String) async throws -> String {
+    private func playLike(_ raw: String) async throws -> String {
+        var seed = raw
+        if ["this", "this song", "that", "that song", "it", "what's playing"].contains(raw.lowercased()) {
+            guard let now = try await current() else { return "Spotify isn't playing anything right now." }
+            seed = now.artist.components(separatedBy: ", ").first ?? now.artist
+        }
         if let radio = try await search("\(seed) radio", types: ["playlist"], limit: 3).first(where: { fold($0.name).contains(fold(seed)) }) {
             try await control("PUT", "/v1/me/player/play", body: ["context_uri": radio.uri])
             return "Playing the \(radio.name) playlist."
         }
         let hits = try await search(seed, types: ["track", "artist"], limit: 5)
         if let track = hits.first(where: { $0.kind == "track" }) {
-            try await control("PUT", "/v1/me/player/play", body: ["uris": [track.uri]])
-            return "Playing \(track.name) by \(track.by), and I'll queue up more like it."
+            try await playTrackAndMore(track)
+            return "Playing \(track.name) by \(track.by), with more like it after."
         }
         return "I didn't find anything for that on Spotify."
     }

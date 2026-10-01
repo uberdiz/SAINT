@@ -28,7 +28,7 @@ from core.paths import data_path
 
 log = logging.getLogger("saint.history")
 
-SOURCES = ("voice", "typed", "hotword", "scene", "automation")
+SOURCES = ("voice", "typed", "hotword", "scene", "automation", "iphone")   # iphone: synced from the phone
 
 
 def day_key(ts: float) -> str:

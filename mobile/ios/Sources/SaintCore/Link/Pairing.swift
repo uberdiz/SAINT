@@ -106,6 +106,8 @@ public enum Pairing {
         public var token: Data
         public var role: String          // "own" or "collaborator"
         public var name: String
+        /// Other addresses of the same PC (e.g. its Tailscale 100.x address) to try away from home.
+        public var alternates: [String] = []
     }
 
     /// `saint://pair?h=..&p=..&t=..&r=..&n=..` — what the QR code on the PC holds.
@@ -121,7 +123,8 @@ public enum Pairing {
         let role = query["r"] == "collaborator" ? "collaborator" : "own"
         // Python's urlencode writes spaces as "+", which URLComponents leaves alone.
         let name = (query["n"] ?? "").replacingOccurrences(of: "+", with: " ")
-        return PairLink(host: host, port: port, token: token, role: role, name: name)
+        let alternates = (query["a"] ?? "").split(separator: ",").map { String($0).trimmed }.filter { !$0.isEmpty && $0 != host }
+        return PairLink(host: host, port: port, token: token, role: role, name: name, alternates: alternates)
     }
 
     /// "192.168.1.20:8765", "192.168.1.20", "[fe80::1]:8765" -> (host, port)

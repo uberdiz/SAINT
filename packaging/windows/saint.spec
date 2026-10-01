@@ -12,14 +12,13 @@ WORK = Path(os.environ.get("SAINT_BUILD_WORK", ROOT / "build" / "windows" / "wor
 
 # SAINT's own packages: tools and modules are registered by name at runtime.
 hidden = collect_submodules("core") + collect_submodules("modules") + collect_submodules("ui")
-# Libraries that load parts of themselves lazily.
-for pkg in ("kokoro", "misaki", "faster_whisper", "ctranslate2", "onnxruntime", "sounddevice", "pycaw", "comtypes",
+# Libraries that load parts of themselves lazily. The voice is Kokoro on onnxruntime (kokoro_onnx), so
+# PyTorch and CUDA (2+ GB) aren't shipped; misaki + spaCy still turn text into phonemes.
+for pkg in ("kokoro_onnx", "misaki", "faster_whisper", "ctranslate2", "onnxruntime", "sounddevice", "pycaw", "comtypes",
             "uiautomation", "winrt", "keyring", "spacy", "en_core_web_sm", "phonemizer", "espeakng_loader",
             "segno", "zeroconf", "cryptography", "psutil", "win32com", "pythoncom", "pywintypes",
-            # spaCy and every plug-in it loads by entry point (Kokoro's English phonemiser)
-            "spacy_curated_transformers", "curated_transformers", "curated_tokenizers", "spacy_legacy",
-            "spacy_loggers", "thinc", "srsly", "catalogue", "confection", "blis", "cymem", "preshed", "murmurhash",
-            "wasabi", "weasel", "langcodes", "language_data", "num2words", "addict"):
+            "spacy_legacy", "spacy_loggers", "thinc", "srsly", "catalogue", "confection", "blis", "cymem", "preshed",
+            "murmurhash", "wasabi", "weasel", "langcodes", "language_data", "num2words", "addict"):
     try:
         hidden += collect_submodules(pkg)
     except Exception:
@@ -32,7 +31,13 @@ datas = [
     (str(ROOT / "data" / "wake" / "embedding_model.onnx"), "data/wake"),
     (str(ROOT / "modules" / "lang" / "lexicon"), "modules/lang/lexicon"),
 ]
-for pkg in ("faster_whisper", "kokoro", "misaki", "espeakng_loader", "en_core_web_sm", "spacy", "language_tags",
+# Kokoro's ONNX model and voices (python tools/get_kokoro_onnx.py downloads them).
+_ONNX = ROOT / "data" / "tts" / "kokoro-onnx"
+for name in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
+    if not (_ONNX / name).exists():
+        raise SystemExit(f"{_ONNX / name} is missing: run python tools/get_kokoro_onnx.py first")
+    datas.append((str(_ONNX / name), "data/tts/kokoro-onnx"))
+for pkg in ("faster_whisper", "kokoro_onnx", "misaki", "espeakng_loader", "en_core_web_sm", "spacy", "language_tags",
             "phonemizer", "segments", "csvw", "jieba", "unidic_lite", "certifi", "openwakeword", "onnxruntime",
             "ctranslate2", "_sounddevice_data", "soundfile", "uiautomation"):
     try:
@@ -41,18 +46,17 @@ for pkg in ("faster_whisper", "kokoro", "misaki", "espeakng_loader", "en_core_we
         pass
 
 # spaCy finds its English model (Kokoro's phonemiser needs it) and its plug-ins through package metadata.
-for pkg in ("en_core_web_sm", "spacy", "thinc", "catalogue", "confection", "srsly", "spacy_curated_transformers",
-            "spacy_legacy", "spacy_loggers", "curated_tokenizers",
-            "curated_transformers", "misaki", "kokoro", "phonemizer", "huggingface_hub", "faster_whisper",
-            "transformers", "tokenizers", "torch", "numpy", "regex", "tqdm", "requests", "packaging", "filelock",
-            "safetensors", "pyyaml"):
+# spacy-curated-transformers is left out on purpose: its metadata would make spaCy load it, and it needs PyTorch.
+for pkg in ("en_core_web_sm", "spacy", "thinc", "catalogue", "confection", "srsly", "spacy_legacy", "spacy_loggers",
+            "misaki", "kokoro_onnx", "onnxruntime", "phonemizer", "huggingface_hub", "faster_whisper",
+            "tokenizers", "numpy", "regex", "tqdm", "requests", "packaging", "filelock", "pyyaml"):
     try:
         datas += copy_metadata(pkg)
     except Exception:
         pass
 
 binaries = []
-for pkg in ("ctranslate2", "onnxruntime", "_sounddevice_data", "soundfile", "espeakng_loader", "torch"):
+for pkg in ("ctranslate2", "onnxruntime", "_sounddevice_data", "soundfile", "espeakng_loader"):
     try:
         binaries += collect_dynamic_libs(pkg)
     except Exception:
@@ -65,11 +69,13 @@ a = Analysis(
     datas=datas,
     hiddenimports=hidden,
     excludes=["tkinter", "matplotlib", "IPython", "jupyter", "notebook", "pytest", "tests", "tools",
-              "PyQt5", "PyQt6", "PySide2"],
+              "PyQt5", "PyQt6", "PySide2",
+              # PyTorch and what only it needs: the ONNX voice replaces it (and the Settings page says
+              # "install from source" for the optional GPU extras like image captions).
+              "torch", "torchvision", "torchaudio", "kokoro", "transformers", "accelerate", "diffusers",
+              "safetensors", "sympy", "triton", "spacy_curated_transformers", "curated_transformers",
+              "curated_tokenizers", "qwen_tts"],
     noarchive=False,
-    # TorchScript (used by spaCy's transformer plug-in and Kokoro) compiles from the .py source files.
-    module_collection_mode={"curated_transformers": "pyz+py", "spacy_curated_transformers": "pyz+py",
-                            "kokoro": "pyz+py", "misaki": "pyz+py"},
 )
 pyz = PYZ(a.pure)
 
