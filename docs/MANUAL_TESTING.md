@@ -278,14 +278,14 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 
 | | Test | Expected |
 |---|---|---|
-| Y | Skip a song in the Spotify app itself | One `skips` row with source `app` within ~2 s |
+| doesnt work 100% of the time. | Skip a song in the Spotify app itself | One `skips` row with source `app` within ~2 s |
 | Y | Say "skip" | Exactly one `skips` row, source `voice` |
 | Y | "More energetic" · "more like the last song" · "no more of this artist" | Picks change accordingly; the artist stops appearing |
-| 🔲 | "Play Tití Me Preguntó by Bad Bunny" (also misheard: "TT May Praguntha, bye Bad Bunny") | That song plays; within a few seconds 5 similar songs are in Spotify's queue; 5 more are added as the last queued ones play |
-| 🔲 | While a song plays: "queue more songs like this" | The song keeps playing; 5 similar songs are queued (nothing is skipped) |
-| 🔲 | "Play Spanish music" · "play a Spanish playlist" · "play a playlist called Dominican Dembow" | A playlist plays (not a single track) |
-| 🔲 | "I'm feeling chill, play something" · "make me a hype queue" · "play something for my mood" | First song starts, 5 more queued — mostly your own songs that fit the mood; the queue keeps going |
-| 🔲 | "Turn on the lyrics" / the lyrics button on the mini player · "hide the lyrics" | Mini player grows, the sung line is bold and follows the song; hides again |
+| Y | "Play Tití Me Preguntó by Bad Bunny" (also misheard: "TT May Praguntha, bye Bad Bunny") | That song plays; within a few seconds 5 similar songs are in Spotify's queue; 5 more are added as the last queued ones play |
+| Y | While a song plays: "queue more songs like this" | The song keeps playing; 5 similar songs are queued (nothing is skipped) |
+| Y | "Play Spanish music" · "play a Spanish playlist" · "play a playlist called Dominican Dembow" | A playlist plays (not a single track) |
+| Y but it doesnt clear the queue when it makes something new, it just skips through the songs already there before playing the new ones | "I'm feeling chill, play something" · "make me a hype queue" · "play something for my mood" | First song starts, 5 more queued — mostly your own songs that fit the mood; the queue keeps going |
+| Mini player is missing | "Turn on the lyrics" / the lyrics button on the mini player · "hide the lyrics" | Mini player grows, the sung line is bold and follows the song; hides again |
 | 🔲 | Music with lyrics playing, wait for a follow-up window, let the song sing a line that sounds like a command | Ignored (log: `activation.rejected reason=song_lyrics`) |
 | 🔲 | "Smart shuffle on" while a single song (not a playlist) plays | Says Smart Shuffle needs a playlist or Liked Songs — no 12 s of button clicking |
 
@@ -294,3 +294,24 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 | | Test | Expected |
 |---|---|---|
 | ✅ | History page with a year of synthetic data, dark and light theme | Day squares fill the card, hover shows "N requests · date", streak / success / time-of-day cards |
+
+## 2026-09-30 round: no unrequested actions, volume, Task Manager, voice, learning from mistakes
+
+| | Test | Expected |
+|---|---|---|
+| Y | Run the "open Roblox" scene | Bloxstrap starts from the exact path; nothing is extracted, Steam never opens. A step that fails is reported, never "worked out" |
+| Doesnt play the album but just one song its unclear if its the album because there are other songs in the queue| In a game, "play Fancy That by PinkPantheress" / "play PinkPantheress's newest album" | Plays in Spotify; no browser, no window switch |
+| Y | "Play radio head radio" (you have a playlist "Radiohead Radio") | Your playlist plays, not the artist |
+| Y | "What's in my queue" / "list my queue on Spotify" | Up to 5 songs read out; Spotify stays in the background |
+| Y | "Turn it down" · "turn it up a little bit" | Voicemeeter strips 3–4 (Windows audio) move ~4 dB / ~2 dB; Spotify's own volume untouched |
+| Y | "Turn Spotify down" · "turn the music up a little" | Spotify volume -10 / +5; the Music tab slider shows the new value |
+| Y | Music tab: drag the volume slider | Spotify volume matches the slider exactly |
+| Y| "What's running" · "what's using my RAM" · "how's my PC doing" · "end task on Discord" | Answers from the process list; end task asks first, then ends every Discord process |
+| Y | A song title in capitals ("NO ME QUIERO CASAR") read out | Said as words, not letters |
+| no doesnt respond at all and one word answers still arent being picked up well | While SAINT talks: say "stop" (speakers, music on) · stay silent with music playing | Stops within ~1 s · no longer cancels itself on music/room noise |
+| Y | Wake word off, music playing, chat in the room | No replies to lyrics / chatter; commands and questions still work |
+| Y takes a sec to output tho | Settings › Voice: pick a voice + "Blend with", "Hear it" | The new voice says a line |
+| Doesnt log when a say it, add a voice learning feature so the user can press a button and start the learning process, stop when its done. | Say "Hey SAINT, …" ~8 times | Settings › Voice › Voice profile shows "Ready"; singing along to a song adds a "sang along" feedback row |
+| I didnt hear it say when it was going to remove it and i missed to oppourtunity to remove it, it did skip it from then on but when i asked to remove it after it was skipped it removed the song that was playing, dont ask after the 4-5 time skipping just remove it. | Skip the same song early 2–3 times in one playlist | A quiet chat note; next time it comes up there it's skipped; "remove this song from the playlist" removes it (own playlists only) |
+| 🔲 | A planned action you didn't want → "no, I didn't ask for that" | "Sorry — I won't do that … again"; the skill is gone from Learned; data/learning_journal.jsonl has the complaint |
+| No it cant find Giancarlos in my instagram and if i do it in a browser it doesnt work I have to be on the desktop. | "Open what Gian sent me on Instagram" | Instagram (app or web inbox) opens and the chat with Gian is clicked |

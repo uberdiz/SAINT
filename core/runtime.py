@@ -22,6 +22,7 @@ from typing import Optional
 from core.assistant_state import assistant_state, AssistantState
 from core.config import config
 from core.events import event_bus, EventType
+from modules.voice.voices import kokoro_voice
 
 log = logging.getLogger("saint.runtime")
 
@@ -32,7 +33,8 @@ _VOICE_RESTART_KEYS = ("voice.mic_device", "voice.mode", "voice.silence_duration
                        "voice.barge_in_echo_margin", "voice.wake_word_debug_scores")
 _WAKE_KEYS = ("voice.wake_word_enabled", "voice.wake_word_model_path", "voice.wake_word_feature_dir",
               "voice.wake_word_threshold", "voice.wake_word_trigger_frames", "voice.wake_word_refractory_sec")
-_TTS_KEYS = ("voice.tts_backend", "voice.tts_voice", "voice.tts_device", "voice.tts_speed",
+_TTS_KEYS = ("voice.tts_backend", "voice.tts_voice", "voice.tts_voice_blend", "voice.tts_voice_blend_pct",
+             "voice.tts_device", "voice.tts_speed",
              "voice.tts_qwen_model", "voice.tts_qwen_speaker", "voice.tts_qwen_type")
 _STT_KEYS = ("voice.stt_backend", "voice.stt_model", "voice.stt_device", "voice.stt_compute_type",
              "voice.stt_language")
@@ -59,7 +61,8 @@ def tts_settings() -> dict:
         }
     if backend == "kokoro":
         return {
-            "voice": config.get("voice.tts_voice", "af_heart"),
+            "voice": kokoro_voice(config.get("voice.tts_voice", "af_heart"), config.get("voice.tts_voice_blend", ""),
+                                  config.get("voice.tts_voice_blend_pct", 50)),
             "device": config.get("voice.tts_device", "cuda"),
             "speed": config.get("voice.tts_speed", 1.0),
             "allow_cpu_fallback": config.get("voice.tts_allow_cpu_fallback", True),

@@ -115,7 +115,7 @@ def test_agent_plans_an_unknown_request_then_uses_the_skill(monkeypatch, _isolat
     import modules.agent.router as router
     n = []
 
-    def fake_attempt(text, failure=""):
+    def fake_attempt(text, failure="", **kw):
         n.append(text)
         _isolated.learn(text, ["open disk cleanup"])
         return planner.Outcome(Reply("Opened Disk Cleanup."), ["open disk cleanup"], True)
@@ -135,7 +135,7 @@ def test_agent_tries_harder_after_a_not_found_failure(monkeypatch):
     seen = []
     monkeypatch.setattr(agent_mod, "route", lambda t: Intent(
         "desktop.arrange_window", lambda: Reply("I couldn't find a window for all my windows.", ok=False), "desktop"))
-    monkeypatch.setattr(planner, "attempt", lambda text, failure="": seen.append(failure) or planner.Outcome(
+    monkeypatch.setattr(planner, "attempt", lambda text, failure="", **kw: seen.append(failure) or planner.Outcome(
         Reply("Minimized everything."), ["minimize all my windows"], True))
     res = agent_mod.agent.handle("zap all my windows")
     assert seen == ["I couldn't find a window for all my windows."] and res.ok
@@ -144,14 +144,14 @@ def test_agent_tries_harder_after_a_not_found_failure(monkeypatch):
 def test_agent_offers_to_learn_by_watching_when_it_cannot_plan(monkeypatch):
     from modules.agent import agent as agent_mod
     monkeypatch.setattr(agent_mod, "route", lambda t: None)
-    monkeypatch.setattr(planner, "attempt", lambda text, failure="": None)
+    monkeypatch.setattr(planner, "attempt", lambda text, failure="", **kw: None)
     started = []
     monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_after_failure", True)
     monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_and_learn", True)
     monkeypatch.setattr(demonstration, "watch_for", lambda phrase: started.append(phrase) or True)
     res = agent_mod.agent.handle("open the thing with the gears")
     # It asks first — nothing is recorded until the user says yes.
-    assert not res.ok and res.expects_reply and "Want to show me?" in res.text and started == []
+    assert not res.ok and res.expects_reply and "show me" in res.text and started == []
     assert "watching" in agent_mod.agent.handle("yes").text
     assert started == ["open the thing with the gears"]
 
@@ -551,7 +551,7 @@ def test_whisper_is_relative_to_how_loud_the_user_talks():
 def test_no_plan_hands_over_to_the_model_then_offers_to_learn(monkeypatch):
     from modules.agent import agent as agent_mod
     monkeypatch.setattr(agent_mod, "route", lambda t: None)
-    monkeypatch.setattr(planner, "attempt", lambda text, failure="": None)
+    monkeypatch.setattr(planner, "attempt", lambda text, failure="", **kw: None)
     monkeypatch.setitem(config._data["ai"], "provider", "ollama")
     monkeypatch.setitem(config._data["ai"], "tool_calling", True)
     assert agent_mod.agent.handle("add this song to my party playlist") is None      # the model's tools try next

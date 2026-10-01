@@ -66,6 +66,12 @@ class OutputPolicy:
                 self._levels.append(prev)          # the user's normal speaking level
                 del self._levels[:-30]
 
+    def normal_level(self) -> float:
+        """How loud this user normally talks to SAINT (median RMS), 0 until known."""
+        with self._lock:
+            levels = sorted(self._levels)
+        return levels[len(levels) // 2] if len(levels) >= 5 else 0.0
+
     def _is_whisper(self, rms: float) -> bool:
         """Quiet compared with how loud *this* user normally talks to SAINT
         (a fixed level missed real whispers: normal commands are ~0.06 RMS

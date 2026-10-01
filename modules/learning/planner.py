@@ -68,9 +68,11 @@ Request: write my essay about the civil war
 {"steps": []}"""
 
 
-def grounded(step: str, request: str) -> bool:
+def grounded(step: str, request: str, recent: str = "") -> bool:
     """Reject plan steps the user never asked for: acting on "this window"
-    when they named something else, or typing text they didn't dictate."""
+    when they named something else, or typing text they didn't dictate.
+    ``recent``: what was asked and done in the last few minutes — an app named
+    there may be what "it" means now (never an excuse for a side effect)."""
     s, r = norm(step), norm(clean(request))
     if re.match(r"^type\b", s) and not re.search(r"\b(?:type|write|enter|fill in|dictate)\b", r):
         return False
@@ -103,7 +105,49 @@ def grounded(step: str, request: str) -> bool:
     m = re.match(r"^(?:press|hit)\s+(.+)$", s)
     if m and not re.search(r"\b(?:press|hit|key|shortcut)\b", r):
         return False
+    # Things that change files, install software or search somewhere only when
+    # asked for in so many words: 'Open Bloxstrap at "C:\...\Downloads\..."' was
+    # planned into "extract the latest download to my games folder" (2026-09-30).
+    for does, asked in _SIDE_EFFECTS:
+        if re.search(does, s) and not re.search(asked, r):
+            return False
+    # Apps, sites and places the user never mentioned: a Spotify album that
+    # wasn't found became a Google + YouTube search, a failed click became a
+    # Steam store search (2026-09-30).
+    for word, aka in _PLACES.items():
+        if re.search(rf"\b{word}\b", s) and not re.search(aka, r) and not (recent and re.search(aka, recent)):
+            if word == "spotify" and _MUSICY.search(r):
+                continue                      # music means Spotify unless they said otherwise
+            return False
     return True
+
+
+# (what a step does, what the user must have said for it)
+_SIDE_EFFECTS = [
+    (r"\b(?:extract|unzip|unpack|decompress)\b", r"\b(?:extract|unzip|unpack|decompress|unrar)"),
+    (r"\b(?:clean up|clear out|junk|free up)\b", r"\b(?:clean|clear|junk|free up|tidy|space)"),
+    (r"\b(?:delete|trash|empty)\b|\brecycle\b(?! bin)", r"\b(?:delete|recycle|trash|empty|get rid|remove)"),
+    (r"\b(?:uninstall|install)\b", r"\b(?:un)?install"),
+    (r"\bdownload\b(?!s? folder)", r"\bdownload"),
+    (r"\b(?:ban|block)\b", r"\b(?:ban|block)"),
+    (r"\b(?:lock my pc|lock the pc|shut down|restart|sleep)\b", r"\b(?:lock|shut|restart|reboot|sleep)"),
+    (r"^(?:search|google|look up)\b", r"\b(?:search|google|look (?:up|for)|find)"),
+]
+_PLACES = {
+    "steam": r"\bsteam\b",
+    "youtube": r"\byou ?tube\b|\bvideo",
+    "google": r"\bgoogle\b|\bsearch\b|\blook up\b",
+    "browser": r"\bbrowser\b|\bweb\b|\bsite\b|\bchrome\b|\bopera\b|\bedge\b|\bfirefox\b",
+    "reddit": r"\breddit\b",
+    "discord": r"\bdiscord\b",
+    "spotify": r"\bspotify\b",
+    "games folder": r"\bgames?\b",
+    "downloads folder": r"\bdownloads? folder\b|\bmy downloads\b",
+    "dashboard": r"\bdashboard\b|\byour (?:window|eyes|app)\b",
+    "task manager": r"\btask manager\b",
+}
+_MUSICY = re.compile(r"\b(?:play|song|songs|track|album|playlist|music|artist|queue|skip|shuffle|pause|resume|"
+                     r"louder|quieter)\b")
 
 
 def _mentioned(target: str, request: str) -> bool:
@@ -143,6 +187,8 @@ def worth_planning(text: str) -> bool:
     t = norm(clean(text))
     if not t or len(t.split()) > 30 or _CHATTY.match(t):
         return False
+    if re.search(r"\b[a-z]:[\\/]", text or "", re.I):
+        return False            # names a file exactly: there's nothing to work out
     return bool(_ACTION_START.match(t))
 
 
@@ -177,6 +223,18 @@ def _context() -> str:
             lines.append("Open windows: " + ", ".join(names[:14]))
     except Exception:
         pass
+    try:
+        from modules.learning.feedback import feedback, journal
+        lessons = journal.lessons()
+        turns = feedback.recent_turns()
+    except Exception:
+        lessons, turns = "", []
+    if turns:
+        lines.append("Just before this (oldest first):\n" + "\n".join(
+            f'  - user said "{t["text"]}" -> SAINT did {t["intent"]}'
+            f'{"" if t["ok"] else " (failed)"}: "{t["reply"]}"' for t in turns[-4:]))
+    if lessons:
+        lines.append("Mistakes SAINT made before (don't repeat them):\n" + lessons)
     learned = skills.recent(12)
     if learned:
         lines.append("Things SAINT has already learned:\n" +
@@ -253,24 +311,33 @@ def _intents(steps: List[str]):
     return out
 
 
-def attempt(text: str, failure: str = "") -> Optional[Outcome]:
+def attempt(text: str, failure: str = "", domain: str = "") -> Optional[Outcome]:
     """Plan, check and run ``text``. None when no workable plan was found
-    (nothing has been done in that case)."""
-    if not config.get("learning.planner", True):
+    (nothing has been done in that case). ``domain`` is where the first try
+    went ("spotify"): a music request is only ever retried as music."""
+    if not config.get("learning.planner", True) or not worth_planning(text):
         return None
     steps = plan(text, failure)
     if not steps:
         return None
-    bad = [s for s in steps if not understood(s) or not grounded(s, text)]
+    try:
+        from modules.learning.feedback import feedback
+        recent = feedback.recent_context()
+    except Exception:
+        recent = ""
+    bad = [s for s in steps if not understood(s) or not grounded(s, text, recent)]
     if bad:
         log.info("planner.rejected %r", bad)
         steps = plan(text, failure, rejected=bad)
-        if not steps or any(not understood(s) or not grounded(s, text) for s in steps):
+        if not steps or any(not understood(s) or not grounded(s, text, recent) for s in steps):
             return None
     if failure and [norm(s) for s in steps] == [norm(text)]:
         return None                     # the same thing that just failed
     intents = _intents(steps)
     if not intents:
+        return None
+    if domain == "spotify" and any(it.domain != "spotify" for it in intents):
+        log.info("planner.rejected off-domain %r for a %s request", steps, domain)
         return None
     from modules.agent.router import run_plan
     reply = run_plan(intents)

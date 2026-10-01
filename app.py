@@ -100,8 +100,10 @@ def main():
     runtime.start()
 
     import threading
-    from core import autostart
-    threading.Thread(target=autostart.sync, daemon=True, name="autostart-sync").start()
+    # Run from source: keep .venv\SAINT\SAINT.exe built (core/app_exe.py) so SAINT
+    # is "SAINT" in Task Manager, and point the shortcuts at it.
+    from core import app_exe
+    threading.Thread(target=app_exe.ensure, daemon=True, name="app-exe").start()
 
     from ui.main_window import MainWindow
     window = MainWindow(app, runtime)

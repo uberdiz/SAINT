@@ -48,6 +48,9 @@ def launch_command() -> Tuple[str, str, str]:
         exe = Path(sys.executable)
         return str(exe), "--background", str(exe.parent)
     root = Path(__file__).resolve().parent.parent
+    app_exe = root / ".venv" / "SAINT" / "SAINT.exe"      # core/app_exe.py: "SAINT" in Task Manager
+    if app_exe.exists():
+        return str(app_exe), f'"{root / "app.py"}" --background', str(root)
     venv = root / ".venv" / "Scripts" / "pythonw.exe"
     exe = venv if venv.exists() else Path(sys.executable).with_name("pythonw.exe")
     if not exe.exists():
@@ -157,3 +160,21 @@ def _points_at(link: Path, target: str) -> bool:
         return os.path.normcase(r.stdout.strip()) == os.path.normcase(target)
     except Exception:
         return True
+
+
+def refresh_shortcuts(start_menu: bool = True) -> None:
+    """Point SAINT's shortcuts at how it starts now (SAINT.exe once it's built):
+    the Startup one if the user turned it on, and a Start-menu entry so SAINT
+    can be launched and pinned like any installed app."""
+    sync()
+    if not start_menu or os.name != "nt":
+        return
+    target, args, workdir = launch_command()
+    link = start_menu_shortcut()
+    if link.exists() and _points_at(link, target):
+        return
+    try:
+        _make_shortcut(link, target, args.replace(" --background", ""), workdir, icon_path())
+        log.info("autostart.start_menu %s -> %s", link, target)
+    except Exception as e:
+        log.info("autostart.start_menu_failed %s", e)

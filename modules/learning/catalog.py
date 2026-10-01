@@ -56,6 +56,8 @@ CATALOG = {
         "turn up spotify",
         "turn down spotify",
         "set spotify volume to 30",
+        "turn spotify down a little",
+        "what's in my queue",
     ],
     "Sound and system": [
         "set the system volume to 40",
@@ -67,6 +69,10 @@ CATALOG = {
         "lock my pc",
         "open sound settings",
         "open task manager",
+        "turn the volume down a little",
+        "what's running",
+        "end task on discord",
+        "check my pc health",
     ],
     "Files and games": [
         "open my downloads folder",

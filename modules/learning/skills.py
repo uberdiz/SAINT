@@ -115,7 +115,9 @@ class SkillStore:
     @staticmethod
     def learnable(phrase: str, steps: List[str]) -> bool:
         p = norm(phrase)
-        if not p or _NEVER.match(p) or _DEICTIC.search(p) or len(p) < 4 or not steps:
+        # "that" in a song title ("play Fancy That") isn't pointing at anything.
+        pointing = _DEICTIC.search(p) and not p.startswith(("play ", "queue "))
+        if not p or _NEVER.match(p) or pointing or len(p) < 4 or not steps:
             return False
         # Learning "X means X" teaches nothing.
         return [norm(s) for s in steps] != [p]

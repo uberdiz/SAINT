@@ -642,9 +642,30 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     if m:
         return SpotifyIntent("search", "spotify.search", {"query": m.group(1).strip(), "types": "track,artist,album,playlist"})
 
+    # --- "remove this song from the playlist" (the one it's playing from) ----------------
+    if has(r"^(?:remove|delete|take|get rid of|drop)\s+(?:this|that|the|it)?\s*(?:song|track|one)?\s*"
+           r"(?:from|off|out of)\s+(?:the|this|that|my)\s+playlist$"):
+        return SpotifyIntent("playlist_remove", "spotify.remove_current_from_playlist", {})
+
+    # --- "that's not a chill song": the song doesn't fit the mood -----------------------
+    # Right after the queue was read out it's about the next song ("Up next: 2K
+    # FREESTYLE" ... "that's not a chill song" got "I haven't done anything yet",
+    # 2026-09-30); otherwise the one playing.
+    m = _NOT_MOOD.match(lower)
+    if m and (m.group("mood") or desktop_context.music_is_context()):
+        mood = _NOT_MOOD_WORDS.get((m.group("mood") or "").lower(), "")
+        which = "next" if _last_was_queue_list() else "current"
+        return SpotifyIntent("not_mood", "spotify.not_mood", {"mood": mood, "which": which})
+
     # --- queue removal isn't possible through Spotify's API -------------------------------
     if has(r"^(?:remove|delete|take)\b.*\b(?:from|off|out of) (?:the |my )?queue$|^clear (?:the |my )?queue$"):
         return SpotifyIntent("queue_remove", "", {})
+
+    # --- what's queued (read from the API, nothing on screen changes) -------------
+    if has(r"^(?:list|show|read|tell me|say|give me|go through)\b.*\b(?:queue|up next|coming up)\b|"
+           r"^what(?:'?s| is| are| songs? (?:are|is))\b.*\b(?:(?:in|on) (?:the |my )?queue|queued|up next|coming up)\b|"
+           r"^what(?:'?s| is) (?:up )?next\b|^(?:my|the) queue$"):
+        return SpotifyIntent("queue_list", "spotify.queue_list", {"limit": 10})
 
     # --- what's playing (before "play") ---------------------------------
     if has(r"what(?:'?s| is| am i)\b.*\b(playing|listening to|song|track)\b") and not has(r"\b(today|lately|yesterday|this week|been)\b") \
@@ -708,12 +729,20 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         or re.search(r"^(?:turn|put|bring) (?:it )?(?:up|down|back) to (\d{1,3})", vl)
     if vol:
         return SpotifyIntent("volume_set", "spotify.volume", {"percent": max(0, min(100, int(vol.group(1))))})
-    musical = has(r"\b(music|song|spotify|track|tune)\b") or desktop_context.music_is_context()
-    # "Turn this up!", "lower volume." went to the planner (an LLM call) on 2026-09-29.
-    if musical and has(r"\b(volume up|louder|turn (it|this|the music|spotify|the volume|the song) up|turn up (the |my )?(music|volume|song|spotify)|crank it|(raise|increase) (the )?volume)\b"):
-        return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up"})
-    if musical and has(r"\b(volume down|quieter|softer|turn (it|this|the music|spotify|the volume|the song) down|turn down (the |my )?(music|volume|song|spotify)|(lower|decrease|reduce) (the )?volume)\b"):
-        return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down"})
+    # "Turn Spotify down" / "turn the music up a little" is Spotify; a bare "turn it
+    # down" is the whole PC (Voicemeeter) unless audio.turn_it_means is "music".
+    # "Turn it back up" after "turn Spotify down" is Spotify again.
+    last_target, last_points = desktop_context.volume_target()
+    musical = has(r"\b(music|song|spotify|track|tune)\b") or last_target == "spotify" or (
+        config.get("audio.turn_it_means", "system") == "music" and desktop_context.music_is_context())
+    from modules.agent.desktop_intents import volume_step_points
+    step = volume_step_points(lower, int(config.get("spotify.volume_step", 10)))
+    if has(r"\bback\b") and last_target == "spotify" and last_points:
+        step = last_points
+    if musical and has(r"\b(volume up|louder|turn (it|this|the music|spotify|the volume|the song) (back )?(a (little )?bit )?up|turn up (the |my )?(music|volume|song|spotify)|crank it|(raise|increase) (the )?volume)\b"):
+        return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up", "step": step})
+    if musical and has(r"\b(volume down|quieter|softer|turn (it|this|the music|spotify|the volume|the song) (back )?(a (little )?bit )?down|turn down (the |my )?(music|volume|song|spotify)|(lower|decrease|reduce) (the )?volume)\b"):
+        return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down", "step": step})
 
     # --- shuffle / repeat -------------------------------------------------------
     if has(r"\bshuffle\b"):
@@ -791,8 +820,49 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
                                                         "kind": "auto"})
 
 
+_NOT_MOOD_WORDS = {"chill": "chill", "relaxing": "chill", "calm": "chill", "mellow": "chill", "laid back": "chill",
+               "sad": "sad", "happy": "happy", "upbeat": "happy", "hype": "energetic", "energetic": "energetic",
+               "workout": "energetic", "gym": "energetic", "dark": "darker", "party": "party", "focus": "focus",
+               "study": "focus", "romantic": "romantic", "angry": "angry"}
+_NOT_MOOD = re.compile(
+    r"^(?:no+[,.!]*\s+|nah[,.!]*\s+)?(?:(?:that'?s|thats|that is|this is|this'?s|it'?s|its|that one'?s)\s+"
+    r"(?:not|not,? that'?s not)|(?:that|this|it|that one)\s+(?:isn'?t|ain'?t))\s+"
+    r"(?:a\s+|really\s+|very\s+|exactly\s+|that\s+)?"
+    r"(?:(?P<mood>chill|relaxing|calm|mellow|laid back|sad|happy|upbeat|hype|energetic|workout|gym|dark|party|"
+    r"focus|study|romantic|angry)(?:\s+(?:song|track|one|music|vibe|enough))?|the\s+vibe|my\s+vibe|the\s+mood|"
+    r"what i'?m feeling)[.!?]*$")
+
+
+def _last_was_queue_list() -> bool:
+    try:
+        from modules.learning.feedback import feedback
+        turns = feedback.recent_turns(90.0)
+    except Exception:
+        return False
+    return bool(turns) and turns[-1]["intent"] == "spotify.queue_list"
+
+
 def _spotify_reply(si: SpotifyIntent, r) -> str:
     k = si.kind
+    if k == "not_mood":
+        what = f"{r.get('track') or 'That one'}" + (f" by {r['artist']}" if r.get("artist") else "")
+        mood = r.get("mood")
+        fits = f"isn't {mood}" if mood else "doesn't fit"
+        if r.get("which") == "next":
+            return f"Got it — {what} {fits}. I'll skip it when it comes up" + \
+                (f" and keep it out of {mood} mixes." if mood else ".")
+        return f"Got it — {what} {fits}. Skipped" + (f", and I'll keep it out of {mood} mixes." if mood else ".")
+    if k == "playlist_remove":
+        return f"Took {r.get('track') or 'it'} out of {r.get('playlist') or 'the playlist'} and skipped it."
+    if k == "queue_list":
+        q = r.get("queue") or []
+        if not q:
+            return "Your queue is empty." if r.get("current") else "Nothing is playing, so there's no queue."
+        songs = [f"{t['name']} by {t['artist']}" if t.get("artist") else t["name"] for t in q[:5]]
+        text = "Up next: " + (", ".join(songs[:-1]) + ", then " + songs[-1] if len(songs) > 1 else songs[0]) + "."
+        if len(q) > 5:
+            text += f" And {len(q) - 5} more after that."
+        return text
     if k == "current":
         if not r.get("track"):
             return "Spotify isn't playing anything right now."
@@ -1588,13 +1658,48 @@ def parse_winctl(text: str) -> Optional[Intent]:
     return parse(text)
 
 
+def parse_social(text: str) -> Optional[Intent]:
+    from modules.agent.social_intents import parse_social as parse
+    return parse(text)
+
+
+def parse_taskmgr(text: str) -> Optional[Intent]:
+    from modules.agent.taskmgr_intents import parse_taskmgr as parse
+    return parse(text)
+
+
 def parse_extras(text: str) -> Optional[Intent]:
     from modules.agent.extras_intents import parse_extras as parse
     return parse(text)
 
 
-_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_winctl,
-                   parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_taskmgr,
+                   parse_winctl, parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
+
+
+_OPEN_PATH = re.compile(r"^(?:(?:hey\s+)?saint[,.!\s]+)?(?:open|launch|start|run)\s+(?:(?P<label>.+?)\s+"
+                        r"(?:at|from|in|with)\s+)?[\"'“]?(?P<path>[a-z]:[\\/][^\"'”]+?)[\"'”]?[.!]?$", re.I)
+
+
+def parse_open_path(text: str) -> Optional[Intent]:
+    """'Open Bloxstrap at "C:\\Users\\me\\Downloads\\Bloxstrap.exe"' starts that
+    exact file (a scene step typed by the user, 2026-09-30) — it used to fail
+    and get "worked out" into a Steam search."""
+    m = _OPEN_PATH.match((text or "").strip())
+    if not m:
+        return None
+    import os
+    path = m.group("path").strip()
+    label = (m.group("label") or "").strip() or os.path.basename(path)
+
+    def run():
+        if not os.path.exists(path):
+            return Reply(f"I can't find {path} — has it been moved or deleted?", ok=False)
+
+        def ok(r):
+            return f"Opened {label}." if r.get("window") else f"Started {label}."
+        return run_tool("desktop.open_app", f"open {label}", ok, name=path)
+    return Intent("desktop.open_path", run, "desktop")
 
 
 def route_single(text: str) -> Optional[Intent]:
@@ -1618,7 +1723,8 @@ def route(text: str) -> Optional[Intent]:
     # made or found (modules/agent/recent.py) — before memory, so "delete the
     # junk" never means "forget a memory".
     from modules.agent.refer_intents import parse_refer
-    for parser in (parse_web, parse_files_task, parse_refer, parse_automation, parse_memory):
+    for parser in (parse_open_path, parse_social, parse_web, parse_files_task, parse_refer, parse_automation,
+                   parse_taskmgr, parse_memory):
         try:
             intent = parser(text)
         except Exception:

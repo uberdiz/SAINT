@@ -601,7 +601,8 @@ class TTSService:
                 logger.error("TTS engine is None")
                 return False
 
-            self._engine.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
+            from modules.voice.speech_text import for_speech      # "NO ME QUIERO" isn't N-O-M-E
+            self._engine.speak(for_speech(text), turn_id=turn_id, on_chunk_start=on_chunk_start)
 
             synthesis_time = time.perf_counter() - synthesis_start
 

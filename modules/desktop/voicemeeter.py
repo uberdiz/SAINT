@@ -132,6 +132,31 @@ class Voicemeeter:
         log.info("voicemeeter.mic strip=%d muted=%s", i, new)
         return {"muted": new, "via": "Voicemeeter", "strip": label}
 
+    def _virtual_strips(self) -> List[int]:
+        """The strips Windows audio arrives on (Voicemeeter Input / AUX / VAIO3):
+        they come after the hardware inputs."""
+        strips, _ = self.layout()
+        hw = {5: 3, 8: 5}.get(strips, 2)
+        return list(range(hw, strips))
+
+    def system_gain(self, step_db: float = 0.0, set_db: Optional[float] = None) -> Dict:
+        """Turn everything Windows plays (music, games, videos) up or down on
+        Voicemeeter's virtual input strips, in dB (-60 .. +12)."""
+        with self._lock:
+            virtual = self._virtual_strips()
+            a_buses = [f"A{k + 1}" for k in range(self.layout()[1])]
+            # Only the ones you can hear (routed to a speaker/headset bus).
+            idx = [i for i in virtual if any(self.get(f"Strip[{i}].{b}") >= 0.5 for b in a_buses)] or virtual[:1]
+            before = self.get(f"Strip[{idx[0]}].Gain")
+            new = before + step_db if set_db is None else set_db
+            new = round(max(-60.0, min(12.0, new)), 1)
+            for i in idx:
+                self.set(f"Strip[{i}].Gain", new)
+            label = self.get_str(f"Strip[{idx[0]}].Label") or "Voicemeeter Input"
+        log.info("voicemeeter.gain strips=%s %.1f -> %.1f dB", idx, before, new)
+        return {"db": new, "previous_db": round(before, 1), "via": "Voicemeeter", "strip": label,
+                "percent": gain_to_percent(new)}
+
     def buses(self) -> List[Dict]:
         _, a = self.layout()
         return [{"bus": f"A{i + 1}", "index": i, "device": self.get_str(f"Bus[{i}].device.name")} for i in range(a)]
@@ -171,6 +196,20 @@ class Voicemeeter:
         device = target["device"].split(" (")[-1].rstrip(")") if "(" in target["device"] else target["device"]
         log.info("voicemeeter.route to=%s strips=%d", tb, moved)
         return {"device": f"{device} ({tb})", "moved": moved, "via": "Voicemeeter"}
+
+
+def gain_to_percent(db: float) -> int:
+    """Voicemeeter's fader (-60..+12 dB) as a rough loudness percentage where
+    0 dB = 100%: every -6 dB is about half as loud."""
+    if db <= -60:
+        return 0
+    return int(round(min(100.0, 100 * 10 ** (db / 20.0))))
+
+
+def percent_to_gain(percent: float) -> float:
+    import math
+    p = max(0.0, min(100.0, float(percent)))
+    return -60.0 if p <= 0.1 else max(-60.0, round(20 * math.log10(p / 100.0), 1))
 
 
 voicemeeter = Voicemeeter()

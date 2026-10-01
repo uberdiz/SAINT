@@ -260,6 +260,21 @@ class SpotifyClient:
     def me(self):
         return self.request("GET", "/me")[0]
 
+    def artist_albums(self, artist_id, limit=10):
+        """Albums and singles, newest first as Spotify returns them."""
+        return (self.request("GET", f"/artists/{artist_id}/albums",
+                             params={"include_groups": "album,single", "limit": max(1, min(10, int(limit)))})[0]
+                or {}).get("items") or []
+
+    def remove_from_playlist(self, playlist_id, uris):
+        body = [{"uri": u} for u in uris]
+        try:
+            self.request("DELETE", f"/playlists/{playlist_id}/items", json={"items": body})
+        except SpotifyAPIError as e:
+            if e.status != 400:
+                raise
+            self.request("DELETE", f"/playlists/{playlist_id}/items", json={"tracks": body})
+
     def playlist_items(self, playlist_id, limit=50):
         return self.request("GET", f"/playlists/{playlist_id}/items",
                             params={"limit": max(1, min(50, int(limit)))})[0]

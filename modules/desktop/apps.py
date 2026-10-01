@@ -181,6 +181,13 @@ class AppCatalog:
     def resolve(self, name: str) -> Optional[AppEntry]:
         from core.config import config
 
+        # A real path ("C:\Users\me\Downloads\Bloxstrap.exe", quoted or not):
+        # start exactly that file, never something that sounds like it.
+        raw = (name or "").strip().strip("\"'“”")
+        if re.match(r"^[a-z]:[\\/]", raw, re.I) and os.path.exists(raw):
+            stem = os.path.splitext(os.path.basename(raw))[0]
+            return AppEntry(stem, "path", raw, "path", process_hint=stem.lower())
+
         query = _norm(name)
         query = re.sub(r"^(the|my)\s+", "", query)
         query = re.sub(r"\s+(app|application|program)$", "", query)
@@ -189,7 +196,7 @@ class AppCatalog:
 
         custom = {(_norm(k)): v for k, v in (config.get("desktop.apps", {}) or {}).items()}
         if query in custom:
-            target = str(custom[query])
+            target = str(custom[query]).strip().strip("\"'")     # '"C:\...\x.exe"' copied from Explorer
             # "steam://open/games" and "ms-settings:display" are URIs; "C:\..." (a
             # one-letter scheme) is a path.
             kind = "uri" if re.match(r"^[a-z][\w+.-]+:", target, re.I) else "path"

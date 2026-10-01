@@ -51,11 +51,19 @@ class Agent:
     def __init__(self):
         self._lock = threading.Lock()
         self._last_failed = ""           # for "watch me" without saying what
+        # Scene / scheduled steps run exactly as written: a step that fails is
+        # reported, never "worked out" into something else (2026-09-30: a scene
+        # step that failed was planned into extracting a zip and a Steam search).
+        self._literal = threading.local()
 
     def handle(self, text: str) -> Optional[AgentResult]:
         if not config.get("agent.enabled", True):
             return None
         t0 = time.perf_counter()
+        from core.focus_guard import focus_guard
+        literal = getattr(self._literal, "on", False)
+        if not literal:
+            focus_guard.begin(text)            # scene steps keep the scene's own "yes, show things"
 
         # While SAINT watches the user show it something, "done" ends the lesson.
         from modules.learning import demonstration
@@ -69,6 +77,19 @@ class Agent:
         if learning.is_done(text) and demonstration.just_finished():
             # It had already stopped (15 quiet seconds) and saved what it saw.
             return AgentResult("I'd already stopped watching. " + demonstration.just_finished(), "learning.done")
+
+        # "No, that's wrong" / "I didn't ask for that" right after SAINT acted:
+        # a recipe SAINT worked out itself is unlearned on the spot, and the
+        # mistake is journaled so the planner doesn't repeat it. The utterance
+        # still goes on ("no, I meant X" runs X; "stop" stops).
+        from modules.learning.feedback import feedback, is_complaint
+        unlearned = None if getattr(self._literal, "on", False) else feedback.check_complaint(text)
+        if unlearned and is_complaint(text) and len(text.split()) <= 6 and not demonstration.recorder.active:
+            from modules.agent.meta import match_meta as _mm
+            if _mm(text) is None:
+                log.info("agent.intent learning.unlearned")
+                event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.unlearned", "text": text[:80]})
+                return AgentResult(unlearned + " What did you want instead?", "learning.unlearned")
 
         # Commands about SAINT itself (stop, "what are you doing?", silent
         # mode) never wait for the lock a running plan holds.
@@ -162,7 +183,7 @@ class Agent:
                     reply = None
             skills.note_result(skill, bool(reply and reply.ok))
             if reply is not None and (reply.ok or not _TRY_HARDER.search(reply.text)):
-                return self._finish(text, "learning.skill", reply, t0)
+                return self._finish(text, "learning.skill", reply, t0, steps=skill.steps)
             # The learned way stopped working: work it out again below.
 
         intent = route(text)
@@ -197,9 +218,20 @@ class Agent:
     # ------------------------------------------------------------------ #
     # Learning
     # ------------------------------------------------------------------ #
-    def _finish(self, text: str, name: str, reply, t0: float) -> AgentResult:
+    def _finish(self, text: str, name: str, reply, t0: float, steps=None) -> AgentResult:
         from modules.learning.corrections import corrections
+        from modules.learning.feedback import feedback
         corrections.note(text, name, reply.ok)
+        if not getattr(self._literal, "on", False):
+            feedback.note_result(text, name, reply.ok, reply.text, steps=steps, expects_reply=reply.expects_reply)
+            if reply.ok:
+                from modules.learning.habits import habits
+                habits.maybe_scan()                    # notice routines (rate-limited, background)
+            taught, at = feedback.just_taught
+            if taught and time.time() - at < 2:
+                feedback.just_taught = ("", 0.0)
+                reply = type(reply)(f"{reply.text.rstrip()} Got it — next time you say “{taught.strip(' .!?')}”, "
+                                    f"that's what I'll do.", ok=True)
         self._last_failed = "" if reply.ok else text
         event_bus.emit_event(EventType.LATENCY_INTENT, {
             "ms": round((time.perf_counter() - t0) * 1000, 1), "intent": name})
@@ -211,12 +243,17 @@ class Agent:
         from modules.agent.router import Reply
         from modules.learning import demonstration, planner
         from modules.learning.corrections import corrections
+        from modules.learning.feedback import feedback
+        if getattr(self._literal, "on", False):
+            log.info("agent.literal_step_failed text=%r failure=%r", text[:80], failure[:80])
+            return self._finish(text, first or "learning.unknown",
+                                Reply(failure or f"I didn't understand the step “{text.strip()}”.", ok=False), t0)
         log.info("agent.try_harder text=%r failure=%r", text[:80], failure[:80])
         event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.plan", "text": text[:80],
                                                       "failure": failure[:120]})
         with self._lock:
             try:
-                out = planner.attempt(text, failure)
+                out = planner.attempt(text, failure, domain=first.split(".")[0] if first else "")
             except Exception:
                 log.exception("agent.planner_failed")
                 out = None
@@ -224,7 +261,7 @@ class Agent:
             r = out.reply
             if out.learned:
                 r = Reply(r.text.rstrip() + " I'll remember how to do that.", ok=True)
-            return self._finish(text, "learning.planned", r, t0)
+            return self._finish(text, "learning.planned", r, t0, steps=out.steps)
         if out is None and not failure and self._llm_can_act(text):
             # No plan from known commands: let the model try its tools directly;
             # if that does nothing either, the AI module offers to watch and learn.
@@ -236,12 +273,16 @@ class Agent:
         # starts watching, so SAINT never records whatever happens next by itself.
         lead = failure or (out.reply.text if out is not None else "")
         lead = (lead.rstrip(". ") + ". ") if lead else ""
+        # Either way the user can just *say* what it should do next: the next
+        # command that works is learned for this wording (feedback.expect_teaching).
         if config.get("learning.watch_after_failure", True) and demonstration.offer(text):
-            msg = lead + "I don't know how to do that yet. Want to show me? Say yes, do it, then say “done”."
-            return self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False, expects_reply=True),
-                                t0)
-        msg = lead + "I don't know how to do that yet."
-        return self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False), t0)
+            msg = lead + ("I don't know how to do that yet. Tell me what it should do, or say yes and show me, "
+                          "then say “done”.")
+        else:
+            msg = lead + "I don't know how to do that yet. Tell me what it should do and I'll remember it."
+        res = self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False, expects_reply=True), t0)
+        feedback.expect_teaching(text, first or "learning.unknown")
+        return res
 
     @staticmethod
     def _llm_can_act(text: str) -> bool:
@@ -308,8 +349,15 @@ class Agent:
         return intent is not None and intent.name not in self._UNADDRESSED_BLOCKED
 
     def run_command(self, text: str) -> str:
-        """Used by scheduled automations: run a command, return the result text."""
-        res = self.handle(text)
+        """Used by scenes and scheduled automations: run a command exactly as
+        written and return the result text. Nothing is improvised or learned."""
+        self._literal.on = True
+        from core.focus_guard import focus_guard
+        focus_guard.begin(text, explicit=True)     # the user asked for the scene / automation by name
+        try:
+            res = self.handle(text)
+        finally:
+            self._literal.on = False
         if res is None:
             return f"I didn't recognise the scheduled command '{text}'."
         return res.text

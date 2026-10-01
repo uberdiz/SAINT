@@ -249,9 +249,41 @@ class SettingsUI(QWidget):
                                "The microphone stays on while SAINT speaks. SAINT compares what the mic hears "
                                "with what it is playing, so its own voice doesn't interrupt it but yours does.")
         self._row(f, "Allow interrupting", self._check("voice.barge_in_enabled", "Enabled"))
+        self._row(f, "Stop words", self._check("voice.barge_in_spotter", "“Stop”, “wait”, “shut up” always cut me off"),
+                  "Works even on speakers, where your voice and mine are hard to tell apart by loudness.")
+        self._row(f, "Quietest interruption", self._spin("voice.barge_in_min_rms", 0.0, 0.2, 0.005, 3),
+                  "Mic level below this never interrupts (music and room noise). It also rises with how loud "
+                  "you normally talk.")
         self._row(f, "Speech needed to interrupt", self._spin("voice.barge_in_min_ms", 90, 1500, 30, 0, " ms"))
         self._row(f, "Echo margin", self._spin("voice.barge_in_echo_margin", 1.0, 8.0, 0.1, 1),
                   "Higher = harder to interrupt (use with loud speakers); lower = easier (headphones).")
+        lay.addWidget(box)
+
+        box, f = self._section("Knowing it's you")
+        # The old "Wake word off" switch here looked like the wake word itself but
+        # wasn't (2026-09-30). The wake word lives on the Wake Word page only.
+        note = QLabel("Without “Hey SAINT”, SAINT only answers commands, questions and answers to its own "
+                      "questions, and ignores quiet voices from videos, games and calls. Turn the wake word "
+                      "on or off on the Wake Word page.")
+        note.setObjectName("Muted")
+        note.setWordWrap(True)
+        self._row(f, "No wake word", note)
+        self._row(f, "Learn my voice", self._check("voice.learn_my_voice",
+                                                   "Build a voice profile from what I say to SAINT by name"))
+        self._row(f, "Only my voice", self._check("voice.speaker_filter",
+                                                  "Ignore voices that aren't mine unless they say “SAINT”"),
+                  "Uses the voice profile once it has enough samples. Nothing but numbers is stored.")
+        prof = QWidget()
+        pl = QHBoxLayout(prof)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.voice_profile_label = QLabel("")
+        self.voice_profile_label.setObjectName("Muted")
+        reset = QPushButton("Forget my voice")
+        reset.clicked.connect(self._reset_voice_profile)
+        pl.addWidget(self.voice_profile_label, 1)
+        pl.addWidget(reset)
+        self._row(f, "Voice profile", prof)
+        self._refresh_voice_profile()
         lay.addWidget(box)
 
         box, f = self._section("Speech recognition (STT)")
@@ -266,14 +298,66 @@ class SettingsUI(QWidget):
 
         box, f = self._section("Speech output (TTS)")
         self._row(f, "Engine", self._combo("voice.tts_backend", ["kokoro", "qwen", "mock"]))
-        self._row(f, "Voice", self._combo("voice.tts_voice", ["af_heart", "af_bella", "af_nicole", "af_sky",
-                                                              "am_adam", "am_michael", "bf_emma", "bm_george"],
-                                          editable=True))
+        from modules.voice.voices import KOKORO_VOICES
+        labels = [label for _id, label in KOKORO_VOICES]
+        ids = [vid for vid, _label in KOKORO_VOICES]
+        self._row(f, "Voice", self._combo("voice.tts_voice", labels, data=ids))
+        self._row(f, "Blend with", self._combo("voice.tts_voice_blend", ["Nothing (one voice)"] + labels,
+                                               data=[""] + ids),
+                  "Mix two Kokoro voices into a new one.")
+        self._row(f, "Blend amount", self._combo("voice.tts_voice_blend_pct", ["A touch (25%)", "Half (50%)",
+                                                                              "Mostly the blend (75%)"],
+                                                 data=[25, 50, 75]))
         self._row(f, "Device", self._combo("voice.tts_device", ["cuda", "cpu", "auto"]))
         self._row(f, "Speed", self._spin("voice.tts_speed", 0.5, 2.0, 0.05, 2))
+        self.voice_preview = QPushButton("Hear it")
+        self.voice_preview.clicked.connect(self._preview_voice)
+        self._row(f, "", self.voice_preview, "Saves the voice settings above and says a line with them.")
         self._row(f, "CPU fallback", self._check("voice.tts_allow_cpu_fallback", "Use CPU if CUDA is unavailable"))
         lay.addWidget(box)
         self._add_page(w, lay)
+
+    def _refresh_voice_profile(self):
+        try:
+            from modules.voice.speaker import speaker_profile, MIN_SAMPLES
+            n = speaker_profile.samples
+            self.voice_profile_label.setText(
+                f"Ready ({n} samples)" if n >= MIN_SAMPLES else
+                f"Learning — {n} of {MIN_SAMPLES} samples (say “Hey SAINT, …” a few more times)")
+        except Exception as e:
+            self.voice_profile_label.setText(f"Unavailable ({e})")
+
+    def _reset_voice_profile(self):
+        from modules.voice.speaker import speaker_profile
+        speaker_profile.reset()
+        self._refresh_voice_profile()
+
+    def _preview_voice(self):
+        """Apply just the voice settings and have SAINT say something with them."""
+        keys = ("voice.tts_voice", "voice.tts_voice_blend", "voice.tts_voice_blend_pct", "voice.tts_speed",
+                "voice.tts_device", "voice.tts_backend")
+        for key, getter, _ in self._bindings:
+            if key in keys:
+                config.set(key, getter(), persist=False)
+        try:
+            config.save()
+            from core.runtime import runtime
+            runtime.apply_settings()
+            tts = runtime.tts
+        except Exception as e:
+            self.status.setText(f"Couldn't apply the voice: {e}")
+            return
+        self.status.setText("Loading the voice…")
+
+        def run():
+            import time
+            deadline = time.time() + 30
+            while tts is not None and not tts.is_ready and time.time() < deadline:
+                time.sleep(0.2)
+            if tts is not None:
+                tts.speak("Hi, I'm SAINT. This is how I'll sound from now on.")
+        import threading
+        threading.Thread(target=run, daemon=True, name="voice-preview").start()
 
     def _populate_mics(self):
         self.mic_combo.clear()

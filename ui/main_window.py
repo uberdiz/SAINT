@@ -185,6 +185,7 @@ class MainWindow(QMainWindow):
         actions.runtime = runtime
         self._quitting = False
         self._last_notice = ("", 0.0)
+        self._widget_in_game = False          # the user asked for the mini player during a game
         self.setWindowTitle("SAINT")
         self.resize(1360, 860)
         self.setMinimumSize(1040, 680)
@@ -338,14 +339,20 @@ class MainWindow(QMainWindow):
         if not self.overlay.isVisible():
             self.overlay.open_overlay()
 
-    def set_widget(self, on: bool):
+    def set_widget(self, on: bool, explicit: bool = True):
+        """``explicit``: the user asked (voice, a button, a menu), so it shows even
+        in Game Mode — "turn on the mini player" during Roblox said "on" and
+        showed nothing (2026-09-30). Restoring it at startup still respects Game Mode."""
         on = bool(on)
         if bool(config.get("widgets.spotify", False)) != on:
             config.set("widgets.spotify", on)
         from core.game_mode import game_mode
-        if on and not self.widget.isVisible() and not game_mode.overlays_blocked:
+        if on and explicit and game_mode.overlays_blocked:
+            self._widget_in_game = True
+        if on and not self.widget.isVisible() and (not game_mode.overlays_blocked or self._widget_in_game):
             self.widget.appear()
         elif not on:
+            self._widget_in_game = False
             self.widget.hide()
         self.music.apply_theme()
         self._tray_sync()
@@ -434,7 +441,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon)
         QApplication.instance().setWindowIcon(icon)
         self.hotkey.register(config.get("overlay.hotkey", "alt+`"))
-        self.set_widget(bool(config.get("widgets.spotify", False)))
+        self.set_widget(bool(config.get("widgets.spotify", False)), explicit=False)
         self.halo.refresh()
         self._update_halo()
         self._render_state(ui_bus.state)
@@ -474,9 +481,11 @@ class MainWindow(QMainWindow):
         """Game Mode changed (core/game_mode.py): hide / restore the overlays."""
         blocked = bool(p.get("overlays_blocked"))
         self._update_halo()
+        if not p.get("active"):
+            self._widget_in_game = False
         if blocked:
             self.action_notice.hide()
-            if self.widget.isVisible():
+            if self.widget.isVisible() and not self._widget_in_game:
                 self.widget.hide()
         elif config.get("widgets.spotify", False) and not self.widget.isVisible():
             self.widget.appear()

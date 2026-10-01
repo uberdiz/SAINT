@@ -107,8 +107,20 @@ def mic_mute(state: str = "toggle"):
     return {"muted": new}
 
 
-def system_volume(percent: Optional[int] = None, mute: str = ""):
+def system_volume(percent: Optional[int] = None, mute: str = "", step: int = 0):
+    """The whole PC's volume. With Voicemeeter in the chain, "system audio" is
+    Voicemeeter's Windows-audio input strip (the Windows slider only feeds it).
+    ``step`` nudges it by that many points (+/-)."""
+    from modules.desktop.voicemeeter import voicemeeter, percent_to_gain
+    if not mute and (step or percent is not None) and voicemeeter.available():
+        if step:
+            r = voicemeeter.system_gain(step_db=step * 0.4)            # 10 points ~ 4 dB
+        else:
+            r = voicemeeter.system_gain(set_db=percent_to_gain(percent))
+        return r
     ep = _endpoint("speakers")
+    if step and percent is None:
+        percent = round(ep.GetMasterVolumeLevelScalar() * 100) + int(step)
     if mute:
         cur = bool(ep.GetMute())
         new = (not cur) if mute == "toggle" else mute == "on"
@@ -313,7 +325,9 @@ def register_system_tools(registry):
         Tool("audio.system_volume", "Set the whole PC's volume (0-100) or mute it", {"percent": "integer"},
              PermissionLevel.LOW, system_volume,
              parameters={"percent": P("integer", required=False, minimum=0, maximum=100),
-                         "mute": P("string", required=False, default="", enum=["", "on", "off", "toggle"])},
+                         "mute": P("string", required=False, default="", enum=["", "on", "off", "toggle"]),
+                         "step": P("integer", "nudge up (+) or down (-) by this many points", required=False,
+                                   default=0, minimum=-100, maximum=100)},
              llm_exposed=True, category="audio"),
         Tool("audio.app_volume", "Set one app's volume in the Windows volume mixer (e.g. Discord 30%)",
              {"app": "string"}, PermissionLevel.LOW, app_volume,

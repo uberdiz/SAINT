@@ -165,6 +165,7 @@ class SpotifyTools:
         # Songs an earlier auto-queue put in Spotify's queue that never played: the
         # Web API can't remove them, so when one comes up after the user moved on it is skipped.
         self._radio_orphans: Dict[str, float] = {}
+        self._skip_when_up: Dict[str, float] = {}    # "that's not chill" about the next song: skip it when it plays
 
     @property
     def memory(self) -> SpotifyMemory:
@@ -182,6 +183,19 @@ class SpotifyTools:
         tools = [
             Tool("spotify.current", "What is playing on Spotify right now", {}, L, self.current,
                  parameters={}, llm_exposed=True),
+            Tool("spotify.remove_current_from_playlist", "Remove the song that's playing from the playlist it's "
+                 "playing from (only the user's own playlists)", {}, PermissionLevel.MEDIUM,
+                 self.remove_current_from_playlist, parameters={}, llm_exposed=False),
+            Tool("spotify.not_mood", "The song playing (or the next one up) doesn't fit the mood: skip it "
+                 "and keep it out of that mood's mixes", {}, L, self.not_mood,
+                 parameters={"mood": P("string", "the mood it doesn't fit", required=False, default="",
+                                       enum=[""] + list(MOODS)),
+                             "which": P("string", "the song playing or the next one up", required=False,
+                                        default="current", enum=["current", "next"])},
+                 llm_exposed=False),
+            Tool("spotify.queue_list", "List the songs coming up in the Spotify queue", {}, L, self.queue_list,
+                 parameters={"limit": P("integer", required=False, default=10, minimum=1, maximum=20)},
+                 llm_exposed=True),
             Tool("spotify.play_query", "Find and play music on Spotify: a song, artist, album, playlist or genre",
                  {"query": "string", "kind": "string"}, L, self.play_query,
                  parameters={"query": P("string", "what to play, e.g. 'Blinding Lights by The Weeknd', 'jazz'"),
@@ -412,10 +426,11 @@ class SpotifyTools:
             except Exception as e:
                 logger.debug("spotify.lyrics_note_failed %s", e)
 
-    def _refresh_soon(self, delay: float = 0.8):
+    def _refresh_soon(self, delay: float = 0.8, track_change: bool = True):
         self.invalidate_state_cache()
-        # SAINT changed playback: the next track change isn't the user skipping.
-        self._saint_skip_at = time.time()
+        if track_change:
+            # SAINT changed playback: the next track change isn't the user skipping.
+            self._saint_skip_at = time.time()
         def run():
             time.sleep(delay)
             try:
@@ -512,10 +527,56 @@ class SpotifyTools:
         return {"kind": "artist", "uri": best["uri"], "name": best["name"], "artist": best["name"],
                 "id": best.get("id"), "context": True}
 
+    @staticmethod
+    def _album_entity(a: Dict[str, Any]) -> Dict[str, Any]:
+        return {"kind": "album", "uri": a["uri"], "name": a["name"], "artist": _artists(a),
+                "id": a.get("id"), "context": True}
+
+    def _newest_album(self, q: str) -> Optional[Dict[str, Any]]:
+        """"PinkPantheress's newest album", "the latest album by Drake"."""
+        m = re.match(r"^(?:the\s+)?(?P<a>.+?)(?:'s|s')?\s+(?:newest|latest|new|most recent|last)\b.*$", q, re.I) or \
+            re.match(r"^(?:the\s+|their\s+)?(?:newest|latest|new|most recent|last)\s+(?:album|music|record|"
+                     r"project|ep)?\s*(?:by|from)\s+(?P<a>.+)$", q, re.I)
+        if not m:
+            return None
+        who = re.sub(r"\b(?:album|music|songs?|stuff)\b", " ", m.group("a"), flags=re.I).strip(" ,.")
+        artist = self._artist_named(who) if who else None
+        if artist is None:
+            return None
+        albums = [a for a in self.client.artist_albums(artist["id"], 10)
+                  if any(x.get("id") == artist["id"] for x in a.get("artists") or [])]
+        if not albums:
+            return None
+        newest = max(albums, key=lambda a: (a.get("release_date") or "", a.get("album_type") == "album"))
+        return self._album_entity(newest)
+
+    def _album_by_split(self, q: str) -> Optional[Dict[str, Any]]:
+        """"Pink Panther says Fancy That" (no "by"): try each leading run of
+        words as a (misheard) artist and look for the rest among their albums."""
+        words = _norm(q).split()
+        for n in range(min(3, len(words) - 1), 0, -1):
+            who, rest = " ".join(words[:n]), " ".join(words[n:])
+            artist = self._artist_named(who)
+            if artist is None:
+                continue
+            albums = self.client.artist_albums(artist["id"], 10)
+            scored = [(max(_title_score(rest, a.get("name", "")),
+                           max((_title_score(" ".join(words[n + k:]), a.get("name", ""))
+                                for k in range(1, len(words) - n)), default=0)), a) for a in albums]
+            best = max(scored, key=lambda x: x[0], default=None)
+            if best and best[0] >= 0.75:
+                return self._album_entity(best[1])
+        return None
+
     def _resolve_album(self, q: str) -> Optional[Dict[str, Any]]:
+        newest = self._newest_album(q)
+        if newest:
+            return newest
         title, artist = self._split_by(q)
         search = f"album:{title} artist:{artist}" if artist else q
         albums = _items(self.client.search(search, "album", limit=5), "album")
+        if not albums and not artist:
+            return self._album_by_split(q)
         if not albums:
             return None
         best = max(albums, key=lambda a: _sim(title, a.get("name", "")) * 2 + (
@@ -524,6 +585,15 @@ class SpotifyTools:
                 "id": best.get("id"), "context": True}
 
     def _user_playlists(self) -> List[Dict[str, Any]]:
+        # Every "play X" checks the user's own playlists first: keep them a minute.
+        cached = getattr(self, "_pl_cache", None)
+        if cached and time.time() - cached[0] < 60:
+            return cached[1]
+        items = self._fetch_user_playlists()
+        self._pl_cache = (time.time(), items)
+        return items
+
+    def _fetch_user_playlists(self) -> List[Dict[str, Any]]:
         # /me/playlists is paged (50 max); users often have more than 50.
         data = self.client.playlists(50) or {}
         items = [p for p in data.get("items", []) if p]
@@ -534,6 +604,27 @@ class SpotifyTools:
                 break
             items += page
         return items
+
+    def _own_playlist_named(self, q: str) -> Optional[Dict[str, Any]]:
+        """One of the user's playlists whose name is what they said, ignoring
+        spaces and punctuation ("radio head radio" = "Radiohead Radio")."""
+        key = re.sub(r"[^a-z0-9]", "", _pnorm(re.sub(r"^(?:my|the)\s+", "", q, flags=re.I)))
+        if len(key) < 3:
+            return None
+        try:
+            mine = self._user_playlists()
+        except SpotifyAPIError:
+            return None
+        hits = [p for p in mine if re.sub(r"[^a-z0-9]", "", _pnorm(p.get("name", ""))) == key]
+        if not hits:
+            hits = [p for p in mine if difflib.SequenceMatcher(
+                None, key, re.sub(r"[^a-z0-9]", "", _pnorm(p.get("name", "")))).ratio() >= 0.93]
+        if len(hits) != 1:
+            return None
+        p = hits[0]
+        me = self._my_user_id()
+        return {"kind": "playlist", "uri": p["uri"], "name": p["name"], "id": p["id"], "context": True,
+                "owned": not me or (p.get("owner") or {}).get("id") == me}
 
     def _my_user_id(self) -> str:
         if getattr(self, "_me_id", None) is None:
@@ -721,7 +812,13 @@ class SpotifyTools:
             return self._resolve_playlist(q, allow_public=not own_only)
         if kind == "genre":
             return self._resolve_genre(q)
-        # auto. "a playlist called X" / "a Spanish playlist" name a playlist.
+        # auto. The user's own playlist of (nearly) that exact name wins over
+        # everything: "play radio head radio" was their playlist "Radiohead
+        # Radio", not the artist (2026-09-30).
+        mine = self._own_playlist_named(q)
+        if mine:
+            return mine
+        # "a playlist called X" / "a Spanish playlist" name a playlist.
         pm = re.match(r"^(?:(?:a|an|the|my|some)\s+)?playlist\s+(?:called|named|titled)?\s*(.+)$", q, re.I) or \
             re.match(r"^(?:(?:a|an|the|my|some)\s+)?(.+?)\s+playlist$", q, re.I)
         if pm:
@@ -811,6 +908,7 @@ class SpotifyTools:
         if ent is None:
             raise SpotifyAPIError(f"Nothing found for {query}", status=404, code="NO_MATCH")
         self._play_entity(ent)
+        self._played_by_request_at = time.time()
         if config.get("spotify.track_history", True):
             self.memory.record_request(query, ent["kind"], ent.get("name", ""), ent.get("uri", ""),
                                        ent.get("artist", ""))
@@ -867,7 +965,9 @@ class SpotifyTools:
             if st["item"] and config.get("spotify.track_history", True):
                 dur = st["duration_ms"] or 1
                 if st["progress_ms"] < SKIP_FRACTION * dur:
-                    self.memory.record_skip(st["item"], st["progress_ms"], source=source or "voice")
+                    self.memory.record_skip(st["item"], st["progress_ms"], source=source or "voice",
+                                            context_uri=st.get("context_uri", ""))
+                    self._check_playlist_dislike(st["item"], st.get("context_uri", ""))
                 self._note_rec_outcome(st["id"], st["progress_ms"], dur, skipped=st["progress_ms"] < SKIP_FRACTION * dur)
                 with self._lock:
                     # The poller must not count this track change as a second (app) skip.
@@ -888,6 +988,7 @@ class SpotifyTools:
     def volume(self, percent):
         percent = max(0, min(100, int(percent)))
         self._with_device(lambda d: self.client.volume(percent, device_id=d))
+        self._refresh_soon(0.4, track_change=False)   # the Music tab's slider shows the real value
         return {"success": True, "action": "volume", "percent": percent}
 
     def volume_step(self, direction, step=None):
@@ -898,6 +999,12 @@ class SpotifyTools:
             raise SpotifyAPIError("This device doesn't report its volume.", status=403, code="VOLUME_UNSUPPORTED")
         new = max(0, min(100, int(cur) + (step if direction == "up" else -step)))
         self.client.volume(new)
+        self._refresh_soon(0.4, track_change=False)
+        try:
+            from modules.agent.context import desktop_context
+            desktop_context.note_volume("spotify", step)      # "turn it back up" = Spotify again
+        except Exception:
+            pass
         return {"success": True, "action": "volume", "percent": new, "previous": cur}
 
     def shuffle(self, state):
@@ -923,6 +1030,57 @@ class SpotifyTools:
                 self._radio["known"].add(ent["uri"].split(":")[-1])
         return {"success": True, "action": "queue", "name": ent["name"], "artist": ent.get("artist", ""),
                 "uri": ent["uri"]}
+
+    def not_mood(self, mood="", which="current"):
+        """"That's not a chill song": the song playing (or, right after the queue
+        was read out, the next one) doesn't fit the mood. Skip it — now, or when
+        it comes up — and never pick it for that mood again. The song itself
+        isn't disliked, so it can still come up elsewhere."""
+        mood = (mood or "").lower()
+        with self._lock:
+            r = self._radio
+            if not mood and r is not None:
+                mood = (r.get("mood") or "").lower()
+        if which == "next":
+            data = self.client.get_queue() or {}
+            with self._lock:
+                orphans = set(self._radio_orphans)
+            q = [t for t in (data.get("queue") or []) if t and t.get("id") and t.get("id") not in orphans]
+            if not q:
+                raise SpotifyAPIError("Nothing is queued after this song.", status=404, code="NO_QUEUE")
+            track = q[0]
+        else:
+            st = self._state()
+            track = st["item"]
+            if not track:
+                raise SpotifyAPIError("Nothing is playing.", status=404, code="NO_PLAYBACK")
+        tid = track.get("id")
+        if mood and tid:
+            self.memory.mark_mood_mismatch(mood, track)
+        if config.get("spotify.track_history", True):
+            self.memory.record_feedback(track, -0.2, f"not {mood or 'the vibe'}")
+        with self._lock:
+            if self._radio is not None:
+                self._radio["pool"] = [p for p in self._radio.get("pool") or [] if p.get("id") != tid]
+            if which == "next" and tid:
+                self._skip_when_up[tid] = time.time()
+        if which != "next":
+            self.next(source="not_mood")
+        logger.info("spotify.not_mood track=%r mood=%r which=%s", track.get("name"), mood, which)
+        return {"success": True, "track": track.get("name", ""), "artist": _artists(track), "mood": mood,
+                "which": which}
+
+    def queue_list(self, limit=10):
+        data = self.client.get_queue() or {}
+        cur = data.get("currently_playing") or {}
+        with self._lock:
+            orphans = set(self._radio_orphans)
+        # Leftovers SAINT will skip anyway aren't really "up next".
+        q = [t for t in (data.get("queue") or []) if t and t.get("id") not in orphans]
+        return {"current": {"name": cur.get("name"), "artist": _artists(cur)} if cur else None,
+                "queue": [{"name": t.get("name", ""), "artist": _artists(t), "uri": t.get("uri")}
+                          for t in q[:max(1, min(20, int(limit or 10)))]],
+                "total": len(q)}
 
     def add_to_playlist(self, playlist_id, uris):
         self.client.add_to_playlist(playlist_id, uris)
@@ -1075,6 +1233,8 @@ class SpotifyTools:
                 pass
         mood = (mood or "").lower()
         mood_words = MOODS.get(mood, ())
+        if mood:
+            skipped |= self.memory.mood_mismatches(mood)
         candidates: Dict[str, tuple] = {}
         basis = ""
 
@@ -1469,6 +1629,8 @@ class SpotifyTools:
             return
         with self._lock:
             orphan = tid in self._radio_orphans and not (self._radio and tid in self._radio["queued"])
+            if self._skip_when_up.pop(tid, None) is not None:
+                orphan = True                   # the user said it doesn't fit before it came up
             r = self._radio
         if orphan and st.get("is_playing"):
             # Left over from an earlier auto-queue: the user has moved on from it.
@@ -1663,6 +1825,96 @@ class SpotifyTools:
     # ------------------------------------------------------------------ #
     # Background poller (listening memory + live UI state)
     # ------------------------------------------------------------------ #
+    def note_sang_along(self, heard: str = "") -> bool:
+        """The user sang along to what's playing (voice module: a lyric heard in
+        their voice). Counted once per play as a strong "likes this song"."""
+        with self._lock:
+            last = self._last
+        item = (last or {}).get("item")
+        if not item or not item.get("id") or not config.get("spotify.track_history", True):
+            return False
+        sang = self.__dict__.setdefault("_sang", {})
+        now = time.time()
+        if now - sang.get(item["id"], 0) < max(60.0, (item.get("duration_ms") or 0) / 1000):
+            return False
+        sang[item["id"]] = now
+        self.memory.record_feedback(item, 0.6, "sang along")
+        logger.info("spotify.sang_along track=%r", item.get("name"))
+        return True
+
+    def _check_playlist_dislike(self, item: Dict[str, Any], context_uri: str) -> bool:
+        """Skipped in a playlist again: if it's always skipped there (and early),
+        remember it as disliked *in that playlist* and say so, quietly."""
+        if not item or not item.get("id") or not (context_uri or "").startswith("spotify:playlist:") \
+                or not config.get("spotify.learn_playlist_dislikes", True):
+            return False
+        try:
+            if item["id"] in self.memory.playlist_dislikes(context_uri):
+                return True
+            stats = self.memory.context_skip_stats(item["id"], context_uri)
+            early = stats["median_skip_s"] is not None and stats["median_skip_s"] <= 45
+            if not (stats["skips"] >= 3 and stats["skips"] >= 0.6 * stats["plays"] or
+                    stats["skips"] >= 2 and early and stats["skips"] >= stats["plays"]):
+                return False
+            self.memory.mark_playlist_dislike(context_uri, item, stats)
+            self.memory.record_feedback(item, -0.7, f"skipped {stats['skips']}x in a playlist")
+        except Exception:
+            logger.exception("spotify.dislike_check_failed")
+            return False
+        name = self._playlist_name(context_uri)
+        artists = item.get("artists") or []
+        who = f" by {artists[0].get('name')}" if artists else ""
+        auto = config.get("spotify.skip_disliked_in_playlists", True)
+        _note_quietly(f"You've skipped {item.get('name')}{who} {stats['skips']} of {stats['plays']} times in "
+                      f"{name}, usually about {stats['median_skip_s']}s in. "
+                      + ("I'll skip it there from now on. " if auto else "")
+                      + "Say \u201cremove this song from the playlist\u201d next time it's on to take it out.")
+        logger.info("spotify.playlist_dislike track=%r playlist=%r stats=%s", item.get("name"), name, stats)
+        return True
+
+    def _disliked_here(self, st: Dict[str, Any]) -> bool:
+        ctx = st.get("context_uri") or ""
+        if not st.get("id") or not st.get("is_playing") or not ctx.startswith("spotify:playlist:") \
+                or not config.get("spotify.skip_disliked_in_playlists", True):
+            return False
+        if time.time() - getattr(self, "_played_by_request_at", 0) < 8:
+            return False                    # they just asked for this very thing
+        try:
+            return st["id"] in self.memory.playlist_dislikes(ctx)
+        except Exception:
+            return False
+
+    def _playlist_name(self, context_uri: str) -> str:
+        pid = context_uri.rsplit(":", 1)[-1]
+        try:
+            hit = next((p for p in self._user_playlists() if p.get("id") == pid), None)
+        except SpotifyAPIError:
+            hit = None
+        return f"\u201c{hit['name']}\u201d" if hit else "that playlist"
+
+    def remove_current_from_playlist(self):
+        """"Remove this song from the playlist": the one it's playing from."""
+        st = self._state(force=True)
+        ctx = st.get("context_uri") or ""
+        if not st.get("uri"):
+            raise SpotifyAPIError("Nothing is playing.", status=404, code="NO_PLAYBACK")
+        if not ctx.startswith("spotify:playlist:"):
+            raise SpotifyAPIError("This song isn't playing from a playlist.", status=400, code="NO_PLAYLIST")
+        pid = ctx.rsplit(":", 1)[-1]
+        mine = next((p for p in self._user_playlists() if p.get("id") == pid), None)
+        me = self._my_user_id()
+        if mine is None or (me and (mine.get("owner") or {}).get("id") != me):
+            raise SpotifyAPIError("That playlist isn't yours, so I can't change it. I'll keep skipping the song "
+                                  "there instead.", status=403, code="NOT_MINE")
+        self.client.remove_from_playlist(pid, [st["uri"]])
+        self.memory.clear_playlist_dislike(ctx, st["id"])
+        self._pl_cache = None
+        try:
+            self.next(source="voice")
+        except SpotifyAPIError:
+            pass
+        return {"success": True, "track": st.get("track"), "playlist": mine.get("name")}
+
     def poll_once(self):
         # Poller must see fresh state or it can't detect skips.
         st = self._state(force=True)
@@ -1696,20 +1948,48 @@ class SpotifyTools:
                     frac = elapsed / max(1, last["duration_ms"])
                     user_skip = frac < SKIP_FRACTION and time.time() - self._saint_skip_at > 5
                     if user_skip and last.get("item"):
-                        self.memory.record_skip(last["item"], int(elapsed), source="app")
+                        self.memory.record_skip(last["item"], int(elapsed), source="app",
+                                                context_uri=last.get("context_uri", ""))
                         logger.info("spotify.skip.app track=%r at=%.0f%%", last["item"].get("name"), frac * 100)
+                        self._check_playlist_dislike(last["item"], last.get("context_uri", ""))
                     self._note_rec_outcome(last["id"], elapsed, last["duration_ms"], skipped=user_skip)
                 self._skip_handled_id = None
                 self.memory.record_listening(st["item"], context_uri=st["context_uri"])
+                skip_disliked = self._disliked_here(st)
+            else:
+                skip_disliked = False
             if st["id"]:
                 self._last = {"id": st["id"], "item": st["item"], "progress_ms": st["progress_ms"],
                               "duration_ms": st["duration_ms"] or 1, "seen_at": time.time(),
-                              "is_playing": bool(st["is_playing"])}
+                              "is_playing": bool(st["is_playing"]), "context_uri": st.get("context_uri", "")}
+        if skip_disliked:
+            # A song they always skip in this playlist came up on its own: skip it for them.
+            logger.info("spotify.skip_disliked %r in %s", st.get("track"), st.get("context_uri"))
+            with self._lock:
+                self._skip_handled_id = st["id"]
+            self._saint_skip_at = time.time()
+            try:
+                self._with_device(lambda d: self.client.next(device_id=d))
+            except SpotifyAPIError:
+                pass
+            return st
         self._radio_tick(st, prev)
         # Slowly fill in genre data for artists we've seen (one lookup per poll).
         for artist_id in self.memory.uncached_artist_ids(1):
             self._genres_for(artist_id, "")
         return st
+
+
+def _note_quietly(text: str):
+    """A chat/notification line that is never spoken: learning about music
+    must not talk over the music (or a game)."""
+    try:
+        from core.events import event_bus, EventType
+        # A line in the chat only: no speech, no toast over a game.
+        event_bus.emit_event(EventType.UI_CHAT_RENDER, {"turn_id": 0, "role": "assistant", "text": text,
+                                                        "source": "spotify"})
+    except Exception:
+        logger.debug("spotify.note_failed", exc_info=True)
 
 
 def speakable_error(exc) -> str:

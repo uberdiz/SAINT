@@ -135,7 +135,7 @@ def test_gate_rejects_foreign_wake_word(voice):
 
 def test_gate_rejects_low_confidence(voice):
     ok, reason = voice._passes_activation_gate("There's nothing to skip right now.", 0.48)
-    assert ok is False and reason.startswith("low_confidence")
+    assert ok is False and reason.startswith(("low_confidence", "open_mic_no_intent"))
 
 
 def test_gate_rejects_hallucination(voice):

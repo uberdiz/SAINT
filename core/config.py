@@ -90,6 +90,11 @@ DEFAULT_CONFIG = {
         # energy of the audio it is playing, so its own voice through the
         # speakers is not mistaken for the user.
         "barge_in_enabled": True,
+        "barge_in_spotter": True,         # "stop" / "wait" / "shut up" heard while talking always interrupts
+        "barge_in_min_rms": 0.025,        # quieter than this never interrupts (rises with your normal level)
+        "barge_in_level_ratio": 0.4,
+        "learn_my_voice": True,           # voice profile from "Hey SAINT, ..." commands (numbers only)
+        "speaker_filter": False,          # ignore voices that aren't yours unless they say "SAINT"
         "barge_in_min_ms": 240,         # sustained speech needed to interrupt
         "barge_in_echo_margin": 2.0,    # how far above predicted echo the mic must be
 
@@ -105,6 +110,8 @@ DEFAULT_CONFIG = {
         "tts_backend": "kokoro",          # "kokoro" | "qwen" | "mock"
         "tts_model_dir": "data/tts",
         "tts_voice": "af_heart",          # kokoro voice name
+        "tts_voice_blend": "",            # a second Kokoro voice mixed in ("" = none)
+        "tts_voice_blend_pct": 50,
         "tts_device": "cuda",             # "cuda" | "cpu" | "auto"
         "tts_allow_cpu_fallback": True,
         "tts_require_cuda": False,
@@ -258,6 +265,7 @@ DEFAULT_CONFIG = {
         "allow_keyboard": True,
         "allow_mouse": True,
         "confirm_close_apps": True,
+        "focus_guard": True,              # never pull you out of a game / your editor unless you asked for a window
         # How long the window SAINT last worked in stays the default target
         # for "click X" / "scroll down" before the foreground window wins.
         "context_window_ttl_sec": 45.0,
@@ -316,6 +324,7 @@ DEFAULT_CONFIG = {
         "planner_timeout_sec": 25,
         "watch_and_learn": True,          # may watch the user show it how (announced, time-limited)
         "watch_after_failure": True,      # start watching by itself after "I don't know how yet"
+        "from_mistakes": True,            # unlearn on "that's wrong", learn rephrasings, keep a mistake journal
         "watch_max_sec": 120,
         "watch_idle_sec": 15,             # stop 15 s after the last thing the user did
     },
@@ -325,6 +334,7 @@ DEFAULT_CONFIG = {
     # ------------------------------------------------------------------
     "audio": {
         "bare_mute": "mic",               # "mute" / "unmute" alone: "mic" or "system"
+        "turn_it_means": "system",        # bare "turn it down": "system" (Voicemeeter/Windows) or "music"
         "voicemeeter": {
             "enabled": "auto",            # auto (when running) / on / off
             "mic_strip": -1,              # -1 = the input strip with a microphone on it
@@ -414,7 +424,10 @@ DEFAULT_CONFIG = {
         "poll_interval_sec": 15,          # background listening-history sync
         "track_history": True,            # remember what you listen to / skip
         "auto_device": True,              # wake an available device if none is active
-        "volume_step": 15,
+        "volume_step": 10,                # "turn Spotify up"; "a little" halves it, "a lot" doubles it
+        "learn_playlist_dislikes": True,  # a song you keep skipping in a playlist is noted as disliked there
+        "skip_disliked_in_playlists": True,
+        "learn_singing": True,            # singing along (a lyric in your voice) counts as liking the song
         "autoqueue": True,                # a song / mood / "more like this" keeps going: 5 similar songs at a time
     },
 

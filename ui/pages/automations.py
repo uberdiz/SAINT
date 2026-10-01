@@ -342,7 +342,8 @@ class ScheduledView(QWidget):
 
 
 _HOW = {"planned": "Worked out", "corrected": "You corrected me", "shown": "You showed me",
-        "saved": "You saved it", "edited": "You wrote it"}
+        "saved": "You saved it", "edited": "You wrote it", "taught": "You told me",
+        "rephrased": "You said it another way", "noticed": "Noticed a habit"}
 
 
 class LearnedView(QWidget):
@@ -357,12 +358,21 @@ class LearnedView(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(16)
         card = Card("Learned")
-        hint = QLabel("When SAINT can't do something, it works it out with commands it knows, learns from "
-                      "“no, I meant …”, or watches you do it once. Say “what have you learned”, “forget that”, "
-                      "or “save that as …” right after something worked.")
+        hint = QLabel("SAINT learns from every request: it works out what it can't do with commands it knows, "
+                      "learns when you say it another way or “no, I meant …”, when you tell it (“when I say "
+                      "gaming time, open Steam and Discord”) or show it once, and notices habits it can turn into "
+                      "routines. Everything here can be edited or forgotten.")
         hint.setObjectName("Faint")
         hint.setWordWrap(True)
         card.body.addWidget(hint)
+        # Routines SAINT noticed by itself (modules/learning/habits.py): nothing
+        # changes until one is accepted, and the text can be edited first.
+        self.suggest_box = QWidget()
+        self.suggest_lay = QVBoxLayout(self.suggest_box)
+        self.suggest_lay.setContentsMargins(0, 0, 0, 0)
+        self.suggest_lay.setSpacing(6)
+        self.suggest_box.hide()
+        card.body.addWidget(self.suggest_box)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(["When you say", "SAINT does", "How", "Used", "Learned"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -405,9 +415,47 @@ class LearnedView(QWidget):
         card.body.addLayout(btns)
         lay.addWidget(card, 1)
 
+    def _show_suggestions(self, items):
+        while self.suggest_lay.count():
+            w = self.suggest_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        if not items:
+            self.suggest_box.hide()
+            return
+        title = QLabel("Noticed — want these as routines?")
+        title.setObjectName("Muted")
+        self.suggest_lay.addWidget(title)
+        for sg in items[:5]:
+            row = QWidget()
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.addWidget(QLabel(f"After “{sg['when']}” you usually say"))
+            then = QLineEdit(sg["then"])
+            then.setToolTip("What the routine adds — change it before accepting if you like.")
+            rl.addWidget(then, 1)
+            rl.addWidget(QLabel(f"{sg.get('times', 0)}×"))
+            ok = QPushButton("Accept")
+            ok.setObjectName("Primary")
+            no = QPushButton("Dismiss")
+            ok.clicked.connect(lambda _=False, i=sg["id"], e=then: self._answer_suggestion(i, e.text(), True))
+            no.clicked.connect(lambda _=False, i=sg["id"]: self._answer_suggestion(i, "", False))
+            rl.addWidget(ok)
+            rl.addWidget(no)
+            self.suggest_lay.addWidget(row)
+        self.suggest_box.show()
+
+    def _answer_suggestion(self, sid: str, then: str, accept: bool):
+        from modules.learning.habits import habits
+        msg = habits.accept(sid, then) if accept else habits.dismiss(sid)
+        self.status.setText(msg)
+        self.refresh()
+
     def refresh(self):
+        from modules.learning.habits import habits
         from modules.learning.skills import skills
         keep = self._editing
+        run_async(habits.pending, self._show_suggestions)
 
         def show(items):
             self.table.blockSignals(True)

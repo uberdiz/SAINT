@@ -616,16 +616,26 @@ def watch_for(phrase: str) -> bool:
     return recorder.start(phrase, on_done=done)
 
 
+def can_watch() -> bool:
+    """Watching the user is possible right now (never while a game runs)."""
+    if os.name != "nt" or not config.get("learning.watch_and_learn", True):
+        return False
+    from core.game_mode import game_mode
+    return not game_mode.active
+
+
 def offer(phrase: str) -> bool:
     """After a failure: *ask* to watch ("want to show me?") instead of starting
-    to record whatever the user does next. "Yes" starts watching."""
-    if os.name != "nt" or not config.get("learning.watch_and_learn", True):
+    to record whatever the user does next. "Yes" starts watching. Not offered
+    when SAINT can't watch: "Yes." during Roblox got "I can't watch the screen
+    on this computer." (2026-09-30) — the user is asked to *say* it instead."""
+    if not can_watch():
         return False
     from modules.agent.confirm import PendingAction, confirmations
 
     def run():
         if not watch_for(phrase):
-            return "I can't watch the screen on this computer."
+            return "I can't watch right now — just tell me what it should do and I'll remember it."
         return "Okay, I'm watching. Do it now, then say “done”."
     confirmations.ask(PendingAction(description="watch you do it", run=run, tool="learning.watch"))
     return True
