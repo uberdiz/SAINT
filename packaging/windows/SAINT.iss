@@ -41,6 +41,12 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Shortcuts:"
 Name: "startup"; Description: "Start SAINT when I sign in to Windows"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
+[InstallDelete]
+; An upgrade replaces the program files completely: 2.1 shipped PyTorch (4 GB) in _internal, and a leftover
+; torch folder there would still be imported. The user's data in %LOCALAPPDATA%\SAINT isn't in {app}.
+Type: filesandordirs; Name: "{app}\_internal"
+Type: filesandordirs; Name: "{app}\models\hf\hub\models--hexgrad--Kokoro-82M"
+
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
