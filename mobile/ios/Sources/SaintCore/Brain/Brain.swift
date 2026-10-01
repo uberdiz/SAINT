@@ -111,7 +111,7 @@ public final class Brain {
         static let playSome = R(#"play some (.+)"#)
         static let play = R(#"(?:play|put on) (.+)"#)
         static let playLiked = R(#"(?:play|shuffle) (?:my |all my )?(?:liked|saved|favou?rite) (?:songs|tracks|music)|play my likes|play (?:the )?songs i(?:'ve)? liked"#)
-        static let playRecent = R(#"play (?:what|the (?:songs|music) )i(?:'ve| have)? (?:been )?(?:listening to|listened to|played|playing)(?: today| lately| recently| this week)?|play my recent(?:ly played)?(?: songs| tracks| music)?"#)
+        static let playRecent = R(#"play (?:what |the (?:songs|music) (?:that )?)i(?:'ve| have)? (?:been )?(?:listening to|listened to|played|playing)(?: today| lately| recently| this week)?|play my recent(?:ly played)?(?: songs| tracks| music)?"#)
         static let recentSummary = R(#"what (?:did|have) i (?:been )?(?:listen(?:ed|ing)? to|play(?:ed|ing)?)(?: today| lately| recently| yesterday| this week)?|what(?:'s| is| was) my listening (?:history|today)"#)
         static let topTrack = R(#"what(?:'s| is| was) (?:the )?(?:song|track) i(?:'ve| have)? (?:played|listened to|been playing|been listening to) (?:the )?most(?: lately| recently| this week| this month)?|what(?:'s| is) my (?:most played|top|favou?rite) (?:song|track)(?: lately| recently| right now)?"#)
         static let queue = R(#"(?:add|put) (.+?) (?:to|in|on|into) (?:the |my )?queue|queue(?: up)? (.+)|play (.+?) next"#)

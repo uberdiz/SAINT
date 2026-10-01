@@ -52,6 +52,28 @@ page — is in the rest of this repository. The phone and the PC share their lan
 
 ## Honest status
 
+**0.3.0 (build 3) — the desktop's look, and the whole phone by voice:**
+
+- **New UI** (designed in Figma from the desktop app; mockup in [docs/design/iphone-ui-2.0.png](../docs/design/iphone-ui-2.0.png)):
+  orange accent, dark cards, the SAINT logo, five tabs — Talk, Music, Activity, Devices, Settings — and a full-screen
+  voice mode that always closes itself. Drag down anywhere to put the keyboard away.
+- **Phone control:** "take a picture" (3-2-1 and it shoots), "take a selfie", "record a video", "flashlight on",
+  "brightness 40%", "call mom", "FaceTime Alex", "text Sam I'm on my way" (you tap Send/Call — iOS never lets an app do
+  that alone), "open Instagram", "navigate home", "what's my battery?", "run my Good Morning shortcut". Low Power Mode,
+  Wi-Fi, Bluetooth, Do Not Disturb, Airplane Mode, dark mode and Hotspot run a Shortcut named e.g. **"SAINT Low Power On"**
+  (Settings → Phone control → *Switches iOS keeps to itself* shows how; iOS gives no app direct access to these).
+- **Activity log:** everything SAINT does (what you asked, what it did, done/failed, phone or PC) on the Activity tab,
+  exportable, and synced to the PC, where it shows in History under *iPhone*.
+- **Wake word fixed:** partial speech results carry no timestamps, so "SAINT" after any earlier words never counted.
+  SAINT now times words itself, restarts the recogniser after other talk, uses one recogniser by default, and falls
+  back to Apple's servers if on-device recognition keeps failing. Settings → Listening → sensitivity.
+- **Audio:** choose headphones (when connected), the iPhone speaker or the earpiece; optionally the headset mic.
+- **Spotify like the desktop:** "play Blinding Lights" plays it and queues more by the artist; liked songs, what you
+  played today, your top track, queue, add to a playlist, recommendations, play on another device, seek.
+  Sign in again once so SAINT gets the new permissions.
+- **From anywhere:** with Tailscale on the PC and the phone, the pairing code carries the PC's Tailscale address and
+  the phone tries it whenever the Wi-Fi address doesn't answer (or add it on the device's page). Devices can be renamed.
+
 **0.2.0 (build 2):** AirPods stay in full-quality audio while SAINT listens (it uses the iPhone's microphone
 unless you turn on "Use my headset's microphone"), and the current audio route is shown under the orb; tap the
 orb again to stop listening; the first moment of a tapped command is no longer cut off; everyday words

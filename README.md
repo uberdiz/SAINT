@@ -46,6 +46,17 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
+**2.2 — a 3x smaller install, your iPhone in History, and SAINT from anywhere:**
+
+- **Smaller, faster installer.** SAINT.exe speaks with the same Kokoro voice through onnxruntime instead of PyTorch +
+  CUDA, so the install is a fraction of 2.1's ~3 GB. All models (voice, speech recognition, wake word) are in the
+  installer; nothing downloads on first run. From source, `python tools/get_kokoro_onnx.py` gets the ONNX voice
+  (SAINT uses it automatically when PyTorch isn't installed; `voice.tts_backend = "kokoro_onnx"` forces it).
+- **iPhone activity in History.** Everything SAINT Mobile does syncs to the PC and appears in History → iPhone.
+- **Reach your PC from anywhere.** With Tailscale installed, the pairing QR code includes the PC's Tailscale address,
+  and Devices shows "Tailscale on". The QR code works in the packaged app. Paired devices can be renamed.
+- **SAINT Mobile 0.3** — new orange UI, phone control by voice, wake-word fix: see [mobile/README.md](mobile/README.md).
+
 **2.1 — Gaming Mode you control, multi-monitor, tasks that continue, and a real Windows app:**
 
 - **SAINT.exe and an installer.** `python packaging/windows/build.py` builds `build/windows/SAINT/SAINT.exe`
@@ -459,7 +470,8 @@ winget install JRSoftware.InnoSetup
 - `build\windows\SAINT\SAINT.exe` — double-click to run (keep it with its `_internal` and `models` folders).
 - `build\windows\SAINT-Setup.exe` — installs to `%LOCALAPPDATA%\Programs\SAINT`, no admin rights needed.
 - The packaged app keeps its data in `%LOCALAPPDATA%\SAINT` (set `SAINT_DATA_DIR` to use another folder,
-  e.g. your source checkout's `data`). With the CUDA build of PyTorch the folder is about 5 GB.
+  e.g. your source checkout's `data`).
+- `build.py` downloads the ONNX voice first (`tools/get_kokoro_onnx.py`); PyTorch is not bundled.
 
 ---
 
