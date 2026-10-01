@@ -470,7 +470,11 @@ winget install JRSoftware.InnoSetup
 - `build\windows\SAINT\SAINT.exe` — double-click to run (keep it with its `_internal` and `models` folders).
 - `build\windows\SAINT-Setup.exe` — installs to `%LOCALAPPDATA%\Programs\SAINT`, no admin rights needed.
 - The packaged app keeps its data in `%LOCALAPPDATA%\SAINT` (set `SAINT_DATA_DIR` to use another folder,
-  e.g. your source checkout's `data`).
+  e.g. your source checkout's `data`). Once SAINT is installed, running it from source uses that same folder
+  and leaves the installed app's shortcuts alone, so there's only ever one SAINT: one memory, one history.
+  Moving from a source checkout to the installer? Your old `data` folder isn't read anymore; its memories,
+  skills, scenes, history and Spotify taste can be merged into `%LOCALAPPDATA%\SAINT` (the restore keeps a
+  backup in `%LOCALAPPDATA%\SAINT-backups`).
 - `build.py` downloads the ONNX voice first (`tools/get_kokoro_onnx.py`); PyTorch is not bundled.
 
 ---

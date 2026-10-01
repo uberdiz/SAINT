@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
-from core.paths import FROZEN, data_path, resource_path
+from core.paths import FROZEN, data_path, installed_exe, resource_path
 
 log = logging.getLogger("saint.autostart")
 
@@ -47,6 +47,10 @@ def launch_command() -> Tuple[str, str, str]:
     if FROZEN:
         exe = Path(sys.executable)
         return str(exe), "--background", str(exe.parent)
+    installed = installed_exe()
+    if installed is not None:
+        # Installed SAINT is the one to start (a run from source shares its data): don't take its shortcuts.
+        return str(installed), "--background", str(installed.parent)
     root = Path(__file__).resolve().parent.parent
     app_exe = root / ".venv" / "SAINT" / "SAINT.exe"      # core/app_exe.py: "SAINT" in Task Manager
     if app_exe.exists():

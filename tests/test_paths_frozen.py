@@ -51,3 +51,47 @@ def test_a_user_copy_of_an_asset_wins(frozen):
 def test_running_from_source_is_unchanged():
     assert not paths.FROZEN
     assert paths.resolve_project_path("SAINT.png") == paths.PROJECT_ROOT / "SAINT.png"
+
+
+@pytest.fixture
+def source_with_install(monkeypatch, tmp_path):
+    """Run from source on a PC where the installer put SAINT.exe in %LOCALAPPDATA%\\Programs\\SAINT."""
+    local = tmp_path / "local"
+    (local / "Programs" / "SAINT").mkdir(parents=True)
+    (local / "Programs" / "SAINT" / "SAINT.exe").write_bytes(b"x")
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.delenv("SAINT_DATA_DIR", raising=False)
+    mod = importlib.reload(paths)
+    yield mod, local
+    monkeypatch.undo()
+    importlib.reload(paths)
+
+
+def test_source_run_shares_the_installed_apps_data(source_with_install):
+    mod, local = source_with_install
+    assert not mod.FROZEN
+    assert mod.data_dir() == local / "SAINT"                     # one memory and history, one lock
+    assert mod.resolve_project_path("data/memory/saint_memory.db") == local / "SAINT" / "memory" / "saint_memory.db"
+    # Shipped assets still come from the checkout.
+    assert mod.resolve_project_path("data/wake/hey_saint.onnx") == mod.PROJECT_ROOT / "data" / "wake" / "hey_saint.onnx"
+
+
+def test_source_run_starts_the_installed_app(source_with_install, monkeypatch):
+    mod, local = source_with_install
+    import core.autostart as autostart
+    monkeypatch.setattr(autostart, "installed_exe", mod.installed_exe)
+    target, args, _ = autostart.launch_command()
+    assert target == str(local / "Programs" / "SAINT" / "SAINT.exe")
+    assert args == "--background"
+
+
+def test_source_run_without_install_keeps_project_data(monkeypatch, tmp_path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "empty"))
+    monkeypatch.delenv("SAINT_DATA_DIR", raising=False)
+    mod = importlib.reload(paths)
+    try:
+        assert mod.installed_exe() is None
+        assert mod.data_dir() == mod.PROJECT_ROOT / "data"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(paths)
