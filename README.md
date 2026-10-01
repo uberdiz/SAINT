@@ -890,7 +890,7 @@ The common ones work in the languages above too ("manda este prompt al PC de Gia
 
 ### The iPhone app
 
-The iPhone app (SwiftUI) is the companion project **SAINT Mobile**: always listening for "SAINT", the same language layer, reminders, Spotify, and control of this PC from the phone. It dials *out* to this PC, so nothing on the phone listens for connections. Its `docs/IPHONE_SETUP.md` explains how to get it onto a phone, including from Windows without a Mac.
+The iPhone app (SwiftUI) is in [`mobile/`](mobile/README.md): always listening for "SAINT", the same language layer, reminders, Spotify, and control of this PC from the phone. It dials *out* to this PC, so nothing on the phone listens for connections. [`mobile/docs/IPHONE_SETUP.md`](mobile/docs/IPHONE_SETUP.md) explains how to get it onto a phone, including from Windows without a Mac.
 
 ---
 

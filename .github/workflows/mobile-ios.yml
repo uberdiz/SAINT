@@ -1,0 +1,81 @@
+# Builds the SAINT iPhone app (mobile/ios) on GitHub's macOS machines (iOS apps can only be compiled on a Mac),
+# runs the SaintCore tests, and attaches an UNSIGNED .ipa that you sign and install from Windows with Sideloadly
+# or AltStore (they use your own Apple ID). See mobile/docs/IPHONE_SETUP.md.
+#
+# Compiler and test errors are also written as annotations on the run, so they can be read without downloading logs.
+name: iOS app
+
+on:
+  push:
+    paths: ["mobile/ios/**", ".github/workflows/mobile-ios.yml"]
+  pull_request:
+    paths: ["mobile/ios/**", ".github/workflows/mobile-ios.yml"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: mobile/ios
+
+jobs:
+  test:
+    name: SaintCore tests (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Versions
+        run: swift --version && xcodebuild -version
+      - name: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log | tail -n 80
+      - name: Report problems
+        if: failure()
+        run: |
+          grep -E "error:|failed|Fatal error|Crash" test.log | sed -E 's#/Users/runner/work/[^/]+/[^/]+/mobile/ios/##' | head -n 150 > problems.txt || true
+          MSG=$(python3 -c "import sys,urllib.parse; t=open('problems.txt').read()[:60000]; print(t.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))")
+          echo "::error title=SaintCore test problems::${MSG}"
+
+  ipa:
+    name: Build unsigned .ipa
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate the Xcode project
+        run: xcodegen generate
+      - name: Build (no code signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SaintMobile.xcodeproj \
+            -scheme SaintMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | tail -n 60
+      - name: Report compiler errors
+        if: failure()
+        run: |
+          grep -E "error:|fatal error:" build.log | sed -E 's#/Users/runner/work/[^/]+/[^/]+/mobile/ios/##' | awk '!seen[$0]++' | head -n 150 > problems.txt || true
+          MSG=$(python3 -c "t=open('problems.txt').read()[:60000]; print(t.replace('%','%25').replace('\r','%0D').replace('\n','%0A'))")
+          echo "::error title=Swift compiler errors::${MSG}"
+      - name: Package the .ipa
+        run: |
+          APP=$(find build/Build/Products -maxdepth 3 -name "*.app" | head -n 1)
+          echo "app: $APP"
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry SaintMobile-unsigned.ipa Payload
+          ls -lh SaintMobile-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SaintMobile-unsigned-ipa
+          path: mobile/ios/SaintMobile-unsigned.ipa
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: build-log
+          path: mobile/ios/build.log

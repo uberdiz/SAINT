@@ -1,0 +1,549 @@
+{
+ "commands": [
+  {
+   "said": "pon música de Bad Bunny",
+   "lang": "es",
+   "english": "play Bad Bunny"
+  },
+  {
+   "said": "Pon la canción Tití Me Preguntó",
+   "lang": "es",
+   "english": "play Tití Me Preguntó"
+  },
+  {
+   "said": "Hey SAINT, pon algo de jazz",
+   "lang": "es",
+   "english": "play some jazz"
+  },
+  {
+   "said": "reproduce mi playlist de gimnasio",
+   "lang": "es",
+   "english": "play my gimnasio playlist"
+  },
+  {
+   "said": "pon el álbum Un Verano Sin Ti de Bad Bunny",
+   "lang": "es",
+   "english": "play the album Un Verano Sin Ti de Bad Bunny"
+  },
+  {
+   "said": "pon algo parecido a Daft Punk",
+   "lang": "es",
+   "english": "play something like Daft Punk"
+  },
+  {
+   "said": "pausa",
+   "lang": "es",
+   "english": "pause"
+  },
+  {
+   "said": "pausa la música por favor",
+   "lang": "es",
+   "english": "pause"
+  },
+  {
+   "said": "continúa",
+   "lang": "es",
+   "english": "resume"
+  },
+  {
+   "said": "siguiente canción",
+   "lang": "es",
+   "english": "skip"
+  },
+  {
+   "said": "salta esta",
+   "lang": "es",
+   "english": "skip"
+  },
+  {
+   "said": "vuelve a la anterior",
+   "lang": "es",
+   "english": "go back"
+  },
+  {
+   "said": "sube el volumen",
+   "lang": "es",
+   "english": "turn it up"
+  },
+  {
+   "said": "baja el volumen",
+   "lang": "es",
+   "english": "turn it down"
+  },
+  {
+   "said": "pon el volumen al 30 por ciento",
+   "lang": "es",
+   "english": "set the volume to 30"
+  },
+  {
+   "said": "¿qué está sonando?",
+   "lang": "es",
+   "english": "what am I listening to"
+  },
+  {
+   "said": "¿qué hora es?",
+   "lang": "es",
+   "english": "what time is it"
+  },
+  {
+   "said": "¿qué día es hoy?",
+   "lang": "es",
+   "english": "what's the date"
+  },
+  {
+   "said": "gracias",
+   "lang": "es",
+   "english": "thank you"
+  },
+  {
+   "said": "para",
+   "lang": "es",
+   "english": "stop"
+  },
+  {
+   "said": "modo silencio por 30 minutos",
+   "lang": "es",
+   "english": "be quiet for 30 minutes"
+  },
+  {
+   "said": "recuérdame llamar a mamá a las 5 de la tarde",
+   "lang": "es",
+   "english": "remind me at 5 pm to llamar a mamá"
+  },
+  {
+   "said": "recuérdame a las cinco y media sacar la basura",
+   "lang": "es",
+   "english": "remind me at 5:30 to sacar la basura"
+  },
+  {
+   "said": "recuérdame mañana a las 9 de la mañana comprar leche",
+   "lang": "es",
+   "english": "remind me tomorrow at 9 am to comprar leche"
+  },
+  {
+   "said": "recuérdame en 10 minutos apagar el horno",
+   "lang": "es",
+   "english": "remind me in 10 minutes to apagar el horno"
+  },
+  {
+   "said": "recuérdame todos los días a las 8 tomar vitaminas",
+   "lang": "es",
+   "english": "remind me every day at 8 to tomar vitaminas"
+  },
+  {
+   "said": "recuérdame los lunes a las 7 hacer ejercicio",
+   "lang": "es",
+   "english": "remind me every monday at 7 to hacer ejercicio"
+  },
+  {
+   "said": "recuérdame llamar al dentista",
+   "lang": "es",
+   "english": "remind me to llamar al dentista"
+  },
+  {
+   "said": "pon un temporizador de 10 minutos",
+   "lang": "es",
+   "english": "set a timer for 10 minutes"
+  },
+  {
+   "said": "pon un temporizador de media hora",
+   "lang": "es",
+   "english": "set a timer for half an hour"
+  },
+  {
+   "said": "¿qué recordatorios tengo?",
+   "lang": "es",
+   "english": "what reminders do I have"
+  },
+  {
+   "said": "cancela el recordatorio de mamá",
+   "lang": "es",
+   "english": "cancel the mamá reminder"
+  },
+  {
+   "said": "mi color favorito es el azul",
+   "lang": "es",
+   "english": "my favorite color is azul"
+  },
+  {
+   "said": "¿qué sabes de mí?",
+   "lang": "es",
+   "english": "what do you know about me"
+  },
+  {
+   "said": "recuerda que mi hermana se llama Mía",
+   "lang": "es",
+   "english": "remember that mi hermana se llama Mía"
+  },
+  {
+   "said": "llámame Gian",
+   "lang": "es",
+   "english": "call me Gian"
+  },
+  {
+   "said": "abre mi navegador",
+   "lang": "es",
+   "english": "open browser"
+  },
+  {
+   "said": "abre Discord",
+   "lang": "es",
+   "english": "open Discord"
+  },
+  {
+   "said": "cierra esta ventana",
+   "lang": "es",
+   "english": "close this window"
+  },
+  {
+   "said": "cierra Spotify",
+   "lang": "es",
+   "english": "close Spotify"
+  },
+  {
+   "said": "busca gatos graciosos en youtube",
+   "lang": "es",
+   "english": "search youtube for gatos graciosos"
+  },
+  {
+   "said": "toma una captura de pantalla",
+   "lang": "es",
+   "english": "take a screenshot"
+  },
+  {
+   "said": "bloquea mi pc",
+   "lang": "es",
+   "english": "lock my pc"
+  },
+  {
+   "said": "silencia mi micrófono",
+   "lang": "es",
+   "english": "mute my mic"
+  },
+  {
+   "said": "manda este prompt al PC de Gian en Claude: resume mis notas de hoy",
+   "lang": "es",
+   "english": "send this prompt to Gian's pc on Claude: resume mis notas de hoy"
+  },
+  {
+   "said": "pon some jazz",
+   "lang": "es",
+   "mixed": true,
+   "english": "play some jazz",
+   "prefer": [
+    "es"
+   ]
+  },
+  {
+   "said": "play la canción de Bad Bunny",
+   "lang": "es",
+   "mixed": true,
+   "english": "play Bad Bunny"
+  },
+  {
+   "said": "recuérdame to call mom at 5",
+   "lang": "es",
+   "mixed": true,
+   "english": "remind me to call mom at 5",
+   "prefer": [
+    "es"
+   ]
+  },
+  {
+   "said": "abre Chrome y busca recetas",
+   "lang": "es",
+   "english": "open Chrome y busca recetas",
+   "mixed": false
+  },
+  {
+   "said": "tiens, mets de la musique de Stromae",
+   "lang": "fr",
+   "english": "play Stromae"
+  },
+  {
+   "said": "mets en pause",
+   "lang": "fr",
+   "english": "pause"
+  },
+  {
+   "said": "monte le son",
+   "lang": "fr",
+   "english": "turn it up"
+  },
+  {
+   "said": "quelle heure est-il ?",
+   "lang": "fr",
+   "english": "what time is it"
+  },
+  {
+   "said": "rappelle-moi d'appeler maman à 17h30",
+   "lang": "fr",
+   "english": "remind me at 17:30 to appeler maman"
+  },
+  {
+   "said": "ouvre mon navigateur",
+   "lang": "fr",
+   "english": "open browser"
+  },
+  {
+   "said": "toca Anitta",
+   "lang": [
+    "es",
+    "pt"
+   ],
+   "english": "play Anitta"
+  },
+  {
+   "said": "que horas são",
+   "lang": "pt",
+   "english": "what time is it"
+  },
+  {
+   "said": "me lembra de ligar para a mamãe às 5 da tarde",
+   "lang": "pt",
+   "english": "remind me at 5 pm to ligar para a mamãe"
+  },
+  {
+   "said": "aumenta o volume",
+   "lang": "pt",
+   "english": "turn it up"
+  },
+  {
+   "said": "spiel Rammstein",
+   "lang": "de",
+   "english": "play Rammstein"
+  },
+  {
+   "said": "wie spät ist es",
+   "lang": "de",
+   "english": "what time is it"
+  },
+  {
+   "said": "mach lauter",
+   "lang": "de",
+   "english": "turn it up"
+  },
+  {
+   "said": "erinnere mich um 17 Uhr an den Anruf",
+   "lang": "de",
+   "english": "remind me at 17 to den Anruf"
+  },
+  {
+   "said": "metti Laura Pausini",
+   "lang": "it",
+   "english": "play Laura Pausini"
+  },
+  {
+   "said": "che ore sono",
+   "lang": "it",
+   "english": "what time is it"
+  },
+  {
+   "said": "ricordami di chiamare mamma alle 5 del pomeriggio",
+   "lang": "it",
+   "english": "remind me at 5 pm to chiamare mamma"
+  },
+  {
+   "said": "alza il volume",
+   "lang": "it",
+   "english": "turn it up"
+  },
+  {
+   "said": "sí",
+   "lang": "es",
+   "english": "yes"
+  },
+  {
+   "said": "vale, hazlo",
+   "lang": "es",
+   "english": "yes"
+  },
+  {
+   "said": "no",
+   "lang": [
+    "es",
+    "pt",
+    "it",
+    "en"
+   ],
+   "english": "no"
+  },
+  {
+   "said": "oui",
+   "lang": "fr",
+   "english": "yes"
+  },
+  {
+   "said": "não",
+   "lang": "pt",
+   "english": "no"
+  },
+  {
+   "said": "ja",
+   "lang": "de",
+   "english": "yes"
+  }
+ ],
+ "english_unchanged": [
+  "play Blinding Lights by The Weeknd",
+  "what time is it",
+  "remind me at 5 pm to call mom",
+  "skip",
+  "open Discord",
+  "set a timer for 10 minutes",
+  "what am I listening to",
+  "turn the volume down",
+  "pause the music"
+ ],
+ "replies": [
+  {
+   "en": "Paused.",
+   "lang": "es",
+   "out": "En pausa."
+  },
+  {
+   "en": "Playing Tití Me Preguntó by Bad Bunny.",
+   "lang": "es",
+   "out": "Reproduciendo Tití Me Preguntó de Bad Bunny."
+  },
+  {
+   "en": "Skipped. Now playing Ojitos Lindos.",
+   "lang": "es",
+   "out": "Saltada. Ahora suena Ojitos Lindos."
+  },
+  {
+   "en": "Volume 30%.",
+   "lang": "es",
+   "out": "Volumen al 30%."
+  },
+  {
+   "en": "It's 3:45 PM.",
+   "lang": "es",
+   "out": "Son las 3:45 PM."
+  },
+  {
+   "en": "It's Tuesday, September 30.",
+   "lang": "es",
+   "out": "Hoy es martes, 30 de septiembre."
+  },
+  {
+   "en": "Okay — reminder set for today at 5:00 PM: Llamar a mamá.",
+   "lang": "es",
+   "out": "Vale, recordatorio para hoy a las 5:00 PM: Llamar a mamá."
+  },
+  {
+   "en": "Okay — timer set for today at 4:10 PM: Timer finished.",
+   "lang": "es",
+   "out": "Vale, temporizador para hoy a las 4:10 PM: Timer finished."
+  },
+  {
+   "en": "Got it — I'll remember that your favorite food is pizza.",
+   "lang": "es",
+   "out": "Entendido: tu comida favorito es pizza."
+  },
+  {
+   "en": "Spotify isn't connected.",
+   "lang": "es",
+   "out": "Spotify no está conectado."
+  },
+  {
+   "en": "Okay. Paused.",
+   "lang": "es",
+   "out": "Vale. En pausa."
+  },
+  {
+   "en": "Paused.",
+   "lang": "fr",
+   "out": "En pause."
+  },
+  {
+   "en": "Paused.",
+   "lang": "pt",
+   "out": "Pausado."
+  },
+  {
+   "en": "Paused.",
+   "lang": "de",
+   "out": "Pausiert."
+  },
+  {
+   "en": "Paused.",
+   "lang": "it",
+   "out": "In pausa."
+  },
+  {
+   "en": "Paused.",
+   "lang": "en",
+   "out": "Paused."
+  }
+ ],
+ "detect": [
+  {
+   "text": "what time is it",
+   "primary": "en",
+   "mixed": false
+  },
+  {
+   "text": "play Blinding Lights by The Weeknd",
+   "primary": "en",
+   "mixed": false
+  },
+  {
+   "text": "pon música de Bad Bunny",
+   "primary": "es",
+   "mixed": false
+  },
+  {
+   "text": "¿qué hora es?",
+   "primary": "es",
+   "mixed": false
+  },
+  {
+   "text": "hola",
+   "primary": "es",
+   "mixed": false
+  },
+  {
+   "text": "recuérdame to call mom at 5",
+   "primary": "en",
+   "mixed": true,
+   "secondary": "es"
+  },
+  {
+   "text": "play la canción de Bad Bunny",
+   "primary": "es",
+   "mixed": true,
+   "secondary": "en"
+  },
+  {
+   "text": "tiens, mets de la musique",
+   "primary": "fr",
+   "mixed": false
+  },
+  {
+   "text": "que horas são",
+   "primary": "pt",
+   "mixed": false
+  },
+  {
+   "text": "wie spät ist es",
+   "primary": "de",
+   "mixed": false
+  },
+  {
+   "text": "che ore sono",
+   "primary": "it",
+   "mixed": false
+  },
+  {
+   "text": "今日の天気は？",
+   "primary": "ja",
+   "mixed": false
+  },
+  {
+   "text": "какая сегодня погода",
+   "primary": "ru",
+   "mixed": false
+  }
+ ]
+}

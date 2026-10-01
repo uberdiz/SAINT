@@ -1,0 +1,85 @@
+import Foundation
+
+/// Finding "SAINT" in a live transcript, like "Hey Siri" but with our own word.
+///
+/// Speech recognisers write what they think they heard, and "SAINT" is an ordinary word in some languages and a
+/// near-miss in others (sein, seint, saint). So the match is a list of spellings, per language, plus whatever
+/// the user adds. Only the text *after* the wake word is the command.
+public enum WakeWord {
+    public static let base: Set<String> = ["saint", "saints", "saynt", "sainte", "seint", "seynt", "sain", "sant"]
+    /// Spellings the recogniser tends to produce for "saint" in other languages' models.
+    public static let perLanguage: [String: Set<String>] = [
+        "es": ["sein", "seinte", "seint"],
+        "pt": ["seint", "sein", "seinti"],
+        "de": ["seint", "sehnt"],
+        "it": ["seint", "sein"],
+    ]
+
+    public struct Match: Equatable {
+        public var command: String          // what was said after the wake word ("" if nothing yet)
+        public var wakeEnd: Int             // UTF-16 offset in the transcript just past the wake word
+    }
+
+    private static let tokens = Rx(#"[\p{L}\p{M}]+(?:['’][\p{L}\p{M}]+)?"#, caseInsensitive: false)!
+    private static let edge = CharacterSet(charactersIn: " \t\r\n.,;:!?¿¡-—–\"“”'’")
+
+    public static func variants(languages: [String] = [], extra: [String] = []) -> Set<String> {
+        var all = base
+        for code in languages { all.formUnion(perLanguage[code] ?? []) }
+        for word in extra { all.insert(fold(word.trimmed)) }
+        return all
+    }
+
+    /// Words that may come before the wake word without it being part of a sentence: "hey SAINT", "ok SAINT".
+    public static let fillers: Set<String> = ["hey", "hi", "hello", "ok", "okay", "yo", "oye", "hola", "ey", "eh", "ola", "ei",
+                                              "salut", "ciao", "hallo", "um", "uh", "so", "and", "y", "e"]
+
+    /// The first wake word in ``transcript`` and the command after it.
+    ///
+    /// The word only counts when it starts what was said (possibly after a "hey"), or when ``pauseBefore`` says
+    /// there was a pause before it — so "play Saint Louis Blues" or "my friend Saint called" don't wake anything.
+    /// ``pauseBefore`` is given the index of the word in the transcript (0 = first).
+    public static func find(in transcript: String, variants: Set<String>? = nil,
+                            pauseBefore: ((Int) -> Bool)? = nil) -> Match? {
+        let accepted = variants ?? WakeWord.base
+        let ns = transcript as NSString
+        let found = tokens.regex.matches(in: transcript, options: [], range: NSRange(location: 0, length: ns.length))
+        var words: [String] = []
+        for m in found { words.append(fold(ns.substring(with: m.range).replacingOccurrences(of: "’", with: "'"))) }
+        for (i, m) in found.enumerated() where accepted.contains(words[i]) {
+            let leading = words[0..<i].allSatisfy { fillers.contains($0) }
+            if !(i == 0 || leading || (pauseBefore?(i) ?? false)) { continue }
+            let end = m.range.location + m.range.length
+            return Match(command: ns.substring(from: end).trimmingCharacters(in: edge), wakeEnd: end)
+        }
+        return nil
+    }
+
+    /// The command that follows the wake word whose end we already know, as the transcript grows.
+    public static func command(in transcript: String, after wakeEnd: Int) -> String {
+        let ns = transcript as NSString
+        if wakeEnd >= ns.length { return "" }
+        return ns.substring(from: wakeEnd).trimmingCharacters(in: edge)
+    }
+
+    /// Of several recognisers' versions of one utterance (say, an English one and a Spanish one), the one most likely
+    /// to be right: the recogniser's own confidence counts most, then whether the text is in the language the
+    /// recogniser was listening for, then length.
+    public static func best(_ candidates: [(language: String, text: String, confidence: Double)])
+        -> (language: String, text: String)? {
+        var winner: (language: String, text: String)?
+        var winnerScore = -1.0
+        for c in candidates {
+            let text = c.text.trimmed
+            if text.isEmpty { continue }
+            let det = LangDetect.detect(text, hint: c.language)
+            var score = c.confidence * 3 + Double(text.split(separator: " ").count) * 0.05
+            if det.primary == c.language { score += 1.0 }
+            if score > winnerScore {
+                winnerScore = score
+                winner = (c.language, text)
+            }
+        }
+        return winner
+    }
+}

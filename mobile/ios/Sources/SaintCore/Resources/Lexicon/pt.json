@@ -1,0 +1,646 @@
+{
+ "code": "pt",
+ "name": "Português",
+ "english": "Portuguese",
+ "locale": "pt-BR",
+ "tts_lang": "p",
+ "tts_voice": "pf_dora",
+ "chars": "ãõ",
+ "words": [
+  "a",
+  "abre",
+  "abrir",
+  "agora",
+  "ainda",
+  "alarme",
+  "album",
+  "algo",
+  "alguem",
+  "ali",
+  "amanha",
+  "ano",
+  "anterior",
+  "ao",
+  "aos",
+  "aquele",
+  "aqui",
+  "aquilo",
+  "arquivo",
+  "artista",
+  "as",
+  "ate",
+  "avisa",
+  "baixa",
+  "baixar",
+  "bem",
+  "bota",
+  "cada",
+  "cancao",
+  "celular",
+  "coloca",
+  "colocar",
+  "com",
+  "como",
+  "computador",
+  "continua",
+  "contra",
+  "cronometro",
+  "da",
+  "das",
+  "de",
+  "desde",
+  "desliga",
+  "dia",
+  "dias",
+  "diz",
+  "do",
+  "dos",
+  "durante",
+  "e",
+  "ela",
+  "elas",
+  "ele",
+  "eles",
+  "entre",
+  "envia",
+  "enviar",
+  "era",
+  "escutar",
+  "esse",
+  "esta",
+  "estao",
+  "estar",
+  "este",
+  "estou",
+  "eu",
+  "faco",
+  "favorita",
+  "favorito",
+  "faz",
+  "fecha",
+  "fechar",
+  "foi",
+  "ha",
+  "hoje",
+  "hora",
+  "horas",
+  "isso",
+  "isto",
+  "ja",
+  "janela",
+  "lembra",
+  "lembrar",
+  "lembre",
+  "lembrete",
+  "lembretes",
+  "lhe",
+  "liga",
+  "mais",
+  "mal",
+  "mas",
+  "me",
+  "melhor",
+  "menos",
+  "mensagem",
+  "mes",
+  "mesmo",
+  "meu",
+  "meus",
+  "minha",
+  "minhas",
+  "minuto",
+  "minutos",
+  "mostra",
+  "muito",
+  "musica",
+  "na",
+  "nada",
+  "nao",
+  "nas",
+  "navegador",
+  "ninguem",
+  "no",
+  "noite",
+  "nos",
+  "nossa",
+  "nosso",
+  "nunca",
+  "o",
+  "obrigada",
+  "obrigado",
+  "oi",
+  "ola",
+  "onde",
+  "ontem",
+  "os",
+  "ou",
+  "outra",
+  "outras",
+  "outro",
+  "outros",
+  "ouvir",
+  "para",
+  "parar",
+  "pasta",
+  "pausa",
+  "pior",
+  "playlist",
+  "pode",
+  "podemos",
+  "poe",
+  "por",
+  "porque",
+  "posso",
+  "pouco",
+  "procura",
+  "procurar",
+  "pula",
+  "pular",
+  "qual",
+  "quando",
+  "quanto",
+  "que",
+  "quem",
+  "quer",
+  "quero",
+  "reproduz",
+  "retoma",
+  "sao",
+  "se",
+  "seguinte",
+  "segundo",
+  "segundos",
+  "sem",
+  "semana",
+  "sempre",
+  "ser",
+  "seu",
+  "silencia",
+  "sim",
+  "sobe",
+  "sobre",
+  "sua",
+  "subir",
+  "tambem",
+  "tarde",
+  "te",
+  "tela",
+  "tem",
+  "temos",
+  "temporizador",
+  "tenho",
+  "teu",
+  "toca",
+  "tocar",
+  "toda",
+  "todas",
+  "todos",
+  "tu",
+  "tua",
+  "tudo",
+  "um",
+  "uma",
+  "umas",
+  "uns",
+  "vai",
+  "vamos",
+  "vao",
+  "voce",
+  "voces",
+  "volume",
+  "vou"
+ ],
+ "verbs": {
+  "toca": "play",
+  "coloca": "play",
+  "poe": "play",
+  "bota": "play",
+  "reproduz": "play",
+  "pausa": "pause",
+  "retoma": "resume",
+  "continua": "resume",
+  "pula": "skip",
+  "abre": "open",
+  "fecha": "close",
+  "procura": "search for",
+  "pesquisa": "search for",
+  "para": "stop",
+  "cancela": "cancel",
+  "silencia": "mute",
+  "bloqueia": "lock",
+  "lembra": "remind me",
+  "esquece": "forget",
+  "manda": "send"
+ },
+ "apps": {
+  "navegador": "browser",
+  "explorador de arquivos": "file explorer",
+  "calculadora": "calculator",
+  "configuracoes": "settings",
+  "bloco de notas": "notepad",
+  "email": "mail",
+  "camera": "camera"
+ },
+ "keys": {
+  "cor": "color",
+  "comida": "food",
+  "filme": "movie",
+  "musica": "song",
+  "banda": "band",
+  "artista": "artist",
+  "jogo": "game",
+  "idioma": "language",
+  "time": "team",
+  "esporte": "sport",
+  "livro": "book",
+  "serie": "show"
+ },
+ "units": {
+  "minuto": "minutes",
+  "minutos": "minutes",
+  "hora": "hours",
+  "horas": "hours"
+ },
+ "numbers": {
+  "um": 1,
+  "uma": 1,
+  "dois": 2,
+  "duas": 2,
+  "tres": 3,
+  "quatro": 4,
+  "cinco": 5,
+  "seis": 6,
+  "sete": 7,
+  "oito": 8,
+  "nove": 9,
+  "dez": 10,
+  "onze": 11,
+  "doze": 12,
+  "quinze": 15,
+  "vinte": 20,
+  "trinta": 30
+ },
+ "clock": {},
+ "time_rules": [
+  [
+   "\\bda manha\\b",
+   "am"
+  ],
+  [
+   "\\bda tarde\\b",
+   "pm"
+  ],
+  [
+   "\\bda noite\\b",
+   "pm"
+  ],
+  [
+   "\\besta manha\\b",
+   "this morning"
+  ],
+  [
+   "\\besta tarde\\b",
+   "this afternoon"
+  ],
+  [
+   "\\b(?:esta noite|hoje a noite)\\b",
+   "tonight"
+  ],
+  [
+   "\\b(?:as|a|para as|para a)\\s+(\\d{1,2})(?:\\s*(?:h|horas?))?\\s+e\\s+meia\\b",
+   "at \\1:30"
+  ],
+  [
+   "\\b(?:as|a|para as|para a)\\s+(\\d{1,2}):(\\d{2})\\b",
+   "at \\1:\\2"
+  ],
+  [
+   "\\b(?:as|a|para as|para a)\\s+(\\d{1,2})(?:\\s*(?:h|horas?))?\\b",
+   "at \\1"
+  ],
+  [
+   "\\b(?:todo dia|todos os dias)\\b",
+   "every day"
+  ],
+  [
+   "\\b(?:todas as manhas|toda manha)\\b",
+   "every morning"
+  ],
+  [
+   "\\b(?:todas as noites|toda noite)\\b",
+   "every night"
+  ],
+  [
+   "\\b(?:todas as tardes|toda tarde)\\b",
+   "every afternoon"
+  ],
+  [
+   "\\bdaqui a\\b",
+   "in"
+  ],
+  [
+   "\\bem\\s+(?=\\d|meia)",
+   "in "
+  ],
+  [
+   "\\bmeia hora\\b",
+   "half an hour"
+  ],
+  [
+   "\\bsegundos?\\b",
+   "seconds"
+  ],
+  [
+   "\\bminutos?\\b",
+   "minutes"
+  ],
+  [
+   "\\bhoras?\\b",
+   "hours"
+  ],
+  [
+   "\\bdias?\\b",
+   "days"
+  ],
+  [
+   "\\bsemanas?\\b",
+   "weeks"
+  ],
+  [
+   "\\bamanha\\b",
+   "tomorrow"
+  ],
+  [
+   "\\bhoje\\b",
+   "today"
+  ]
+ ],
+ "commands": [
+  [
+   "^(?:pausa|pausar|pausa a musica|para a musica|pausa a cancao)$",
+   "pause"
+  ],
+  [
+   "^(?:retoma|retomar|continua|continuar|segue|volta a tocar)$",
+   "resume"
+  ],
+  [
+   "^(?:proxima|proxima musica|proxima cancao|pula|pular|pula essa|pula a musica|passa|passa a musica|troca de musica)$",
+   "skip"
+  ],
+  [
+   "^(?:anterior|musica anterior|volta|voltar|volta a anterior|a anterior)$",
+   "go back"
+  ],
+  [
+   "^(?:aumenta|aumenta o volume|sobe o volume|mais alto|mais forte|mais volume)$",
+   "turn it up"
+  ],
+  [
+   "^(?:abaixa|abaixa o volume|diminui o volume|mais baixo|menos volume)$",
+   "turn it down"
+  ],
+  [
+   "^(?:coloca|poe|bota|ajusta|muda)\\s+(?:o\\s+)?volume\\s+(?:em|para|a)\\s+(?P<n>\\d+)\\s*(?:%|por cento)?$",
+   "set the volume to {n}"
+  ],
+  [
+   "^(?:o que esta tocando|que musica e essa|qual e essa musica|que musica esta tocando)$",
+   "what am I listening to"
+  ],
+  [
+   "^(?:que horas sao|que hora e|me diz as horas|as horas)$",
+   "what time is it"
+  ],
+  [
+   "^(?:que dia e hoje|qual e a data|que data e hoje|a data)$",
+   "what's the date"
+  ],
+  [
+   "^(?:obrigado|obrigada|muito obrigado|muito obrigada|valeu)$",
+   "thank you"
+  ],
+  [
+   "^(?:para|parar|cancela|cancelar|silencio|cala a boca|chega|esquece|deixa pra la)$",
+   "stop"
+  ],
+  [
+   "^(?:coloca|poe|bota|cria|programa)\\s+um\\s+(?:temporizador|cronometro|timer)\\s+(?:de|para)\\s+(?P<t>.+)$",
+   "set a timer for {t:time}"
+  ],
+  [
+   "^(?:lembra-me|lembra me|me lembra|me lembre|lembre-me|me avisa|crie um lembrete|cria um lembrete|adiciona um lembrete)\\s+(?P<w>(?:(?:as|a|para as|para a)\\s+(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?::\\d{2})?(?:\\s*h(?:oras?)?)?(?:\\s+e\\s+(?:meia|\\d{1,2}))?(?:\\s+da (?:manha|tarde|noite))?|(?:em|daqui a)\\s+(?:(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)|meia)\\s+(?:minutos?|horas?|segundos?|dias?)|(?:amanha|hoje)(?:\\s+(?:as|a|para as|para a)\\s+(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?::\\d{2})?(?:\\s*h(?:oras?)?)?(?:\\s+e\\s+(?:meia|\\d{1,2}))?(?:\\s+da (?:manha|tarde|noite))?)?|hoje a noite|esta (?:noite|tarde|manha)|(?:todo dia|todos os dias|todas as (?:manhas|noites|tardes)|toda (?:manha|noite|tarde)|toda semana)(?:\\s+(?:as|a|para as|para a)\\s+(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?::\\d{2})?(?:\\s*h(?:oras?)?)?(?:\\s+e\\s+(?:meia|\\d{1,2}))?(?:\\s+da (?:manha|tarde|noite))?)?))\\s+(?:de\\s+|que\\s+|para\\s+)?(?P<m>.+)$",
+   "remind me {w:time} to {m}"
+  ],
+  [
+   "^(?:lembra-me|lembra me|me lembra|me lembre|lembre-me|me avisa|crie um lembrete|cria um lembrete|adiciona um lembrete)\\s+(?:de\\s+|que\\s+|para\\s+)?(?P<m>.+?)\\s+(?P<w>(?:(?:as|a|para as|para a)\\s+(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?::\\d{2})?(?:\\s*h(?:oras?)?)?(?:\\s+e\\s+(?:meia|\\d{1,2}))?(?:\\s+da (?:manha|tarde|noite))?|(?:em|daqui a)\\s+(?:(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)|meia)\\s+(?:minutos?|horas?|segundos?|dias?)|(?:amanha|hoje)(?:\\s+(?:as|a|para as|para a)\\s+(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?::\\d{2})?(?:\\s*h(?:oras?)?)?(?:\\s+e\\s+(?:meia|\\d{1,2}))?(?:\\s+da (?:manha|tarde|noite))?)?|hoje a noite|esta (?:noite|tarde|manha)|(?:todo dia|todos os dias|todas as (?:manhas|noites|tardes)|toda (?:manha|noite|tarde)|toda semana)(?:\\s+(?:as|a|para as|para a)\\s+(?:\\d{1,2}|uma?|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)(?::\\d{2})?(?:\\s*h(?:oras?)?)?(?:\\s+e\\s+(?:meia|\\d{1,2}))?(?:\\s+da (?:manha|tarde|noite))?)?))$",
+   "remind me {w:time} to {m}"
+  ],
+  [
+   "^(?:lembra-me|lembra me|me lembra|me lembre|lembre-me|me avisa|crie um lembrete|cria um lembrete|adiciona um lembrete)\\s+(?:de\\s+|que\\s+|para\\s+)?(?P<m>.+)$",
+   "remind me to {m}"
+  ],
+  [
+   "^(?:quais sao meus lembretes|meus lembretes|que lembretes eu tenho)$",
+   "what reminders do I have"
+  ],
+  [
+   "^(?:lembra|lembre|lembrar|guarda|anota)\\s+(?:que\\s+)?(?P<x>.+)$",
+   "remember that {x}"
+  ],
+  [
+   "^(?:me chama de|me chame de|meu nome e|eu me chamo)\\s+(?P<n>\\w[\\w' -]{0,30})$",
+   "call me {n}"
+  ],
+  [
+   "^(?:o que voce sabe sobre mim|o que sabes sobre mim)$",
+   "what do you know about me"
+  ],
+  [
+   "^(?:fecha|fechar)\\s+(?:esta|essa|a)\\s+janela$",
+   "close this window"
+  ],
+  [
+   "^(?:fecha|fechar)\\s+(?:(?:o|a|meu|minha)\\s+)?(?P<a>.+)$",
+   "close {a:app}"
+  ],
+  [
+   "^(?:procura|procurar|pesquisa|pesquisar)\\s+(?P<q>.+?)\\s+(?:no|na)\\s+(?P<s>youtube|google|amazon|wikipedia|reddit|github)$",
+   "search {s} for {q}"
+  ],
+  [
+   "^(?:procura|procurar|pesquisa|pesquisar)\\s+(?P<q>.+)$",
+   "search Google for {q}"
+  ],
+  [
+   "^(?:abre|abrir|inicia|iniciar|executa|executar)\\s+(?:(?:o|a|meu|minha|um|uma)\\s+)?(?P<a>.+)$",
+   "open {a:app}"
+  ],
+  [
+   "^(?:toca|tocar|coloca|colocar|poe|bota|reproduz|reproduzir|play|quero ouvir|quero escutar|ouvir|escutar)\\s+(?:(?:a|o|uma|um)\\s+)?(?:(?:musica|cancao|album|som)\\s+(?:de\\s+|do\\s+|da\\s+)?)?(?P<q>.+)$",
+   "play {q}"
+  ],
+  [
+   "^(?:tira|faz|captura)\\s+(?:uma\\s+)?(?:captura de tela|print|screenshot)$",
+   "take a screenshot"
+  ],
+  [
+   "^(?:bloqueia|bloquear)\\s+(?:meu\\s+|o\\s+)?(?:pc|computador|tela)$",
+   "lock my pc"
+  ],
+  [
+   "^(?:silencia|muta|desliga)\\s+(?:meu\\s+|o\\s+)?(?:microfone|mic)$",
+   "mute my mic"
+  ],
+  [
+   "^(?:manda|envia|enviar|mandar)\\s+(?:este|esse|o seguinte|um)\\s+(?:prompt|mensagem|texto)\\s+(?:para|pro|pra)\\s+(?:o\\s+)?(?:pc|computador)\\s+(?:do|da|de)\\s+(?P<who>.+?)\\s+(?:no|na|em|com)\\s+(?P<app>claude|chatgpt|gemini|copilot|perplexity|grok)\\s*[:,]?\\s*(?P<p>.+)$",
+   "send this prompt to {who}'s pc on {app}: {p}"
+  ],
+  [
+   "^(?:sim|claro|pode|pode ser|com certeza|beleza|ok|isso|faz isso)$",
+   "yes"
+  ],
+  [
+   "^(?:nao|agora nao|de jeito nenhum|nao obrigado)$",
+   "no"
+  ]
+ ],
+ "phrasebook": [
+  [
+   "Okay\\.",
+   "Certo."
+  ],
+  [
+   "You're welcome\\.",
+   "De nada."
+  ],
+  [
+   "Paused\\.",
+   "Pausado."
+  ],
+  [
+   "Resuming\\.",
+   "Retomando."
+  ],
+  [
+   "Skipped\\.",
+   "Pulada."
+  ],
+  [
+   "Skipped\\. Now playing (?P<t>.+?)\\.",
+   "Pulada. Agora tocando {t}."
+  ],
+  [
+   "Going back\\.",
+   "Voltando."
+  ],
+  [
+   "Volume (?P<n>\\d+)%\\.",
+   "Volume em {n}%."
+  ],
+  [
+   "Playing (?P<a>.+) by (?P<b>.+)\\.",
+   "Tocando {a} de {b}."
+  ],
+  [
+   "Playing (?P<a>.+)\\.",
+   "Tocando {a}."
+  ],
+  [
+   "Spotify isn't playing anything right now\\.",
+   "O Spotify não está tocando nada agora."
+  ],
+  [
+   "Spotify isn't connected\\.?",
+   "O Spotify não está conectado."
+  ],
+  [
+   "It's (?P<t>\\d{1,2}:\\d{2} [AP]M)\\.",
+   "São {t}."
+  ],
+  [
+   "Got it — I'll remember that your favorite (?P<k>.+) is (?P<v>.+)\\.",
+   "Anotado: seu {k:noun} favorito é {v}."
+  ],
+  [
+   "Got it — I'll remember that (?P<x>.+)\\.",
+   "Anotado, vou lembrar que {x}."
+  ],
+  [
+   "Okay — reminder set for (?P<w>.+?): (?P<m>.+?)\\.",
+   "Certo, lembrete para {w}: {m}."
+  ],
+  [
+   "Okay — timer set for (?P<w>.+?): (?P<m>.+?)\\.",
+   "Certo, temporizador para {w}: {m}."
+  ],
+  [
+   "When should I remind you to (?P<m>.+)\\?",
+   "Quando devo te lembrar de {m}?"
+  ],
+  [
+   "You don't have any active reminders or automations\\.",
+   "Você não tem lembretes ativos."
+  ],
+  [
+   "I don't know how to do that yet\\.",
+   "Ainda não sei fazer isso."
+  ],
+  [
+   "Done\\.",
+   "Pronto."
+  ],
+  [
+   "Opened (?P<a>.+)\\.",
+   "{a} aberto."
+  ],
+  [
+   "Closed (?P<a>.+)\\.",
+   "{a} fechado."
+  ]
+ ],
+ "weekdays": [
+  "segunda-feira",
+  "terça-feira",
+  "quarta-feira",
+  "quinta-feira",
+  "sexta-feira",
+  "sábado",
+  "domingo"
+ ],
+ "months": [
+  "janeiro",
+  "fevereiro",
+  "março",
+  "abril",
+  "maio",
+  "junho",
+  "julho",
+  "agosto",
+  "setembro",
+  "outubro",
+  "novembro",
+  "dezembro"
+ ],
+ "when_rules": [
+  [
+   "\\btoday\\b",
+   "hoje"
+  ],
+  [
+   "\\btomorrow\\b",
+   "amanhã"
+  ],
+  [
+   "\\bevery day\\b",
+   "todo dia"
+  ],
+  [
+   "\\bat (\\d{1,2}:\\d{2} [AP]M)\\b",
+   "às \\1"
+  ]
+ ],
+ "filler": "^(?:entao|bom|olha|ei|ne|tipo|vamos la)[,.\\s]+",
+ "polite_tail": "\\s+(?:por favor|pfv|obrigado|obrigada)[.!?]*$",
+ "wake_prefix": "^\\s*(?:ola|oi|ei|ey|hey)\\s+saint\\b[\\s,.!:;-]*"
+}
