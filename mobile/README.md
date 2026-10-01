@@ -52,15 +52,16 @@ page — is in the rest of this repository. The phone and the PC share their lan
 
 ## Honest status
 
-This was written without a Swift compiler or a Mac to hand, so **the iOS app has never been compiled or run.**
+It builds, and its tests pass on a macOS runner (Xcode 16, run 36861798812 on the `ios-app` branch): the whole of
+SaintCore compiles, its test suite is green, and the SwiftUI app compiles into an unsigned `.ipa`. It has **not been run on a phone
+yet** — that is the next step, and the first launch will likely show things only a device reveals (permissions, audio routing,
+layout).
 
-- *Tested:* the desktop (Python) side — about 220 new tests: the Noise handshakes (checked byte-for-byte against an independent
-  implementation), pairing, sync, files, permissions, approvals, collaborator automations, the language layer and the voice commands.
-  Shared known-answer vectors from that side are in `ios/Tests/SaintCoreTests/Resources`.
-- *Written, not yet run:* all Swift. SaintCore has a test suite (crypto and Noise vectors, language and time cases, the router,
-  stores and sync between two simulated devices, and the link against a stand-in PC in memory) built to run on the first
-  `swift test` / CI run; the SwiftUI app has no automated tests.
-  Expect a first round of compiler errors and a few wrong assumptions — the workflow's `build-log` artifact is how to find them.
+- *Tested:* the desktop (Python) side, about 220 tests (the Noise handshakes are checked byte for byte against an independent
+  implementation). The shared vectors and cases from that side run in SaintCore's tests too: crypto and Noise known answers, the
+  language and time cases, the router, stores, sync between two simulated devices, and the link against a stand-in PC in memory.
+- *Not covered by any automated test:* the SwiftUI screens, the microphone / speech recogniser / wake-word engine, text-to-speech,
+  Spotify, notifications, Bonjour discovery, QR scanning — all of which need a real device.
 - *Known limits of iOS, not bugs:* Siri's own wake phrase can't be changed (SAINT's word works inside SAINT); background listening is
   best-effort; the phone dials out and never listens; Spotify playback control needs Premium and a developer client ID.
 
