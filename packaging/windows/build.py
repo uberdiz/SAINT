@@ -107,16 +107,98 @@ def bundle_models(stt: str):
         print(f"bundled {repo} @ {commit[:8]}")
 
 
+
+def venv_python() -> Path:
+    return ROOT / ".venv" / "Scripts" / "python.exe"
+
+
+def run_checked(cmd, *, cwd=ROOT, env=None):
+    print("+", " ".join(str(x) for x in cmd), flush=True)
+    subprocess.run(cmd, check=True, cwd=str(cwd), env=env)
+
+
+def ensure_build_environment():
+    """Make build.py self-contained: create/repair .venv and install build dependencies."""
+    target = venv_python()
+
+    if Path(sys.executable).resolve() != target.resolve():
+        if not target.exists():
+            print("Creating SAINT .venv for the Windows release build...", flush=True)
+            run_checked([sys.executable, "-m", "venv", str(ROOT / ".venv")])
+
+        print("Installing/repairing SAINT dependencies...", flush=True)
+        py = str(target)
+
+        # Install the CUDA PyTorch wheel first on NVIDIA systems. This keeps the
+        # normal requirements install from replacing it with a CPU-only wheel.
+        if shutil.which("nvidia-smi"):
+            run_checked([
+                py, "-m", "pip", "install", "--upgrade",
+                "--index-url", "https://download.pytorch.org/whl/cu128",
+                "torch", "torchaudio",
+            ])
+
+        run_checked([py, "-m", "pip", "install", "--upgrade", "-r", str(ROOT / "requirements.txt")])
+
+        print("Re-launching build.py inside .venv...", flush=True)
+        run_checked([py, str(Path(__file__).resolve()), *sys.argv[1:]])
+        raise SystemExit(0)
+
+    checks = ["PIL", "PyInstaller", "requests", "PySide6"]
+    missing = []
+    for name in checks:
+        try:
+            __import__(name)
+        except ImportError:
+            missing.append(name)
+
+    if missing:
+        print("Missing build dependencies:", ", ".join(missing), flush=True)
+        run_checked([sys.executable, "-m", "pip", "install", "--upgrade", "-r", str(ROOT / "requirements.txt")])
+
+
 def find_iscc() -> Path:
     for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles(x86)", ""),
                  os.environ.get("ProgramFiles", "")):
-        p = Path(base) / ("Programs" if base == os.environ.get("LOCALAPPDATA") else "") / "Inno Setup 6" / "ISCC.exe"
-        if p.exists():
-            return p
+        if not base:
+            continue
+        candidates = [
+            Path(base) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+            Path(base) / "Inno Setup 6" / "ISCC.exe",
+        ]
+        for p in candidates:
+            if p.exists():
+                return p
     found = shutil.which("ISCC")
     if found:
         return Path(found)
-    raise FileNotFoundError("Inno Setup 6 (ISCC.exe) isn't installed — winget install JRSoftware.InnoSetup")
+
+    # Make a normal build.py checkout self-contained on Windows when winget is available.
+    winget = shutil.which("winget")
+    if winget:
+        print("Inno Setup 6 not found; installing it with winget...", flush=True)
+        run_checked([
+            winget, "install", "--id", "JRSoftware.InnoSetup", "-e",
+            "--accept-source-agreements", "--accept-package-agreements",
+        ])
+        for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles(x86)", ""),
+                     os.environ.get("ProgramFiles", "")):
+            if not base:
+                continue
+            for p in (
+                Path(base) / "Programs" / "Inno Setup 6" / "ISCC.exe",
+                Path(base) / "Inno Setup 6" / "ISCC.exe",
+            ):
+                if p.exists():
+                    return p
+        found = shutil.which("ISCC")
+        if found:
+            return Path(found)
+
+    raise FileNotFoundError(
+        "Inno Setup 6 (ISCC.exe) isn't installed and winget was unavailable. "
+        "Install Inno Setup 6, then run build.py again."
+    )
 
 
 def installer():
@@ -128,6 +210,7 @@ def installer():
 
 
 def main():
+    ensure_build_environment()
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-installer", action="store_true")
     ap.add_argument("--no-models", action="store_true")
