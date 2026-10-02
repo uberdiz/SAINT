@@ -1,9 +1,11 @@
 # SAINT — Python 3.12+ (developed and tested on Python 3.14, Windows 11)
 #
-# PyTorch: Kokoro TTS runs on PyTorch. For GPU speech output install the CUDA
-# build FIRST (RTX 50-series / Blackwell needs CUDA 12.8+ wheels), e.g.
-#   pip install --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
-# then install the rest with:  pip install -r requirements.txt
+# PyTorch: install the correct CUDA build FIRST on NVIDIA systems (RTX 50-series /
+# Blackwell needs CUDA 12.8+ wheels). setup.bat handles this automatically.
+#
+# All normal runtime and Windows release-build dependencies are listed here so a
+# fresh checkout can be prepared with:
+#   python -m pip install -r requirements.txt
 
 # UI / core
 PySide6>=6.6.0
@@ -45,6 +47,9 @@ keyring>=25.0.0
 segno>=1.6.0                 # the pairing QR code on the Devices page (pure Python)
 zeroconf>=0.130.0            # optional: your devices find each other by name (mDNS); IP:port works without it
 cryptography>=42.0.0         # optional: faster encryption for file transfers (SAINT has a pure-Python fallback)
+
+# Windows release / packaging
+PyInstaller>=6.0.0
 
 # Tests
 pytest>=8.0.0
