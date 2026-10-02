@@ -11,7 +11,12 @@ ROOT = Path(SPECPATH).resolve().parents[1]
 WORK = Path(os.environ.get("SAINT_BUILD_WORK", ROOT / "build" / "windows" / "work"))
 
 # SAINT's own packages: tools and modules are registered by name at runtime.
-hidden = collect_submodules("core") + collect_submodules("modules") + collect_submodules("ui")
+hidden = (
+    collect_submodules("core")
+    + collect_submodules("modules")
+    + collect_submodules("ui")
+    + collect_submodules("PySide6")
+)
 # Libraries that load parts of themselves lazily. The voice is Kokoro on onnxruntime (kokoro_onnx), so
 # PyTorch and CUDA (2+ GB) aren't shipped; misaki + spaCy still turn text into phonemes.
 for pkg in ("kokoro_onnx", "misaki", "faster_whisper", "ctranslate2", "onnxruntime", "sounddevice", "pycaw", "comtypes",
