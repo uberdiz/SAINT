@@ -1,19 +1,23 @@
 @echo off
 REM SAINT - Windows setup
 REM ======================
-REM Creates .venv, installs dependencies (CUDA PyTorch when an NVIDIA GPU is
-REM present), pulls a tool-capable Ollama model and runs the test-suite.
+REM Creates/repairs .venv, installs all runtime + packaging dependencies,
+REM installs the correct PyTorch build for NVIDIA when available, verifies
+REM critical imports, checks Ollama, and runs the test suite.
 
-setlocal
+setlocal EnableExtensions
+cd /d "%~dp0"
+
 echo.
 echo SAINT setup
 echo ===========
 echo.
 
-echo [1/6] Checking Python...
+echo [1/7] Checking Python...
 python --version >nul 2>&1
 if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: Python is not installed or not on PATH. Install Python 3.12+ from https://www.python.org/
+    echo ERROR: Python is not installed or not on PATH.
+    echo Install Python 3.12+ from https://www.python.org/
     pause
     exit /b 1
 )
@@ -24,41 +28,85 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b 1
 )
 
-echo [2/6] Creating virtual environment...
-if not exist ".venv" python -m venv .venv
-call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip >nul
-
-echo [3/6] Installing PyTorch...
-nvidia-smi >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    echo NVIDIA GPU found - installing CUDA 12.8 PyTorch ^(required for RTX 50-series^)
-    pip install --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
-) else (
-    echo No NVIDIA GPU found - installing CPU PyTorch ^(speech output will run on the CPU^)
-    pip install torch torchaudio
+echo [2/7] Creating or repairing virtual environment...
+if not exist ".venv\Scripts\python.exe" (
+    python -m venv .venv
+    if %ERRORLEVEL% NEQ 0 (
+        echo ERROR: failed to create .venv.
+        pause
+        exit /b 1
+    )
 )
 
-echo [4/6] Installing SAINT dependencies...
-pip install -r requirements.txt
+set "PY=.venv\Scripts\python.exe"
+
+"%PY%" -m pip install --upgrade pip setuptools wheel
 if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: dependency installation failed.
+    echo ERROR: failed to update pip/setuptools/wheel.
     pause
     exit /b 1
 )
 
-echo [5/6] Checking Ollama...
-ollama --version >nul 2>&1
-if %ERRORLEVEL% NEQ 0 (
-    echo WARNING: Ollama is not installed. Install it from https://ollama.com/ and run:
-    echo     ollama pull llama3.1
+echo [3/7] Installing PyTorch...
+nvidia-smi >nul 2>&1
+if %ERRORLEVEL% EQU 0 (
+    echo NVIDIA GPU found - installing CUDA 12.8 PyTorch.
+    "%PY%" -m pip install --upgrade --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
 ) else (
-    echo Pulling llama3.1 ^(supports tool calling^)...
-    ollama pull llama3.1
+    echo No NVIDIA GPU found - installing CPU PyTorch.
+    "%PY%" -m pip install --upgrade torch torchaudio
+)
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: PyTorch installation failed.
+    pause
+    exit /b 1
 )
 
-echo [6/6] Running tests...
-python -m pytest -q
+echo [4/7] Installing all SAINT dependencies...
+"%PY%" -m pip install --upgrade -r requirements.txt
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: dependency installation failed.
+    echo The environment was not marked as ready.
+    pause
+    exit /b 1
+)
+
+echo Installing Windows release/build dependencies...
+"%PY%" -m pip install --upgrade "PyInstaller>=6.0" "Pillow>=10.0.0"
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: packaging dependency installation failed.
+    pause
+    exit /b 1
+)
+
+echo [5/7] Verifying critical imports...
+"%PY%" -c "import requests, PySide6, PIL, psutil, numpy, sounddevice, soundfile, onnxruntime, faster_whisper, win32com, uiautomation, keyring, cryptography, zeroconf, segno; print('Core dependencies: OK')"
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: one or more required Python packages are missing.
+    echo Run setup.bat again to repair the environment.
+    pause
+    exit /b 1
+)
+
+"%PY%" -c "import PyInstaller; print('PyInstaller:', PyInstaller.__version__)"
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: PyInstaller is missing.
+    pause
+    exit /b 1
+)
+
+echo [6/7] Checking Ollama...
+ollama --version >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    echo WARNING: Ollama is not installed.
+    echo Install it from https://ollama.com/
+    echo Then run: ollama pull llama3.1
+) else (
+    echo Ollama detected.
+)
+
+echo [7/7] Running tests...
+"%PY%" -m pytest -q
 if %ERRORLEVEL% NEQ 0 (
     echo WARNING: some tests failed - see the output above.
 ) else (
@@ -66,6 +114,14 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo.
-echo Setup complete. Start SAINT with:  run.bat   ^(or: .venv\Scripts\python app.py^)
+echo ============================================================
+echo Setup complete.
+echo.
+echo Start from source:
+echo   run.bat
+echo.
+echo Build the Windows EXE + installer:
+echo   "%PY%" packaging\windows\build.py
+echo ============================================================
 echo.
 pause
