@@ -521,3 +521,39 @@ def test_this_pcs_history_lesson_answers_and_journal_sync(tmp_path, monkeypatch)
     assert appended and appended[0]["source"] == "remote" and appended[0]["device"] == "Desk"
     # coming back to the PC it came from, its own entry is ignored
     assert a_log.apply_batch([(next(iter(snap)), snap[next(iter(snap))])]) == [] and not a_log._load()
+
+
+def test_typing_only_the_code_finds_the_pc_with_the_window_open(service, monkeypatch):
+    """2026-10-02: the 26-character code plus an address was too much for pairing two PCs. Now the other
+    PC's beacon says its window is open, and the 8-character code alone is enough."""
+    from modules.link.node import LinkNode
+    d = tempfile.mkdtemp()
+    other_ident = Identity(os.path.join(d, "identity.json"))
+    other_ident.set_name("Other PC")
+    other = LinkNode(other_ident, PeerStore(os.path.join(d, "peers.json")))
+    port = other.start("127.0.0.1", 0)
+    try:
+        offer = other.pairing.create("own")
+
+        class FakeDiscovery:
+            probed = 0
+
+            def probe(self):
+                self.probed += 1
+
+            def nearby(self, pairing_only=False):
+                return [{"id": other_ident.device_id, "host": "127.0.0.1", "port": port, "pairing": "own",
+                         "name": "Other PC", "at": time.time()}]
+        service._discovery = FakeDiscovery()
+        service.node.start("127.0.0.1", 0)
+        monkeypatch.setattr("modules.link.service.tailscale_status", lambda max_age=60.0: {})
+        peer = service.pair(offer.code.lower().replace("-", " "))
+        assert peer.name == "Other PC" and peer.role == "own" and service._discovery.probed == 1
+        # a wrong code is reported plainly
+        other.pairing.create("own")
+        with pytest.raises(LinkError) as e:
+            service.pair("ABCD-EFGH")
+        assert "didn't work" in str(e.value)
+    finally:
+        service._discovery = None
+        other.stop()
