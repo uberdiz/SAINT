@@ -44,6 +44,18 @@ final class WakeWordTests: XCTestCase {
         XCTAssertEqual(found?.command, "play jazz")
     }
 
+    func testHowTheRecogniserMisspellsSAINTStillWakes() {
+        XCTAssertEqual(WakeWord.find(in: "St. play some jazz")?.command, "play some jazz")
+        XCTAssertEqual(WakeWord.find(in: "Hey St, what time is it")?.command, "what time is it")
+        XCTAssertEqual(WakeWord.find(in: "Sane, pause")?.command, "pause")
+        XCTAssertEqual(WakeWord.find(in: "Hey sent turn it up")?.command, "turn it up")
+        // …but only where a wake word is expected
+        XCTAssertNil(WakeWord.find(in: "sent it to you yesterday"))
+        XCTAssertNil(WakeWord.find(in: "that's the 1st one"))
+        XCTAssertNil(WakeWord.find(in: "I think he is sane honestly", pauseBefore: { $0 == 4 }))
+        XCTAssertNil(WakeWord.find(in: "St. Louis is lovely"))
+    }
+
     func testCustomWakeWords() {
         let custom = WakeWord.variants(extra: ["Jarvis"])
         XCTAssertEqual(WakeWord.find(in: "Jarvis open Spotify", variants: custom)?.command, "open Spotify")

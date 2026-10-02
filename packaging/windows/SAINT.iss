@@ -56,9 +56,15 @@ Name: "{userdesktop}\SAINT"; Filename: "{app}\SAINT.exe"; WorkingDir: "{app}"; T
 Name: "{userstartup}\SAINT"; Filename: "{app}\SAINT.exe"; Parameters: "--background"; WorkingDir: "{app}"; Tasks: startup
 
 [Run]
+; SAINT Link (phone / other PCs): allow its port from the local network and Tailscale (100.64.0.0/10) only.
+; Without this a dismissed firewall prompt, or a Wi-Fi Windows calls "public", silently blocks pairing.
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""SAINT Link"""; Flags: runhidden; Check: IsAdminInstallMode
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""SAINT Link"" dir=in action=allow protocol=TCP localport=8765 remoteip=localsubnet,100.64.0.0/10 profile=any"; Flags: runhidden; Check: IsAdminInstallMode
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""SAINT Link"" dir=in action=allow protocol=UDP localport=8766 remoteip=localsubnet profile=any"; Flags: runhidden; Check: IsAdminInstallMode
 Filename: "{app}\SAINT.exe"; Description: "Start SAINT now"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""SAINT Link"""; Flags: runhidden; RunOnceId: "RemoveSAINTLinkFirewall"; Check: IsAdminInstallMode
 Filename: "{cmd}"; Parameters: "/C taskkill /IM SAINT.exe /F"; Flags: runhidden; RunOnceId: "StopSAINT"
 
 [UninstallDelete]

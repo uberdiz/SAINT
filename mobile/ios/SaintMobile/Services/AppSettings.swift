@@ -65,7 +65,7 @@ final class AppSettings: ObservableObject {
         endpointSeconds = d.object(forKey: "endpointSeconds") == nil ? 1.2 : d.double(forKey: "endpointSeconds")
         spotifyClientID = d.string(forKey: "spotifyClientID") ?? ""
         useClaude = bool("useClaude", false)
-        claudeModel = d.string(forKey: "claudeModel") ?? "claude-haiku-4-5-20251001"
+        claudeModel = d.string(forKey: "claudeModel") ?? "claude-sonnet-5-5"
         onboarded = bool("onboarded", false)
         useHeadsetMic = bool("useHeadsetMic", false)
         snoozeMinutes = d.object(forKey: "snoozeMinutes") == nil ? 10 : max(1, d.integer(forKey: "snoozeMinutes"))

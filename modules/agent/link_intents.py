@@ -208,6 +208,16 @@ def parse_link(text: str) -> Optional[Intent]:
             return Intent("link.remote_command", run_remote_cmd, "link")
 
     # ---- pairing and housekeeping -----------------------------------------------------------
+    m = _JOIN_CODE.match(t)
+    if m:
+        from modules.link.identity import looks_like_code
+        raw_code = m.group("code")
+        code = re.sub(r"[\s-]", "", raw_code)
+        # "pair my laptop" is 8 letters too: a code is said with "code", or has a dash, a digit,
+        # or is spelled out letter by letter.
+        spelled = sum(1 for w in raw_code.split() if len(w) == 1) >= 4
+        if looks_like_code(code) and (m.group("kw") or "-" in raw_code or re.search(r"\d", raw_code) or spelled):
+            return Intent("link.join", lambda: _join_code(code), "link")
     if _PAIR_OWN.match(t):
         return Intent("link.pair", lambda: _open_pairing("own"), "link")
     m = _PAIR_FRIEND.match(t)
@@ -236,6 +246,18 @@ def parse_link(text: str) -> Optional[Intent]:
     return None
 
 
+_JOIN_CODE = re.compile(r"^(?:pair|join|connect|link)(?:\s+(?:with|to|using))?(?P<kw>\s+(?:the\s+)?(?:pairing\s+)?code)?"
+                        r"\s+(?P<code>[a-z2-7](?:[\s-]?[a-z2-7018]){7})$", re.I)
+
+
+def _join_code(code: str) -> Reply:
+    try:
+        peer = _link().pair(code)
+    except Exception as e:
+        return _error_reply(e)
+    return Reply(f"Paired with {peer.name}.")
+
+
 # ---------------------------------------------------------------------- #
 def _open_pairing(role: str) -> Reply:
     try:
@@ -248,9 +270,9 @@ def _open_pairing(role: str) -> Reply:
     except Exception:
         pass
     who = "your device" if role == "own" else "your friend"
-    return Reply(f"Pairing is open for five minutes. On {who}, open SAINT and scan the code on the Devices page, "
-                 f"or type the address {info['addresses'][0] if info['addresses'] else 'shown there'}:{info['port']} "
-                 f"and the code.")
+    spelled = " ".join(info["code"].replace("-", ""))
+    return Reply(f"Pairing is open for five minutes. The code is {spelled}. On {who}, open SAINT and scan the "
+                 f"QR code on the Devices page — or on another PC just type that code into Join.")
 
 
 def _list_devices() -> Reply:

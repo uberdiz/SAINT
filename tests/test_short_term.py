@@ -379,3 +379,31 @@ def test_no_client_id_never_touches_the_saved_login(monkeypatch):
     a._token = SpotifyToken("old", "refresh", time.time() - 10)
     monkeypatch.setattr(requests, "post", lambda *a_, **k: pytest.fail("must not refresh"))
     assert a.get_access_token() is None
+
+
+def test_a_text_file_in_the_folder_just_made(tmp_path, monkeypatch):
+    """2026-10-02: "make a new folder in downloads" worked, then "add a text file in that folder" went to the
+    model, which answered with os.system(...) code and offered to learn; the taught steps were then dropped."""
+    dl = tmp_path / "Downloads"
+    dl.mkdir()
+    monkeypatch.setitem(config._data.setdefault("files", {}), "games_dir", str(dl))
+    route("make a new folder in my games folder").run()
+    assert (dl / "New folder").is_dir()
+    r = route("add a text file in that folder").run()
+    assert r.ok and (dl / "New folder" / "New Text Document.txt").is_file(), r.text
+    route("make a text file in that folder").run()                 # said again: a second file, never overwritten
+    assert (dl / "New folder" / "New Text Document (2).txt").is_file()
+    route("create a text file called notes in that folder").run()
+    assert (dl / "New folder" / "Notes.txt").is_file()
+
+
+def test_a_file_in_a_folder_nobody_made_asks_which():
+    r = route("add a text file in that folder").run()
+    assert not r.ok and "Which folder" in r.text
+
+
+def test_leaked_shell_commands_are_never_said():
+    from modules.agent.output import clean_reply
+    assert clean_reply("os.system('echo \"Hello World!\" > newfile.txt')", "add a text file in that folder") == ""
+    assert clean_reply("The command you're looking for is:\n\ntouch filename.txt", "make a text file") == ""
+    assert clean_reply("touch filename.txt", "write a bash script that makes a file") == "touch filename.txt"

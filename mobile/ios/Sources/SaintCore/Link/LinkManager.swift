@@ -231,52 +231,84 @@ public final class LinkManager: PCBridge {
         guard !tries.isEmpty else {
             throw LinkError.unreachable("I don't know where \(peer.name) is yet.")
         }
-        var lastError: Error = LinkError.unreachable("Couldn't reach \(peer.name).")
-        for (host, port) in tries {
-            let transport = makeTransport(host, port)
-            do {
-                let connection = try await LinkConnection.connect(transport: transport, identity: identity, peer: peer)
-                peerStore.update(peer.id) { $0.host = host; $0.port = port; $0.lastSeen = Date() }
-                attach(connection, peer: peer)
-                return connection
-            } catch {
-                transport.close()
-                if let link = error as? LinkError {
-                    switch link {
-                    case .unreachable, .closed, .timeout:
-                        lastError = link             // nothing there: try the next address
-                    default:
-                        throw link                   // reached it, but it refused us: another address won't help
+        // Every address at once: away from home the Wi-Fi address used to be waited out before Tailscale was tried,
+        // and "is my PC reachable?" gave up first — so the phone answered on its own instead of using the PC's model.
+        let (raw, host, port) = try await connectFirst(tries, name: peer.name)
+        let transport = AlreadyConnected(raw)
+        do {
+            let connection = try await LinkConnection.connect(transport: transport, identity: identity, peer: peer)
+            remember(peer.id, host: host, port: port, also: connection.remoteAddrs)
+            attach(connection, peer: peer)
+            return connection
+        } catch {
+            transport.close()
+            throw error
+        }
+    }
+
+    /// Keep where it answered, without forgetting its other addresses (the home one after a Tailscale connection).
+    private func remember(_ id: String, host: String, port: Int, also: [String]) {
+        peerStore.update(id) { p in
+            var alts = p.altHosts ?? []
+            if !p.host.isEmpty && p.host != host { alts.insert(p.host, at: 0) }
+            for a in also where !alts.contains(a) { alts.append(a) }
+            alts = alts.filter { $0 != host }
+            p.altHosts = alts.isEmpty ? nil : Array(alts.prefix(10))
+            p.host = host
+            p.port = port
+            p.lastSeen = Date()
+        }
+    }
+
+    /// TCP-connect to every address at once and keep the first that answers; the others are closed.
+    func connectFirst(_ tries: [(host: String, port: Int)], name: String) async throws -> (ByteTransport, String, Int) {
+        let box = TransportBox()
+        var lastError: Error? = nil
+        let picked: Int? = try await withThrowingTaskGroup(of: (Int, Error?).self) { group -> Int? in
+            for (i, c) in tries.enumerated() {
+                let t = makeTransport(c.host, c.port)
+                box.put(i, t)
+                group.addTask {
+                    do {
+                        try await t.connect()
+                        return (i, nil)
+                    } catch {
+                        return (i, error)
                     }
-                } else {
-                    lastError = LinkError.unreachable("Couldn't reach \(peer.name) at \(host):\(port).")
                 }
             }
+            var winner: Int? = nil
+            for try await result in group {
+                let i = result.0
+                if result.1 == nil && winner == nil {
+                    winner = i
+                    box.closeAll(except: i)              // the slower attempts end now instead of timing out
+                } else {
+                    if winner == nil, let failure = result.1 { lastError = failure }
+                    box.close(i)
+                }
+            }
+            return winner
         }
-        throw lastError
+        guard let i = picked, let t = box.get(i) else {
+            if tries.count == 1, let only = lastError { throw only }
+            throw LinkError.unreachable("Couldn't reach \(name) at \(tries.map { "\($0.host):\($0.port)" }.joined(separator: ", ")).")
+        }
+        return (t, tries[i].host, tries[i].port)
     }
 
     @discardableResult
     public func pair(link: Pairing.PairLink) async throws -> LinkPeer {
-        var lastError: Error = LinkError.unreachable("Couldn't reach that PC.")
-        for host in [link.host] + link.alternates {
-            do {
-                let peer = try await pair(host: host, port: link.port, token: link.token, role: link.role)
-                let others = ([link.host] + link.alternates).filter { $0 != host }
-                peerStore.update(peer.id) { $0.altHosts = others }
-                return peerStore.get(peer.id) ?? peer
-            } catch {
-                lastError = error
-                if let link = error as? LinkError {
-                    switch link {
-                    case .unreachable, .closed, .timeout: continue
-                    default: throw error
-                    }
-                }
-                continue                             // a transport error: try the next address
-            }
+        let hosts = [link.host] + link.alternates
+        let (raw, host, _) = try await connectFirst(hosts.map { ($0, link.port) }, name: link.name.isEmpty ? "that PC" : link.name)
+        let peer = try await pair(transport: AlreadyConnected(raw), host: host, port: link.port, token: link.token, role: link.role)
+        let others = hosts.filter { $0 != host }
+        peerStore.update(peer.id) { p in
+            var alts = p.altHosts ?? []
+            for a in others where !alts.contains(a) { alts.insert(a, at: 0) }
+            p.altHosts = alts.filter { $0 != host }
         }
-        throw lastError
+        return peerStore.get(peer.id) ?? peer
     }
 
     @discardableResult
@@ -284,14 +316,37 @@ public final class LinkManager: PCBridge {
         try await pair(host: host, port: port, token: try Pairing.decodeCode(code), role: role)
     }
 
+    /// Only the code: try each SAINT found on this Wi-Fi (Bonjour) until one has that pairing window open.
+    @discardableResult
+    public func pair(code: String, nearby: [(host: String, port: Int)], role: String) async throws -> LinkPeer {
+        let token = try Pairing.decodeCode(code)
+        guard !nearby.isEmpty else {
+            throw LinkError.unreachable("I can't see a SAINT PC on this Wi-Fi. Type its address too (shown on its Devices page).")
+        }
+        var lastError: Error = LinkError.pairingFailed("That code didn't work on any SAINT nearby.")
+        for place in nearby {
+            do {
+                return try await pair(host: place.host, port: place.port, token: token, role: role)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
     @discardableResult
     public func pair(host: String, port: Int, token: Data, role: String) async throws -> LinkPeer {
-        let transport = makeTransport(host, port)
+        try await pair(transport: makeTransport(host, port), host: host, port: port, token: token, role: role)
+    }
+
+    private func pair(transport: ByteTransport, host: String, port: Int, token: Data, role: String) async throws -> LinkPeer {
         do {
             let (peer, connection) = try await LinkConnection.pair(transport: transport, identity: identity, host: host,
                                                                    port: port, token: token, role: role)
             var saved = peer
             saved.lastSeen = Date()
+            let addrs = connection.remoteAddrs.filter { $0 != host }
+            if !addrs.isEmpty { saved.altHosts = addrs }
             peerStore.save(saved)
             attach(connection, peer: saved)
             emit(.paired(saved))
@@ -344,7 +399,7 @@ public final class LinkManager: PCBridge {
     public func reachable(peerID: String) async -> Bool {
         if liveConnection(peerID) != nil { return true }
         do {
-            _ = try await withTimeout(5) { [weak self] () async throws -> LinkConnection in
+            _ = try await withTimeout(8) { [weak self] () async throws -> LinkConnection in
                 guard let self = self else { throw LinkError.closed }
                 return try await self.connect(peerID: peerID)
             }
@@ -358,7 +413,7 @@ public final class LinkManager: PCBridge {
         let connection = try await connect(peerID: peerID)
         let reply = try await connection.request("chat.ask", ["text": String(text.prefix(2000)), "lang": language], timeout: 150)
         return AskAnswer(text: (reply["text"] as? String) ?? "", expectsReply: (reply["expects_reply"] as? Bool) ?? false,
-                         language: (reply["lang"] as? String) ?? "")
+                         language: (reply["lang"] as? String) ?? "", ok: (reply["ok"] as? Bool) ?? true)
     }
 
     public func runAutomation(peerID: String, name: String, args: JSONObject) async throws -> String {
@@ -735,5 +790,48 @@ public final class LinkManager: PCBridge {
             try? connection.notify("file.cancel", ["id": tid.hex])
             throw error
         }
+    }
+}
+
+/// A transport that is already connected (it won the race in `connectFirst`): `connect()` does nothing.
+final class AlreadyConnected: ByteTransport {
+    private let inner: ByteTransport
+    init(_ inner: ByteTransport) { self.inner = inner }
+    func connect() async throws {}
+    func send(_ data: Data) async throws { try await inner.send(data) }
+    func receive() async throws -> Data { try await inner.receive() }
+    func close() { inner.close() }
+}
+
+/// The transports of one `connectFirst` race.
+final class TransportBox {
+    private var items: [Int: ByteTransport] = [:]
+    private let lock = NSLock()
+
+    func put(_ i: Int, _ t: ByteTransport) {
+        lock.lock()
+        items[i] = t
+        lock.unlock()
+    }
+
+    func get(_ i: Int) -> ByteTransport? {
+        lock.lock()
+        defer { lock.unlock() }
+        return items[i]
+    }
+
+    func close(_ i: Int) {
+        lock.lock()
+        let t = items.removeValue(forKey: i)
+        lock.unlock()
+        t?.close()
+    }
+
+    func closeAll(except keep: Int) {
+        lock.lock()
+        let others = items.filter { $0.key != keep }
+        items = items.filter { $0.key == keep }
+        lock.unlock()
+        for (_, t) in others { t.close() }
     }
 }

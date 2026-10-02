@@ -122,6 +122,15 @@ class SkillStore:
         # Learning "X means X" teaches nothing.
         return [norm(s) for s in steps] != [p]
 
+    @staticmethod
+    def pointing_word(phrase: str) -> str:
+        """The word that makes ``phrase`` mean something different each time ("that", "it"), or ""."""
+        p = norm(phrase)
+        if p.startswith(("play ", "queue ")):
+            return ""
+        m = _DEICTIC.search(p)
+        return m.group(0) if m else ""
+
     def learn(self, phrase: str, steps: List[str], how: str = "planned") -> Optional[Skill]:
         steps = [s.strip() for s in steps if s and s.strip()]
         if not self.learnable(phrase, steps):

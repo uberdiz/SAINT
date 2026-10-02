@@ -205,9 +205,9 @@ struct PairSheet: View {
                         Button { scanning = true } label: { Label("Scan the code on my PC", systemImage: "qrcode.viewfinder") }
                     }
                     Section("Or type it") {
-                        TextField("Address, e.g. 192.168.1.20:8765", text: $address)
+                        TextField(model.nearby.isEmpty ? "Address, e.g. 192.168.1.20:8765" : "Address (optional — \(model.nearby.count) SAINT nearby)", text: $address)
                             .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.numbersAndPunctuation)
-                        TextField("Pairing code (ABCD-EFGH-…)", text: $code)
+                        TextField("Pairing code (ABCD-EFGH)", text: $code)
                             .textInputAutocapitalization(.characters).autocorrectionDisabled()
                         Picker("This is", selection: $friend) {
                             Text("My own device").tag(false)
@@ -215,11 +215,12 @@ struct PairSheet: View {
                         }
                         Button { pairTyped() } label: { Text(busy ? "Pairing…" : "Pair").frame(maxWidth: .infinity) }
                             .buttonStyle(.borderedProminent)
-                            .disabled(busy || address.isEmpty || code.isEmpty)
+                            .disabled(busy || code.isEmpty || (address.isEmpty && model.nearby.isEmpty))
                     }
                     Section {
                         Text("On the PC: SAINT → Devices → “Pair a phone / device” shows a QR code and a code that works for five minutes. "
-                             + "Both devices must be on the same network (or reachable by IP, e.g. over Tailscale).")
+                             + "On the same Wi-Fi the code alone is enough. Otherwise type the PC's address too (its Tailscale 100.x address works from anywhere). "
+                             + "The code decides own device vs. friend; if you pick differently, both sides use “friend”.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                 }

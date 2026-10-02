@@ -100,10 +100,14 @@ public struct AskAnswer {
     public var text: String
     public var expectsReply: Bool
     public var language: String
-    public init(text: String, expectsReply: Bool = false, language: String = "") {
+    /// False when the PC's own language model couldn't answer (Ollama stopped, model not installed): the phone
+    /// then answers with its own model instead of reading the PC's error out.
+    public var ok: Bool
+    public init(text: String, expectsReply: Bool = false, language: String = "", ok: Bool = true) {
         self.text = text
         self.expectsReply = expectsReply
         self.language = language
+        self.ok = ok
     }
 }
 

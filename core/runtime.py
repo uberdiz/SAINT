@@ -150,6 +150,13 @@ class SaintRuntime:
         startup.run("link", "SAINT Link (phone and other PCs)", start_link,
                     enabled=bool(config.get("link.enabled", False)))
 
+        # MCP servers (Settings → MCP / data/mcp.json): their tools become SAINT tools. Connected in the
+        # background — an npx server can take a while to download the first time.
+        def start_mcp():
+            from modules.mcp.manager import mcp_manager
+            mcp_manager.start(wait=False)
+        startup.run("mcp", "MCP servers", start_mcp, enabled=bool(config.get("mcp.enabled", True)))
+
         # Game Mode: hide overlays and stop screen capture while a game runs.
         def start_game_mode():
             from core.game_mode import game_mode
@@ -246,6 +253,11 @@ class SaintRuntime:
     def _stop_link():
         from modules.link.service import get_link
         get_link().stop()
+        try:
+            from modules.mcp.manager import mcp_manager
+            mcp_manager.stop()                  # MCP server processes end with SAINT
+        except Exception:
+            pass
 
     @staticmethod
     def _stop_game_mode():

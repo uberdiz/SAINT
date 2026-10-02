@@ -11,6 +11,7 @@ the short-term working memory (modules/agent/recent.py):
     "delete the junk" / "the other old installers too"   (after a cleanup check)
     "go to my most recent download and delete it"
     "make a new folder in my games folder called The Loop"
+    "add a text file in that folder" / "make a text file called notes in downloads"
 
 Anything that removes or moves files still asks first (ALWAYS_CONFIRM).
 These fire only when the reference resolves; otherwise the other parsers
@@ -80,6 +81,23 @@ def parse_refer(text: str) -> Optional[Intent]:
     if m and (m.group("name") or m.group("parent")):
         name = m.group("name") or ""
         return _make_folder_intent(m.group("parent") or "", _original_case(text, name) if name else "")
+
+    # ---- make a file ------------------------------------------------------------------------------
+    # "add a text file in that folder" went to the model, which answered with os.system(...) code (2026-10-02).
+    m = re.match(r"^(?:make|create|add|put|new)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:(?P<kind>text|txt|blank|empty|plain|"
+                 r"notepad|markdown|md|python|json|csv|html|log)\s+)?(?:file|document|doc)"
+                 r"(?:\s+(?:in|inside|on|into|to)\s+(?P<parent>.+?))?"
+                 r"(?:\s+(?:called|named|with the name)\s+(?P<name>.+?))?"
+                 r"(?:\s+(?:in|inside|on|into)\s+(?P<parent2>.+?))?$", t)
+    if m and (m.group("kind") or m.group("parent") or m.group("parent2") or m.group("name")):
+        kind = m.group("kind") or "text"
+        if kind == "document" or (not m.group("kind") and re.search(r"\b(?:document|doc)\b", t)):
+            kind = "text"
+        name = m.group("name") or ""
+        intent = _make_file_intent(m.group("parent") or m.group("parent2") or "",
+                                   _original_case(text, name) if name else "", kind)
+        if intent is not None:
+            return intent
 
     # ---- delete -----------------------------------------------------------------------------
     m = re.match(rf"^{_DELETE}\s+(?P<ref>.+)$", t)
@@ -177,6 +195,25 @@ def _make_folder_intent(parent: str, name: str) -> Optional[Intent]:
     name = name.strip() or "New folder"
     return Intent("files.make_folder",
                   lambda: _say(call("files.make_folder", name=name, parent=parent_path), "Made it."), "files")
+
+
+def _make_file_intent(parent: str, name: str, kind: str) -> Optional[Intent]:
+    parent_path = ""
+    if parent:
+        if re.match(r"^(?:it|that|there|this|the same)\b|^(?:the )?(?:new |last )?folder(?: (?:you|i) (?:just )?"
+                    r"(?:made|created|opened))?$", parent):
+            th = recent.find(parent, {"folder"})
+            if th is None:
+                return Intent("recent.unknown", lambda: Reply(
+                    "Which folder? I haven't made or opened one in the last few minutes — say its name.", ok=False),
+                    "files")
+            parent_path = th.path
+        else:
+            parent_path = _destination(parent) or ""
+            if not parent_path:
+                return None
+    return Intent("files.make_file",
+                  lambda: _say(call("files.make_file", name=name, parent=parent_path, kind=kind), "Made it."), "files")
 
 
 def _recycle_thing(th: Thing) -> Reply:

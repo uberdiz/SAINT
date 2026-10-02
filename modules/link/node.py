@@ -32,7 +32,7 @@ from typing import Callable, Dict, List, Optional
 from modules.link import wire
 from modules.link.approvals import ApprovalQueue
 from modules.link.identity import (ALLOW, ASK, COLLABORATOR, DENY, OWN, Identity, Peer, PeerStore,
-                                   PairingManager, device_id_for, decode_code, psk_for)
+                                   PairingManager, device_id_for, decode_code, effective_role, psk_for)
 from modules.link.wire import Channel, LinkClosed, LinkError, ServerHandshake
 
 log = logging.getLogger("saint.link")
@@ -42,35 +42,121 @@ DEAD_AFTER_SEC = 50.0
 DEFAULT_PORT = 8765
 
 
+_VIRTUAL_IF = ("vethernet", "virtualbox", "vmware", "hyper-v", "wsl", "docker", "loopback", "bluetooth",
+               "vboxnet", "virbr", "br-", "veth", "zerotier", "hamachi", "npcap")
+
+
+def _default_route_ip() -> str:
+    """The address this machine uses to reach the internet (no packet is sent)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            return s.getsockname()[0]
+    except OSError:
+        return ""
+
+
+def is_tailscale(ip: str) -> bool:
+    parts = (ip or "").split(".")
+    return len(parts) == 4 and parts[0] == "100" and parts[1].isdigit() and 64 <= int(parts[1]) <= 127
+
+
 def lan_addresses() -> List[str]:
-    """This machine's IPv4 addresses a phone on the same network could use,
-    most likely first (home networks, then VPN ranges like Tailscale's)."""
+    """This machine's IPv4 addresses another device could use, most likely first: the one on the
+    default route (the real Wi-Fi/Ethernet), other home-network ones, then Tailscale (100.64/10).
+    Virtual adapters (Hyper-V, WSL, VirtualBox, Docker) are left out: their 172.x / 192.168.56.x
+    addresses can't be reached from a phone or another PC and used to be tried first."""
     found: List[str] = []
+    tailscale: List[str] = []
     try:
         import psutil
+        stats = psutil.net_if_stats()
         for name, addrs in psutil.net_if_addrs().items():
+            st = stats.get(name)
+            if st is not None and not st.isup:
+                continue
+            low = name.lower()
             for a in addrs:
-                if a.family == socket.AF_INET and not a.address.startswith(("127.", "169.254.", "0.")):
+                if a.family != socket.AF_INET or a.address.startswith(("127.", "169.254.", "0.")):
+                    continue
+                if "tailscale" in low or is_tailscale(a.address):
+                    tailscale.append(a.address)
+                elif not any(v in low for v in _VIRTUAL_IF):
                     found.append(a.address)
     except Exception:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-                s.connect(("10.255.255.255", 1))
-                found.append(s.getsockname()[0])
-        except OSError:
-            pass
+        pass
+    default = _default_route_ip()
+    if default and not default.startswith("127."):
+        (tailscale if is_tailscale(default) else found).insert(0, default)
 
     def rank(ip: str) -> int:
+        if ip == default:
+            return -1
         if ip.startswith("192.168."):
             return 0
         if ip.startswith("10."):
             return 1
         if ip.startswith("172.") and 16 <= int(ip.split(".")[1]) <= 31:
             return 2
-        if ip.startswith("100.") and 64 <= int(ip.split(".")[1]) <= 127:
-            return 3                      # Tailscale / CGNAT
         return 4
-    return sorted(dict.fromkeys(found), key=rank)
+    return list(dict.fromkeys(sorted(found, key=rank) + tailscale))
+
+
+def dial_first(hosts: List[str], port: int, timeout: float) -> tuple:
+    """TCP-connect to every address at once and keep the first that answers ("happy eyeballs").
+    A phone or PC away from home used to wait out each dead home address in turn before trying
+    Tailscale. Returns (socket, host); raises LinkError("unreachable") when none answered."""
+    hosts = [h for h in dict.fromkeys(hosts) if h]
+    if not hosts:
+        raise LinkError("I don't have an address for that device", "no_address")
+    lock = threading.Lock()
+    won: Dict[str, object] = {}
+    errors: List[str] = []
+    done = threading.Event()
+    left = [len(hosts)]
+
+    def attempt(host: str):
+        sock = None
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+        except (OSError, socket.timeout) as e:
+            with lock:
+                errors.append(f"{host}: {e}")
+        with lock:
+            left[0] -= 1
+            if sock is not None and "sock" not in won:
+                won["sock"], won["host"] = sock, host
+                sock = None
+            if "sock" in won or left[0] == 0:
+                done.set()
+        if sock is not None:                  # a slower address answered too: not needed
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    for h in hosts:
+        threading.Thread(target=attempt, args=(h,), daemon=True, name="link-dial").start()
+    done.wait(timeout + 1.0)
+    with lock:
+        sock = won.get("sock")
+        if sock is None:
+            won["sock"] = "closed"            # late successes close themselves
+            raise LinkError(f"couldn't reach it on port {port} ({'; '.join(errors) or 'no answer'})", "unreachable")
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    sock.settimeout(None)
+    return sock, won["host"]
+
+
+def _addrs_from(hello: dict) -> List[str]:
+    """The addresses a device listed about itself (only plain IPv4 / host names, at most 8)."""
+    out = []
+    for a in (hello.get("addrs") or [])[:8] if isinstance(hello.get("addrs"), list) else []:
+        a = str(a).strip()
+        if a and len(a) <= 255 and all(c.isalnum() or c in ".-_:" for c in a) and not a.startswith("127."):
+            out.append(a)
+    return out
 
 
 # ---------------------------------------------------------------------- #
@@ -252,6 +338,10 @@ class LinkNode:
         hello = self.identity.hello()
         if self.port:
             hello["port"] = self.port
+            try:
+                hello["addrs"] = lan_addresses()[:8]     # so the other side can find us on any network
+            except Exception:
+                pass
         hello.update(extra)
         return hello
 
@@ -337,6 +427,10 @@ class LinkNode:
             updates["host"] = ip
             if isinstance(hello.get("port"), int) and 0 < hello["port"] < 65536:
                 updates["port"] = hello["port"]
+        addrs = _addrs_from(hello)
+        if addrs:
+            known = self.peers.get(peer.id)
+            updates["addrs"] = list(dict.fromkeys(addrs + [a for a in (known.addrs if known else []) if a not in addrs]))[:10]
         self.peers.update(peer.id, **updates)
         threading.Thread(target=session.run, daemon=True, name=f"link-session-{peer.name}").start()
         log.info("link.connected peer=%s (%s) incoming=%s", peer.name, peer.id, incoming)
@@ -422,21 +516,26 @@ class LinkNode:
                 self.pairing.note_failure(ip, offer)
             raise
         remote_static = channel.remote_static
-        if hello.get("id") != device_id_for(remote_static) or hello.get("role") != offer.role:
+        if hello.get("id") != device_id_for(remote_static):
             self.pairing.note_failure(ip, offer)
             channel.close()
             raise LinkError("pairing details didn't match", "mismatch")
+        # The code's owner chose the role. A joiner who picked differently ("a friend's SAINT" on an
+        # own-device code) used to be refused as a wrong code; now both sides keep the stricter role.
+        role = effective_role(offer.role, str(hello.get("role") or offer.role))
+        if role != offer.role:
+            log.info("link.pair_role_lowered offer=%s joiner=%s", offer.role, hello.get("role"))
         existing = self.peers.get(hello["id"])
         peer = Peer(id=hello["id"], name=str(hello.get("name") or "Device")[:40], public_key=remote_static.hex(),
-                    role=offer.role, platform=str(hello.get("platform") or "")[:16], host=ip,
-                    port=int(hello["port"]) if isinstance(hello.get("port"), int) else 0)
+                    role=role, platform=str(hello.get("platform") or "")[:16], host=ip,
+                    port=int(hello["port"]) if isinstance(hello.get("port"), int) else 0, addrs=_addrs_from(hello))
         if existing is not None:
             peer.nicknames, peer.perms, peer.added = existing.nicknames, existing.perms, existing.added
         if offer.label:
             peer.name = offer.label[:40]
         self.peers.save(peer)
         self.pairing.consume(offer)
-        channel.send_message({"t": "pair.ok", "d": {"hello": self._hello(), "role": offer.role}})
+        channel.send_message({"t": "pair.ok", "d": {"hello": self._hello(), "role": role}})
         log.info("link.paired peer=%s role=%s", peer.name, peer.role)
         self.emit("link.paired", peer.public())
         self._adopt(peer, channel, True, ip, hello)
@@ -444,23 +543,25 @@ class LinkNode:
     # ------------------------------------------------------------------ #
     # Client side
     # ------------------------------------------------------------------ #
-    def _dial(self, host: str, port: int, timeout: float) -> socket.socket:
-        try:
-            sock = socket.create_connection((host, port), timeout=timeout)
-        except (OSError, socket.timeout) as e:
-            raise LinkError(f"couldn't reach {host}:{port} ({e})", "unreachable") from e
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-        return sock
+    def _dial(self, host, port: int, timeout: float) -> tuple:
+        """(socket, host that answered) for one address or a list tried all at once."""
+        hosts = [host] if isinstance(host, str) else list(host)
+        return dial_first(hosts, port, timeout)
+
+    def candidates(self, peer: Peer) -> List[str]:
+        hint = self.address_hints.get(peer.id)
+        return list(dict.fromkeys(([hint[0]] if hint else []) + peer.candidates()))
 
     def connect(self, peer: Peer, timeout: float = 6.0) -> Session:
         existing = self.session_for(peer.id)
         if existing is not None:
             return existing
-        host, port = self.address_hints.get(peer.id) or (peer.host, peer.port)
-        if not host or not port:
+        hint = self.address_hints.get(peer.id)
+        port = (hint[1] if hint else 0) or peer.port
+        hosts = self.candidates(peer)
+        if not hosts or not port:
             raise LinkError(f"I don't know where {peer.name} is yet", "no_address")
-        sock = self._dial(host, port, timeout)
+        sock, host = self._dial(hosts, port, timeout)
         try:
             channel, hello = wire.client_handshake(sock, self.identity.private_key, self._hello(),
                                                    remote_static=peer.key, timeout=timeout + 4)
@@ -474,10 +575,11 @@ class LinkNode:
         session = self._adopt(peer, channel, False, "", hello)
         return session or self.session_for(peer.id)
 
-    def pair(self, host: str, port: int, code: str, role: str = OWN, timeout: float = 10.0) -> Peer:
-        """Pair with the device at host:port using the code (or token bytes) it shows."""
+    def pair(self, host, port: int, code, role: str = OWN, timeout: float = 10.0) -> Peer:
+        """Pair with the device at host:port (or the first of several addresses that answers)
+        using the code (or token bytes) it shows."""
         token = code if isinstance(code, (bytes, bytearray)) else decode_code(code)
-        sock = self._dial(host, port, timeout)
+        sock, host = self._dial(host, port, timeout)
         try:
             channel, _ = wire.client_handshake(sock, self.identity.private_key, self._hello(role=role),
                                                psk=psk_for(bytes(token)), timeout=timeout)
@@ -498,10 +600,12 @@ class LinkNode:
         except LinkError:
             sock.close()
             raise
+        role = effective_role(role, str(body.get("role") or role))
         existing = self.peers.get(shello["id"])
         peer = Peer(id=shello["id"], name=str(shello.get("name") or "Device")[:40], public_key=remote_static.hex(),
                     role=role, platform=str(shello.get("platform") or "")[:16], host=host,
-                    port=int(shello["port"]) if isinstance(shello.get("port"), int) else port)
+                    port=int(shello["port"]) if isinstance(shello.get("port"), int) else port,
+                    addrs=_addrs_from(shello))
         if existing is not None:
             peer.nicknames, peer.perms, peer.added = existing.nicknames, existing.perms, existing.added
         self.peers.save(peer)
@@ -588,8 +692,8 @@ class LinkNode:
                 if not peer.auto_connect or self.session_for(peer.id) is not None:
                     self._backoff.pop(peer.id, None)
                     continue
-                host, port = self.address_hints.get(peer.id) or (peer.host, peer.port)
-                if not host or not port:
+                hint = self.address_hints.get(peer.id)
+                if not self.candidates(peer) or not ((hint[1] if hint else 0) or peer.port):
                     continue
                 nxt, delay = self._backoff.get(peer.id, (0.0, 4.0))
                 if now < nxt:
@@ -599,7 +703,9 @@ class LinkNode:
                     self._backoff.pop(peer.id, None)
                 except LinkError as e:
                     self._backoff[peer.id] = (now + delay, min(delay * 2, 300.0))
-                    log.debug("link.connect_failed peer=%s %s", peer.name, e)
+                    # The first failure in a row is worth a line in the log ("why won't my PC connect?").
+                    (log.info if delay <= 4.0 else log.debug)("link.connect_failed peer=%s tried=%s %s", peer.name,
+                                                              ",".join(self.candidates(peer)), e)
                 except Exception:
                     log.exception("link.connector_failed peer=%s", peer.name)
                     self._backoff[peer.id] = (now + delay, min(delay * 2, 300.0))

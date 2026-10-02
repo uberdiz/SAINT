@@ -150,6 +150,22 @@ _USE_IT = re.compile(r"^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|good|lo
                      r"that works|use it|use that|keep it|go with it|go with that|that'?s fine|fine|nice|"
                      r"(?:yes|ok(?:ay)?),? (?:use|keep) (?:it|that)|do it|go ahead|send it)$")
 _EMAILISH = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+|https?://\S+")
+# "write mr norton's email (jnorton@essextech.net)" / "type jnorton@x.com in the to box": the recipient's
+# address, typed — not an email to compose (2026-10-02).
+_ADDRESS = re.compile(_LEAD + r"(?:write|type|put|enter|fill in|add|paste|use)(?: in| out| down)?\s+"
+                      r"(?:(?P<who>[a-z][\w.' -]{0,40}?)(?:'s|s')\s+)?(?:(?:the |their |his |her )?(?:e-?mail|address|"
+                      r"email address)\s*)?[(\[]?\s*(?P<addr>[\w.+-]+@[\w-]+(?:\.[\w-]+)+)\s*[)\]]?"
+                      r"(?:\s+(?:in|into|to|on) (?:the )?(?P<where>.+?))?$")
+# "no, only write the email" / "no I meant click Send" / "not that, the subject box": replace the last step.
+_CORRECTION = re.compile(r"^(?:no|nope|not that|wrong|that'?s wrong|that'?s not (?:it|right))[,.!]?\s+"
+                         r"(?:i (?:meant|mean|said)\s+|instead\s+|rather\s+)?(?P<rest>\S.*)$")
+_ONLY_ADDRESS = re.compile(r"^(?:only |just )?(?:write|type|put|enter|use|do)?\s*(?:in )?(?:the |their |his |her )?"
+                           r"(?:e-?mail|address|email address)(?: address)?(?: only| part)?$")
+# "type out a summary of what SAINT is": write it with the model, then type it.
+_TYPE_DESCRIBED = re.compile(_LEAD + r"(?:type|put|enter|fill in|add)(?: in| out| up)?\s+(?P<what>.+?)"
+                             r"(?:\s+(?:in|into|to) (?:the )?(?P<where>[\w ]{1,30}?\s*(?:box|field|bar|line|body|area)))?$")
+_NOTHING = re.compile(r"^(?:no|nope|nah|nothing|none|no thanks|that'?s it|just that|nothing (?:else|special|in "
+                      r"particular)|no,? (?:that'?s|it'?s) (?:it|fine)|skip(?: it)?)$")
 _MESSAGE_WORDS = {"message", "email", "e-mail", "body", "text", "letter", "content", "contents", "draft",
                   "reply", "response", "it", "that", "this"}
 _SUBJECT_WORDS = {"subject", "subject line", "title", "heading", "headline"}
@@ -239,12 +255,14 @@ def _write_var(noun: str, used) -> str:
 
 
 def _is_who(step: Step) -> bool:
-    return step.var == "recipient" or bool(re.search(r"^who\b|\bto whom\b|\brecipient\b", step.text, re.I))
+    # "What's {recipient}'s email address?" mentions the recipient but asks for an address, not who.
+    return step.var == "recipient" or bool(re.search(r"^who\b|\bto whom\b|\brecipient\b", _VAR.sub("", step.text),
+                                                     re.I))
 
 
 def _is_about(step: Step) -> bool:
     return step.var == "topic" or bool(re.search(r"\babout\b|\btopic\b|what should (?:it|i) (?:say|write)",
-                                                 step.text, re.I))
+                                                 _VAR.sub("", step.text), re.I))
 
 
 # "write an email" / "compose a message" / "email Sam": one task however it's said.
@@ -326,6 +344,61 @@ def retire_guessed_email_skills():
 
 
 # ---------------------------------------------------------------------- #
+# Tidying a lesson before it's saved
+# ---------------------------------------------------------------------- #
+def ensure_message_asks(steps: List[Step]) -> None:
+    """An email / message lesson asks who it's to, what it's about and what it has to say — unless the
+    request already said ("write an email to Sam about the trip") — so the drafts are about *this* email."""
+    if not any(s.kind == "write" for s in steps):
+        return
+    used = {s.var for s in steps if s.var}
+    at = 0
+    if not any(s.kind == "ask" and _is_who(s) for s in steps):
+        steps.insert(at, Step("ask", "Who's it to?", "recipient" if "recipient" not in used else "recipient2"))
+    at = next((i for i, s in enumerate(steps) if s.kind == "ask" and _is_who(s)), -1) + 1
+    if not any(s.kind == "ask" and _is_about(s) for s in steps):
+        steps.insert(at, Step("ask", "What's it about?", "topic" if "topic" not in used else "topic2"))
+    at = next((i for i, s in enumerate(steps) if s.kind == "ask" and _is_about(s)), at) + 1
+    if not any(s.var.startswith("points") for s in steps):
+        steps.insert(at, Step("ask", "Anything it has to say? (or “no”)", "points"))
+
+
+def compact(steps: List[Step]) -> List[Step]:
+    """Drop what doesn't need repeating: the same step twice in a row, and switching to an app the
+    step before just opened."""
+    out: List[Step] = []
+    for s in steps:
+        if out and s.kind == out[-1].kind and s.line().lower() == out[-1].line().lower():
+            continue
+        if out and s.kind == "do" and out[-1].kind == "do" and s.text.lower().startswith("switch to ") and \
+                s.text.lower()[10:].strip() in out[-1].text.lower() and out[-1].text.lower().startswith("open "):
+            continue
+        out.append(s)
+    return out
+
+
+def describe(steps: List[Step]) -> str:
+    """The steps in plain words, for reading a lesson back."""
+    words = []
+    for s in steps:
+        if s.kind == "ask":
+            continue                                  # listed separately ("Each time I'll ask: ...")
+        if s.kind == "write":
+            words.append("write " + _VAR.sub(lambda m: "what it's " + ("about" if m.group(1).startswith("topic")
+                                                                      else m.group(1)), s.text))
+        elif s.kind == "confirm":
+            words.append("check with you")
+        elif s.kind == "you":
+            words.append("wait while you " + s.text)
+        else:
+            t = re.sub(r"\{(\w*email\w*)\}", "their address", s.text)
+            t = re.sub(r"\{(subject\w*)\}", "the subject", t)
+            t = re.sub(r"\{(message\w*)\}", "the message", t)
+            words.append(_VAR.sub(lambda m: "the " + m.group(1).replace("_", " "), t))
+    return ", then ".join(words) if words else "nothing to do on screen"
+
+
+# ---------------------------------------------------------------------- #
 # Answers kept for "ask once" questions
 # ---------------------------------------------------------------------- #
 class Answers:
@@ -353,11 +426,24 @@ class Answers:
         with self._lock:
             d = self._load()
             d[_clean(question)] = answer
-            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-            tmp = self.path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(d, f, indent=1)
-            os.replace(tmp, self.path)
+            self._write(d)
+
+    def all(self) -> Dict[str, str]:
+        with self._lock:
+            return dict(self._load())
+
+    def remove(self, question: str):
+        with self._lock:
+            d = self._load()
+            if d.pop(_clean(question), None) is not None:
+                self._write(d)
+
+    def _write(self, d: Dict[str, str]):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        tmp = self.path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, indent=1)
+        os.replace(tmp, self.path)
 
 
 answers = Answers()
@@ -536,6 +622,19 @@ class LessonManager:
         if not t.steps and classify_reply(said) is True:
             return Reply("Great — what's the first step? Where do I go for that?", expects_reply=True)
 
+        m = _CORRECTION.match(said)
+        if m and t.steps and not _CANCEL.match(m.group("rest")):
+            return self._correct(text, m.group("rest"))
+        m = _ADDRESS.match(said)
+        if m:
+            return self._teach_address(m.group("who") or "", m.group("addr"), m.group("where") or "")
+        m = _TYPE_DESCRIBED.match(said)
+        if m and not _TYPE.match(said):
+            from modules.agent.compose import describes_text
+            if describes_text(m.group("what")):
+                what = _tidy(text)[m.start("what"):m.end("what")]          # the user's own capitals
+                return self._teach_type_described(what or m.group("what"), m.group("where") or "")
+
         m = _CONFIRM.match(said)
         if m:
             act = next((g for g in m.groups() if g), "") or ""
@@ -595,6 +694,103 @@ class LessonManager:
         if follow:
             return Reply(f"{reply.text.rstrip()} {follow}", expects_reply=True)
         return Reply(f"{reply.text.rstrip()} What's next?", expects_reply=True)
+
+    # ---- corrections, addresses and written text while teaching ---------------- #
+    def _correct(self, text: str, rest: str) -> Reply:
+        """'no, only write the email': the last step was wrong — take it out and do this instead."""
+        t = self._teach
+        gone = t.steps.pop()
+        gone_text = gone.text if gone.kind == "do" else gone.line()
+        email_var = next((s.var for s in t.steps if s.kind == "ask" and s.var.endswith("email")), "")
+        if _ONLY_ADDRESS.match(rest) and email_var:
+            line = "type {" + email_var + "}"
+            if gone.kind == "do" and gone.text.startswith(line):
+                t.steps.append(gone)                    # that already was just the address
+                return Reply("Got it — just the address. What's next?", expects_reply=True)
+            t.steps.append(Step("do", line))
+            r = self._type(t.vals.get(email_var, ""))
+            return Reply(f"Okay — only the address, not “{gone_text}”. {r.text} What's next?", ok=r.ok,
+                         expects_reply=True)
+        tidy = _tidy(text)
+        replacement = tidy[len(tidy) - len(rest):] if len(rest) <= len(tidy) else rest
+        replacement = re.sub(r"^(?:only|just)\s+", "", replacement, flags=re.I)
+        reply = self._feed_teach(replacement)
+        lead = f"Okay, I took out “{gone_text}”."
+        if reply is None:
+            return Reply(f"{lead} What should I do instead?", expects_reply=True)
+        return Reply(f"{lead} {reply.text}", ok=reply.ok, expects_reply=reply.expects_reply)
+
+    def _teach_address(self, who: str, addr: str, where: str) -> Reply:
+        """Type the recipient's address, and next time ask who it's to (and their address, once per person)."""
+        t = self._teach
+        rec = next((s for s in t.steps if s.kind == "ask" and _is_who(s)), None)
+        if rec is None:
+            used = {s.var for s in t.steps if s.var}
+            rec = Step("ask", "Who's it to?", "recipient" if "recipient" not in used else _var_name("Who's it to?", used))
+            t.steps.insert(0, rec)
+        who = " ".join(w[:1].upper() + w[1:] for w in who.split()) if who and who == who.lower() else who
+        if who and not t.vals.get(rec.var):
+            t.vals[rec.var] = t.said[rec.var] = who
+        elif not t.vals.get(rec.var) and t.details.get("to"):
+            t.vals[rec.var] = t.said[rec.var] = t.details["to"]
+        em = next((s for s in t.steps if s.kind == "ask" and s.var.endswith("email")), None)
+        if em is None:
+            em = Step("ask", "What's {" + rec.var + "}'s email address?", "email", once=True)
+            t.steps.append(em)
+        t.vals[em.var] = t.said[em.var] = addr
+        if t.vals.get(rec.var):
+            answers.put(fill(em.text, t.vals), addr)        # Mr Norton's address is known from now on
+        line = "type {" + em.var + "}" + (f" into the {where}" if where else "")
+        t.steps.append(Step("do", line))
+        r = self._type(addr, where)
+        if not r.ok:
+            t.steps.pop()
+            t.last_failed = line
+            return Reply(f"{r.text} Click the To box and tell me again, or say “I'll do it”.", ok=False,
+                         expects_reply=True)
+        whose = f"{t.vals[rec.var]}'s" if t.vals.get(rec.var) else "their"
+        return Reply(f"{r.text.rstrip('.')} — {whose} address. Next time I'll ask who it's to and fill in their "
+                     f"address. What's next?", expects_reply=True)
+
+    def _teach_type_described(self, what: str, where: str) -> Reply:
+        """'type out a summary of what SAINT is': a write step (the model drafts it each time) and a type step.
+        In an email lesson, what it's about becomes the question “What's it about?”."""
+        t = self._teach
+        used = {s.var for s in t.steps if s.var}
+        message = bool(_MESSAGE_TASK.match(canon(t.task)))
+        subject = bool(re.search(r"\bsubject|title\b", where or ""))
+        if message:
+            about = next((s for s in t.steps if s.kind == "ask" and _is_about(s)), None)
+            if about is None:
+                about = Step("ask", "What's it about?", "topic" if "topic" not in used else _var_name("about", used))
+                t.steps.insert(1 if t.steps and t.steps[0].kind == "ask" else 0, about)
+            if not t.vals.get(about.var):
+                t.vals[about.var] = t.said[about.var] = t.details.get("about") or what
+            noun = (re.search(r"\b(email|message|text|reply|letter)\b", canon(t.task)) or [None, "message"])[1]
+            desc = f"a subject line for the {noun} about {{{about.var}}}" if subject else \
+                f"the {noun}'s text about {{{about.var}}}"
+            var = _write_var("subject" if subject else "message", used)
+        else:
+            desc = self._generalize(what)
+            m = re.search(r"\b(" + _CONTENT + r")\b", what, re.I)
+            var = _write_var(m.group(1) if m else "text", used)
+        step = Step("write", desc, var)
+        t.steps.append(step)
+        draft = self._draft(step, t.vals)
+        if not draft:
+            t.steps.pop()
+            return Reply(f"I couldn't write {what} — the language model didn't answer. Try again in a moment, or "
+                         f"type it yourself and say “I did it”.", ok=False, expects_reply=True)
+        t.vals[var] = draft
+        line = "type {" + var + "}" + (f" into the {where}" if where else "")
+        t.steps.append(Step("do", line))
+        r = self._type(draft, where)
+        if not r.ok:
+            t.steps.pop()
+            t.last_failed = line
+            return Reply(f"I wrote it, but {r.text[:1].lower() + r.text[1:]} Click where it should go and say “type "
+                         f"it”, or say “I'll do it”.", ok=False, expects_reply=True)
+        return Reply(f"Wrote {what} and typed it. Each time I'll write a fresh one. What's next?", expects_reply=True)
 
     def _teach_ask(self, indirect: str) -> Reply:
         t = self._teach
@@ -694,18 +890,23 @@ class LessonManager:
             return Reply("Okay — we didn't get to any steps, so there's nothing to save.")
         if t.steps[-1].kind == "confirm":
             t.steps.pop()                         # a question with nothing after it guards nothing
+        if _MESSAGE_TASK.match(canon(t.task)):
+            ensure_message_asks(t.steps)
+        t.steps = compact(t.steps)
         lines = [s.line() for s in t.steps]
         sk = skills.learn(t.task, lines, "lesson")
         if sk is None:
             return Reply(f"I couldn't save that under “{t.task}” — try a more specific name.", ok=False)
         log.info("lesson.saved task=%r steps=%r", t.task, lines)
-        asks = [_plain(s.text) for s in t.steps if s.kind == "ask"]
-        n = len(t.steps)
+        asks = [_plain(s.text) for s in t.steps if s.kind == "ask" and not s.once]
         extra = (" Each time I'll ask: " + " / ".join(asks)) if asks else ""
         if any(s.kind == "confirm" for s in t.steps):
             extra += (" — and" if asks else " I'll") + " check with you before the last step."
-        return Reply(f"Saved — {n} step{'s' if n != 1 else ''} for “{t.task}”.{extra} Next time just say "
-                     f"“{t.task}”; if a step stops working I'll ask how to do it then.")
+        return Reply(f"Saved “{t.task}”: {describe(t.steps)}.{extra} Next time just say “{t.task}” — add who it's "
+                     f"for or what it's about and I won't ask — and if a step stops working I'll ask how to do it "
+                     f"then." if _MESSAGE_TASK.match(canon(t.task)) else
+                     f"Saved “{t.task}”: {describe(t.steps)}.{extra} Next time just say “{t.task}”; if a step stops "
+                     f"working I'll ask how to do it then.")
 
     # ---- running a learned lesson ---------------------------------------- #
     def run(self, skill, text: str = "") -> Reply:
@@ -717,6 +918,8 @@ class LessonManager:
             v = self._known_answer(s, details, vals) if s.kind == "ask" else ""
             if v:
                 vals[s.var] = v
+            elif s.kind == "ask" and s.var.startswith("points") and details.get("about"):
+                vals[s.var] = ""              # "... about lunch tomorrow" said enough: don't ask what it must say
         with self._lock:
             self._teach = None
             self._run = _Run(skill, steps, vals, cancel.token())
@@ -893,6 +1096,8 @@ class LessonManager:
     def _value_for(step: Step, answer: str) -> str:
         """The answer, or what it stands for ("school" -> the school address)."""
         a = answer.lower()
+        if step.var.startswith("points") and _NOTHING.match(a.strip(" .!")):
+            return ""                                   # "anything it has to say?" — "no"
         for opt, value in step.values.items():
             if re.search(rf"\b{re.escape(opt)}\b", a):
                 return value
@@ -985,28 +1190,14 @@ class LessonManager:
 
     @staticmethod
     def _draft(step: Step, vals: Dict[str, str], change: str = "") -> str:
-        from modules.agent.llm import complete
-        what = fill(step.text, vals)
-        known = {k: v for k, v in vals.items() if k != step.var and v}
-        prompt = f"Write {what}."
-        if known:
-            prompt += "\nUse these details:\n" + "\n".join(f"- {k.replace('_', ' ')}: {v}" for k, v in known.items())
-        if change and vals.get(step.var):
-            prompt += f"\n\nThe current version is:\n{vals[step.var]}\n\nChange it like this: {change}"
-        one_line = step.var.startswith("subject")
-        system = ("You write text the user will send as their own. Output only that text — no preamble, no "
-                  "quotes, no notes, no markdown." + (" One short line." if one_line else
-                                                       " Keep it short and natural; sign off with the user's "
-                                                       "first name only if it's known."))
+        from modules.agent.compose import write
+        known = {k: v for k, v in vals.items() if k != step.var and v and k != "email"}
         try:
-            out = complete(prompt, system=system, timeout=60.0, max_tokens=60 if one_line else 500)
+            return write(fill(step.text, vals), details=known, change=change, current=vals.get(step.var, ""),
+                         one_line=step.var.startswith("subject"))
         except Exception as e:
             log.warning("lesson.draft_failed %s", e)
-            out = ""
-        out = (out or "").strip().strip('"“”')
-        if one_line:
-            out = re.sub(r"^(?:subject|title)\s*:\s*", "", out.splitlines()[0] if out else "", flags=re.I)
-        return out.strip()
+            return ""
 
 
 lessons = LessonManager()

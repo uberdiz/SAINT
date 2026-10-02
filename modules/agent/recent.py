@@ -218,6 +218,8 @@ def _from_tool(r: "Recent", name: str, args: Dict, res: Dict):
         r.note("folder", os.path.basename(res["opened"].rstrip("\\/")) or res["opened"], res["opened"], "opened")
     elif name in ("files.make_folder",) and res.get("path"):
         r.note("folder", os.path.basename(res["path"]), res["path"], "created")
+    elif name == "files.make_file" and res.get("path"):
+        r.note("file", os.path.basename(res["path"]), res["path"], "created")
     elif name == "files.rename" and res.get("path"):
         r.forget_paths([res.get("old", "")])
         r.note(_kind_for_path(res["path"]), os.path.basename(res["path"]), res["path"], "renamed")

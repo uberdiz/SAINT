@@ -430,7 +430,7 @@ def test_enable_disable_and_listening(service):
     try:
         assert service.set_enabled(True) and service.running and service.node.port > 0
         info = service.offer("own")
-        assert info["code"].count("-") == 6 and info["uri"].startswith("saint://pair?") and info["port"] == service.node.port
+        assert info["code"].count("-") == 1 and info["uri"].startswith("saint://pair?") and info["port"] == service.node.port
         assert service.status()["pairing"]["role"] == "own"
         assert service.set_enabled(False) is False and not service.running and service.pairing.current is None
     finally:
@@ -490,3 +490,34 @@ def test_reminder_message_isnt_mangled_when_the_time_words_overlap():
     rem = extract_reminder("remind me this evening to call mom", datetime(2026, 9, 30, 12, 0))
     assert rem["message"] == "Call mom" and rem["schedule"]["type"] == "once"
     assert extract_reminder("remind me on saturday morning to go running", datetime(2026, 9, 30, 12, 0))["message"] == "Go running"
+
+
+def test_this_pcs_history_lesson_answers_and_journal_sync(tmp_path, monkeypatch):
+    """2026-10-02: share logs, automations and what was learned between all your devices — the PC's own
+    History now goes out (the phone only sent its Activity before), with lesson answers and the journal."""
+    from modules.link.sync import ActionLogAdapter, AnswerAdapter, JournalAdapter, SyncEngine, Mirror
+    import modules.learning.lesson as L
+    import modules.learning.feedback as F
+    t = time.time()
+    hist = [{"ts": t - 60, "source": "voice", "user": "open spotify", "reply": "Opened Spotify.",
+             "tools": [{"tool": "desktop.open_app", "ok": True}]},
+            {"ts": t - 30, "source": "iphone", "user": "from the phone", "reply": "x", "tools": []}]
+    a_log = ActionLogAdapter(str(tmp_path / "a_log.json"), history_source=lambda: hist, own=lambda: ("aaaa1111bbbb", "Desk"))
+    b_log = ActionLogAdapter(str(tmp_path / "b_log.json"), history_source=lambda: [], own=lambda: ("cccc2222dddd", "Laptop"))
+    snap = a_log.snapshot()
+    assert len(snap) == 1 and next(iter(snap.values()))["device"] == "Desk"     # phone entries aren't re-offered
+    monkeypatch.setattr(L, "answers", L.Answers(str(tmp_path / "answers_a.json")))
+    L.answers.put("What's Mr Norton's email address?", "jnorton@essextech.net")
+    monkeypatch.setattr(F, "journal", F.Journal(str(tmp_path / "journal_a.jsonl")))
+    F.journal.add("complaint", "open my mail", did="opened Outlook")
+    a = SyncEngine("aaaa1111bbbb", [a_log, AnswerAdapter(), JournalAdapter()], Mirror(str(tmp_path / "a.db")))
+    a.scan()
+    want, offer = a.diff({"clock": 0, "items": {}, "kinds": ["actionlog", "answer"]})
+    assert {i["k"] for i in offer} == {"actionlog", "answer"}                     # no journal for a device without one
+    appended = []
+    monkeypatch.setattr("core.history.history.append", lambda rec: appended.append(rec))
+    b = SyncEngine("cccc2222dddd", [b_log], Mirror(str(tmp_path / "b.db")))
+    assert b.apply([i for i in offer if i["k"] == "actionlog"]) == 1
+    assert appended and appended[0]["source"] == "remote" and appended[0]["device"] == "Desk"
+    # coming back to the PC it came from, its own entry is ignored
+    assert a_log.apply_batch([(next(iter(snap)), snap[next(iter(snap))])]) == [] and not a_log._load()

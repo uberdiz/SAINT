@@ -75,7 +75,12 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "scope", value: SpotifyService.scopes.joined(separator: " ")),
             URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "show_dialog", value: "true"),     // always Spotify's page, so a wrong try can be redone
         ]
+        // A sign-in still open from a failed try (wrong redirect, error page) blocked the next one.
+        authSession?.cancel()
+        authSession = nil
+        let retrying = lastError != nil
         do {
             let callback: URL = try await withCheckedThrowingContinuation { continuation in
                 let session = ASWebAuthenticationSession(url: components.url!, callbackURLScheme: "saint") { url, error in
@@ -83,7 +88,8 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
                     else { continuation.resume(throwing: error ?? LinkError.closed) }
                 }
                 session.presentationContextProvider = self
-                session.prefersEphemeralWebBrowserSession = false
+                // After a failed try, start clean: no remembered Spotify page sending you back to the same error.
+                session.prefersEphemeralWebBrowserSession = retrying
                 self.authSession = session
                 session.start()
             }
@@ -99,6 +105,7 @@ final class SpotifyService: NSObject, ObservableObject, MusicService, ASWebAuthe
             }
             try await exchange(["grant_type": "authorization_code", "code": code, "redirect_uri": SpotifyService.redirectURI,
                                 "client_id": clientID, "code_verifier": verifier])
+            authSession = nil
             lastError = nil
             await loadProfile()
         } catch {

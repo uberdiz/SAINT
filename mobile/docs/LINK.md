@@ -35,9 +35,13 @@ The Noise prologue is `"SAINT-LINK/1/" + <mode byte>`, so a connection can't be 
 
 ### Handshakes
 
-- **Pairing — `Noise_XXpsk3_25519_ChaChaPoly_SHA256`.** The PC shows a one-time 128-bit code (26 base32 characters; the
-  QR code holds `saint://pair?h=<ip>&p=<port>&t=<code>&r=<own|collaborator>&n=<name>`). The pre-shared key is
-  `HKDF-SHA256(code, salt "SAINT-LINK-PAIRING", info "psk")`, mixed in at the third message. A wrong code fails the
+- **Pairing — `Noise_XXpsk3_25519_ChaChaPoly_SHA256`.** The PC shows a one-time code: since desktop 2.3 a short one, 5 bytes
+  = 8 base32 characters (`ABCD-EFGH`), whose pre-shared key is `PBKDF2-HMAC-SHA256(code, salt "SAINT-LINK-PAIRING-SHORT",
+  20000 rounds, 32 bytes)`; the original 16-byte / 26-character codes use `HKDF-SHA256(code, salt "SAINT-LINK-PAIRING",
+  info "psk")`. The QR code holds `saint://pair?h=<ip>&p=<port>&t=<code>&r=<own|collaborator>&n=<name>&a=<other addresses>`.
+  The PSK is mixed in at the third message. The role is the code owner's; a joiner that asked for a different one gets
+  "collaborator" on both sides (`pair.ok` carries the agreed role) rather than a failure. Hellos list `addrs` (the
+  device's Wi-Fi and Tailscale addresses), and both sides dial all known addresses at once. A wrong code fails the
   handshake without revealing anything usable. The window lasts five minutes, works once, and closes after ten failures. Each side
   learns the other's static public key and records it. The server then sends `pair.ok`.
 - **Reconnect — `Noise_IK_25519_ChaChaPoly_SHA256`.** The initiator already knows the responder's static key (from pairing), so
@@ -90,6 +94,11 @@ act on one machine.
 | `scene` | 8-hex | name, steps[], phrase *(the schedule stays on its PC)* |
 | `reminder` | 8-hex | title, message, schedule, status, last_run |
 | `settings` | `language` | preferred[], mixed_mode, reply_in_user_language |
+| `actionlog` | entry id (PC: `<device id[:8]>-<ms>`) | ts, request, action, kind, status, source (phone/pc), device |
+| `answer` *(PCs)* | 16-hex | q, a — what a lesson's "ask once" questions were answered |
+| `journal` *(PCs)* | 16-hex | the learning journal's entries |
+
+Manifests carry `"kinds"`: the kinds that device stores. Items of other kinds are not offered to it.
 
 ## Permissions
 

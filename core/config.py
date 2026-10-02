@@ -470,10 +470,17 @@ DEFAULT_CONFIG = {
         "announce": True,                 # speak "Gian sent you a file" and friends
         "approval_timeout_sec": 60,       # how long a collaborator's request waits for your yes
         "max_file_mb": 1024,
+        "manage_firewall": True,          # ask once to let SAINT Link's port through Windows Firewall
         "max_prompt_chars": 2000,
         "inbox_dir": "",                  # blank = data/link/inbox
         "prompt_targets": {},             # extra apps for "send this prompt to ... on <app>"
         "shared_scenes": [],              # scenes collaborators may run
+    },
+    "mcp": {
+        "enabled": True,                  # connect the MCP servers set up in Settings → MCP / data/mcp.json
+        "servers": {},                    # {"name": {"command": ..., "args": [...]} or {"url": ..., "headers": {...}}}
+        "connect_timeout_sec": 60,
+        "call_timeout_sec": 120,
     },
 
     # ------------------------------------------------------------------

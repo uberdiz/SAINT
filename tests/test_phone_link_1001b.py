@@ -28,7 +28,8 @@ def test_phone_activity_lands_in_history_once(tmp_path, monkeypatch):
     from core import history as history_mod
     added = []
     monkeypatch.setattr(history_mod.history, "append", lambda rec: added.append(rec))
-    a = ActionLogAdapter(path=str(tmp_path / "phone_activity.json"))
+    # this PC's own History is offered too (2026-10-02); none here, so only the phone's entries count
+    a = ActionLogAdapter(path=str(tmp_path / "phone_activity.json"), history_source=lambda: [])
     entry = {"ts": time.time(), "request": "play blinding lights", "action": "Playing Blinding Lights.",
              "kind": "music", "status": "done", "source": "phone", "device": "iPhone"}
     assert a.apply_batch([("abc", entry)]) == []

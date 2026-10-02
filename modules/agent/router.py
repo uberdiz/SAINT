@@ -1291,6 +1291,20 @@ def parse_desktop(text: str) -> Optional[Intent]:
             return Reply(res.error or f"I couldn't switch to {name}.", ok=False)
         return Intent("desktop.focus_window", run_focus, "desktop")
 
+    # type out / write a *description* of text ("a summary of what SAINT is"): write it, then type it.
+    # It used to type the words "a summary of what SAINT is" (2026-10-02).
+    m = re.match(r"^(?:type|write|enter|put|draft|compose)\s+(?:out\s+|up\s+|down\s+)?(?P<what>.+?)"
+                 r"(?:\s+(?:in|into|in the|into the)\s+(?:the\s+)?(?P<box>[\w ]{1,30}?\s+(?:box|field|bar)))?"
+                 r"(?P<enter>\s+and (?:press|hit) enter)?$", raw, re.I)
+    if m and t.split()[0] in ("type", "write", "enter", "put", "draft", "compose"):
+        from modules.agent.compose import describes_text
+        from modules.learning.lesson import canon, _MESSAGE_TASK
+        what = m.group("what").strip().strip('"“”').rstrip(".!")
+        if describes_text(what) and not _MESSAGE_TASK.match(canon(f"write {what}")):
+            box = (m.group("box") or "").strip()
+            press = bool(m.group("enter"))
+            return Intent("desktop.compose_type", lambda: _compose_and_type(what, box, press), "desktop")
+
     # type
     m = re.match(r"^(?:type|write|enter)\s+(?:out\s+)?(.+?)(?:\s+(?:in|into|in the|into the|on)\s+(?:the\s+)?(.+?))?"
                  r"(?:\s+and (?:press|hit) enter)?$", raw, re.I)
@@ -1733,8 +1747,9 @@ def route(text: str) -> Optional[Intent]:
     # request, whatever words the prompt itself contains.
     # parse_task: "continue what we were doing", "do the same for Discord", "set up my gaming workspace".
     from modules.agent.task_intents import parse_task
-    for parser in (parse_link, parse_task, parse_open_path, parse_social, parse_web, parse_files_task, parse_refer,
-                   parse_automation, parse_taskmgr, parse_memory):
+    from modules.mcp.intents import parse_mcp
+    for parser in (parse_link, parse_task, parse_mcp, parse_open_path, parse_social, parse_web, parse_files_task,
+                   parse_refer, parse_automation, parse_taskmgr, parse_memory):
         try:
             intent = parser(text)
         except Exception:
@@ -1938,6 +1953,20 @@ def _route_composite(text: str) -> Optional[Intent]:
         task = task_memory.begin(text, [dict(src, label=step_label(it.name)) for it, src in zip(intents, sources)])
         return run_plan(intents, task=task)
     return Intent("composite:" + "+".join(i.name for i in intents), run, "composite")
+
+
+def _compose_and_type(description: str, box: str = "", press_enter: bool = False) -> "Reply":
+    from modules.agent.compose import write
+    desc = re.sub(r"^(?:out|up|down)\s+", "", description, flags=re.I)
+    text = write(desc)
+    if not text:
+        return Reply(f"I couldn't write {desc} — the language model didn't answer, so I didn't type anything.",
+                     ok=False)
+    kwargs = {"text": text, "press_enter": press_enter, **({"target": box} if box else {})}
+    where = f" into the {box}" if box else ""
+    short = desc if len(desc) <= 60 else desc[:57] + "…"
+    return run_tool("desktop.type_text", f"type {short}{where}", lambda _r: f"Wrote {short} and typed it{where}.",
+                    **kwargs)
 
 
 # "Write an email to Sam" / "write a reply" is a job to do, not the words "an email"

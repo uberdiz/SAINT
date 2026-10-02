@@ -248,6 +248,32 @@ def make_folder(parent: str, name: str) -> Dict:
     return {"path": path, "existed": False}
 
 
+_FILE_KINDS = {"text": ".txt", "txt": ".txt", "notepad": ".txt", "blank": ".txt", "empty": ".txt", "plain": ".txt",
+               "markdown": ".md", "md": ".md", "python": ".py", "json": ".json", "csv": ".csv", "html": ".html",
+               "batch": ".bat", "powershell": ".ps1", "log": ".log", "": ".txt"}
+
+
+def make_file(parent: str, name: str = "", kind: str = "text", text: str = "") -> Dict:
+    """An empty (or ``text``-filled) file in ``parent``. Never overwrites: "New Text Document (2).txt"."""
+    parent = os.path.normpath(parent)
+    if not os.path.isdir(parent):
+        raise ToolError(f"{parent} doesn't exist.", "NOT_FOUND")
+    why = denied(os.path.join(parent, "x"))
+    if why:
+        raise ToolError(f"I won't make files there: {why}", "DENIED")
+    ext = _FILE_KINDS.get((kind or "").lower().strip(), ".txt")
+    base = clean_name(name) if name else ("New Text Document" if ext == ".txt" else "New File")
+    if not os.path.splitext(base)[1]:
+        base += ext
+    stem, suffix = os.path.splitext(base)
+    path, n = os.path.join(parent, base), 2
+    while os.path.exists(path):
+        path, n = os.path.join(parent, f"{stem} ({n}){suffix}"), n + 1
+    with open(path, "x", encoding="utf-8") as f:
+        f.write(text or "")
+    return {"path": path, "existed": False}
+
+
 def rename(path: str, new_name: str) -> Dict:
     path = os.path.normpath(path)
     if not os.path.exists(path):

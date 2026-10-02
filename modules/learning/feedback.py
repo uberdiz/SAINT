@@ -120,6 +120,22 @@ class Journal:
         log.info("learning.journal %s said=%r %s", kind, rec["said"][:60],
                  {k: v for k, v in info.items() if k in ("intent", "fix", "did")})
 
+    def import_entry(self, rec: dict):
+        """An entry learned on another of your devices (SAINT Link sync), kept as it was."""
+        rec = {k: (v[:200] if isinstance(v, str) else v) for k, v in rec.items()
+               if isinstance(k, str) and isinstance(v, (str, int, float, bool))}
+        if not rec.get("kind") or "said" not in rec:
+            return
+        with self._lock:
+            self._load()
+            self._recent.append(rec)
+            try:
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                with open(self.path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            except OSError as e:
+                log.debug("learning.journal_import_failed %s", e)
+
     def recent(self, n: int = 20) -> List[dict]:
         with self._lock:
             self._load()

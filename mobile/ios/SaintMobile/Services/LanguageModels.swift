@@ -52,7 +52,7 @@ final class ClaudeModel: LanguageModel {
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         let body: [String: Any] = [
             "model": model(),
-            "max_tokens": 400,
+            "max_tokens": 800,
             "system": system,
             "messages": [["role": "user", "content": prompt]],
         ]

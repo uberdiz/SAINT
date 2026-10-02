@@ -303,7 +303,7 @@ struct SettingsView: View {
                 SettingRow(icon: "desktopcomputer", title: "Ask my PC first for anything else") { toggle($settings.preferPC) }
                 RowDivider()
                 SettingRow(icon: "cpu", title: "On-device model") {
-                    Text(OnDeviceModel.isAvailable ? "Available" : "Not on this phone")
+                    Text(OnDeviceModel.isAvailable ? "Available" : "Needs iOS 26 + Apple Intelligence")
                         .font(.system(size: 13)).foregroundStyle(Theme.muted)
                 }
                 RowDivider()
@@ -324,7 +324,8 @@ struct SettingsView: View {
                 }
             }
             footnote("Commands, reminders, memory, music and phone control work on the phone alone. Open questions go to your PC's "
-                     + "SAINT when it's connected, then Apple's on-device model, then Claude if you add a key (kept in the Keychain).")
+                     + "SAINT whenever it can be reached (its bigger model, your memory and tools), then Claude if you add a key "
+                     + "(kept in the Keychain), then Apple's on-device model. If your PC's model is down, the phone answers instead.")
         }
     }
 

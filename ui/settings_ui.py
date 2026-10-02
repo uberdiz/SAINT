@@ -34,7 +34,7 @@ ACCENTS = ["#feaa34", "#f97316", "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#e
 
 class SettingsUI(QWidget):
     CATEGORIES = ["General", "Voice", "AI", "Wake Word", "Spotify", "Memory", "Automation",
-                  "Desktop Control", "Gaming Mode", "Appearance", "Advanced"]
+                  "Desktop Control", "Gaming Mode", "MCP", "Appearance", "Advanced"]
 
     def __init__(self, on_appearance_changed: Callable = None, on_theme_changed: Callable = None):
         super().__init__()
@@ -181,7 +181,8 @@ class SettingsUI(QWidget):
 
         for builder in (self._build_general, self._build_voice, self._build_ai, self._build_wake,
                         self._build_spotify, self._build_memory, self._build_automation,
-                        self._build_desktop, self._build_gaming, self._build_appearance, self._build_advanced):
+                        self._build_desktop, self._build_gaming, self._build_mcp, self._build_appearance,
+                        self._build_advanced):
             builder()
         self.nav.setCurrentRow(0)
 
@@ -663,21 +664,33 @@ class SettingsUI(QWidget):
         self.sp_disconnect.setEnabled(sp.is_connected())
 
     def _spotify_connect(self):
+        sp = module_manager.get("spotify")
+        if getattr(self, "_sp_waiting", False):
+            # The button says "Cancel sign-in" while the browser is open: a wrong callback or a closed
+            # tab no longer locks Connect for three minutes.
+            if sp is not None:
+                sp.auth.cancel_login()
+            return
         config.set("spotify.client_id", self._value("spotify.client_id"), persist=True)
         config.set("spotify.redirect_uri", self._value("spotify.redirect_uri"), persist=True)
         module_manager.set_enabled("spotify", True)
         sp = module_manager.get("spotify")
-        self.sp_connect.setEnabled(False)
+        self._sp_waiting = True
+        self.sp_connect.setText("Cancel sign-in")
         self.sp_status.setText("Waiting for you to log in to Spotify in the browser…")
 
-        def done(_):
-            self.sp_connect.setEnabled(True)
+        def finish():
+            self._sp_waiting = False
+            self.sp_connect.setText("Connect Spotify")
             self._refresh_spotify_status()
 
+        def done(_):
+            finish()
+
         def fail(e):
-            self.sp_connect.setEnabled(True)
-            self._refresh_spotify_status()
-            QMessageBox.warning(self, "Spotify", e)
+            finish()
+            if "cancelled" not in str(e):
+                QMessageBox.warning(self, "Spotify", str(e))
         run_async(sp.connect, done, fail)
 
     def _spotify_disconnect(self):
@@ -1021,6 +1034,65 @@ class SettingsUI(QWidget):
             self._set_accent(c.name())
 
     # ---- ADVANCED ------------------------------------------------------------------
+    # ---- MCP -----------------------------------------------------------------
+    def _build_mcp(self):
+        w, lay = self._new_page("MCP")
+        box, f = self._section("MCP servers", "Give SAINT the tools of any Model Context Protocol server — your "
+                               "notes, GitHub, a database, a smart-home hub. Paste the server's JSON the way its "
+                               "README shows it for Claude Desktop ({\"mcpServers\": {...}}). Its tools then work by "
+                               "voice like SAINT's own; anything that could change something asks you first unless "
+                               "you add \"trust\": \"allow\" to that server. Saved in data/mcp.json.")
+        self._row(f, "MCP", self._check("mcp.enabled", "Connect the MCP servers below when SAINT starts"))
+        self.mcp_json = QPlainTextEdit()
+        self.mcp_json.setMinimumHeight(220)
+        self.mcp_json.setPlaceholderText('{\n  "mcpServers": {\n    "filesystem": {\n      "command": "npx",\n'
+                                         '      "args": ["-y", "@modelcontextprotocol/server-filesystem", '
+                                         '"C:/Users/you/Documents"]\n    }\n  }\n}')
+        f.addRow(self.mcp_json)
+        row = QHBoxLayout()
+        save = QPushButton("Save && connect")
+        save.setObjectName("Primary")
+        save.clicked.connect(self._mcp_save)
+        row.addWidget(save)
+        self.mcp_status = QLabel("")
+        self.mcp_status.setObjectName("Muted")
+        self.mcp_status.setWordWrap(True)
+        row.addWidget(self.mcp_status, 1)
+        holder = QWidget()
+        holder.setLayout(row)
+        f.addRow(holder)
+        lay.addWidget(box)
+        self._add_page(w, lay)
+        self._mcp_load()
+
+    def _mcp_load(self):
+        from modules.mcp.manager import mcp_manager
+        try:
+            with open(mcp_manager.path, encoding="utf-8") as fh:
+                self.mcp_json.setPlainText(fh.read())
+        except OSError:
+            self.mcp_json.setPlainText("")
+        self.mcp_status.setText(mcp_manager.describe())
+
+    def _mcp_save(self):
+        import json as _json
+        from modules.mcp.manager import mcp_manager
+        text = self.mcp_json.toPlainText().strip() or '{"mcpServers": {}}'
+        try:
+            data = _json.loads(text)
+            servers = data.get("mcpServers", data) if isinstance(data, dict) else None
+            if not isinstance(servers, dict) or not all(isinstance(v, dict) for v in servers.values()):
+                raise ValueError("expected {\"mcpServers\": {\"name\": {...}}}")
+        except ValueError as e:
+            self.mcp_status.setText(f"That isn't valid MCP JSON: {e}")
+            return
+        os.makedirs(os.path.dirname(mcp_manager.path), exist_ok=True)
+        with open(mcp_manager.path, "w", encoding="utf-8") as fh:
+            _json.dump({"mcpServers": servers}, fh, indent=2)
+        self.mcp_status.setText("Connecting…")
+        run_async(lambda: (mcp_manager.reload(wait=True), mcp_manager.describe())[1],
+                  lambda d: self.mcp_status.setText(d), lambda e: self.mcp_status.setText(str(e)))
+
     def _build_advanced(self):
         w, lay = self._new_page("Advanced")
         box, f = self._section("Logging & diagnostics")

@@ -24,10 +24,20 @@ Peers (data/link/peers.json)
     its key: it can't reconnect.
 
 Pairing offers
-    A one-time 128-bit token, valid for a few minutes, shown as a QR code
+    A one-time token, valid for a few minutes, shown as a QR code
     (``saint://pair?...``) or as a code to type. It is the pre-shared key of the
     pairing handshake (modules/link/noise.py) — a wrong guess never gets far,
     and after a handful of failed attempts the offer is cancelled.
+
+    New offers use a short code (5 bytes: ``ABCD-EFGH``) so a second PC can be
+    paired by typing eight characters. Its pre-shared key is stretched with
+    PBKDF2 (``SHORT_CODE_ITERATIONS``) so the one-time code can't be brute-forced
+    offline in the five minutes it lives. The old 26-character codes (16 bytes,
+    HKDF) still work.
+
+    The role (own device / friend) is set by the code's owner; a joiner who
+    picked differently gets the stricter of the two on both sides, so a typed
+    "friend" never fails against an own-device code (and is never upgraded).
 """
 
 import base64
@@ -78,6 +88,11 @@ ROLE_DEFAULTS = {
 }
 
 
+def effective_role(*roles: str) -> str:
+    """"own" only when every side said "own"; anything else is a friend (collaborator)."""
+    return OWN if roles and all(r == OWN for r in roles) else COLLABORATOR
+
+
 def device_id_for(public_key: bytes) -> str:
     return hashlib.sha256(public_key).hexdigest()[:16]
 
@@ -95,6 +110,7 @@ class Peer:
     nicknames: List[str] = field(default_factory=list)
     host: str = ""
     port: int = 0
+    addrs: List[str] = field(default_factory=list)      # every address it told us (LAN, Tailscale)
     perms: Dict[str, str] = field(default_factory=dict)
     added: float = field(default_factory=time.time)
     last_seen: float = 0.0
@@ -103,6 +119,10 @@ class Peer:
     @property
     def key(self) -> bytes:
         return bytes.fromhex(self.public_key)
+
+    def candidates(self) -> List[str]:
+        """Where to knock, best first: the address that worked last, then the others it reported."""
+        return [a for a in dict.fromkeys([self.host] + list(self.addrs or [])) if a]
 
     def permission(self, perm: str) -> str:
         if perm in self.perms:
@@ -328,29 +348,45 @@ class Identity:
 # Pairing offers
 # ---------------------------------------------------------------------- #
 _B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+SHORT_TOKEN_BYTES = 5                 # 8 characters: ABCD-EFGH
+LONG_TOKEN_BYTES = 16                 # 26 characters (the original codes, and every QR code before 2.3)
+SHORT_CODE_ITERATIONS = 20000
 
 
 def encode_code(token: bytes) -> str:
-    """16 bytes -> 'ABCD-EFGH-...' (26 base32 characters in groups of four)."""
+    """5 bytes -> 'ABCD-EFGH'; 16 bytes -> 'ABCD-EFGH-...' (26 base32 characters in groups of four)."""
     raw = base64.b32encode(token).decode().rstrip("=")
     return "-".join(raw[i:i + 4] for i in range(0, len(raw), 4))
 
 
 def decode_code(code: str) -> bytes:
-    """Forgiving: spaces, dashes, lowercase, 0/1 typed for O/I."""
+    """Forgiving: spaces, dashes, lowercase, 0/1/8 typed for O/I/B."""
     s = "".join(c for c in (code or "").upper() if c not in " -_.")
     s = s.replace("0", "O").replace("1", "I").replace("8", "B")
     if not s or any(c not in _B32 for c in s):
         raise ValueError("That code has characters that aren't in a SAINT pairing code.")
     s += "=" * (-len(s) % 8)
-    token = base64.b32decode(s)
-    if len(token) != 16:
+    try:
+        token = base64.b32decode(s)
+    except ValueError as e:
+        raise ValueError("That pairing code is the wrong length.") from e
+    if len(token) not in (SHORT_TOKEN_BYTES, LONG_TOKEN_BYTES):
         raise ValueError("That pairing code is the wrong length.")
     return token
 
 
+def looks_like_code(text: str) -> bool:
+    try:
+        decode_code(text)
+        return True
+    except ValueError:
+        return False
+
+
 def psk_for(token: bytes) -> bytes:
-    return crypto.hkdf(token, b"SAINT-LINK-PAIRING", b"psk", 32)
+    if len(token) == LONG_TOKEN_BYTES:
+        return crypto.hkdf(token, b"SAINT-LINK-PAIRING", b"psk", 32)
+    return hashlib.pbkdf2_hmac("sha256", token, b"SAINT-LINK-PAIRING-SHORT", SHORT_CODE_ITERATIONS, 32)
 
 
 @dataclass
@@ -362,10 +398,13 @@ class PairingOffer:
     failures: int = 0
     used: bool = False
     created: float = field(default_factory=time.time)
+    _psk: bytes = b""
 
     @property
     def psk(self) -> bytes:
-        return psk_for(self.token)
+        if not self._psk:
+            self._psk = psk_for(self.token)       # stretched for short codes: work it out once
+        return self._psk
 
     @property
     def code(self) -> str:
@@ -426,10 +465,11 @@ class PairingManager:
         self._offer: Optional[PairingOffer] = None
         self.failures_by_ip: Dict[str, List[float]] = {}
 
-    def create(self, role: str = OWN, label: str = "", ttl: Optional[float] = None) -> PairingOffer:
+    def create(self, role: str = OWN, label: str = "", ttl: Optional[float] = None, short: bool = True) -> PairingOffer:
         if role not in (OWN, COLLABORATOR):
             raise ValueError("role must be 'own' or 'collaborator'")
-        offer = PairingOffer(os.urandom(16), role, time.time() + (ttl or self.TTL), label)
+        size = SHORT_TOKEN_BYTES if short else LONG_TOKEN_BYTES
+        offer = PairingOffer(os.urandom(size), role, time.time() + (ttl or self.TTL), label)
         with self._lock:
             self._offer = offer
         log.info("link.pairing_offer role=%s ttl=%ds", role, int(ttl or self.TTL))

@@ -11,6 +11,12 @@ Syncable kinds (each an ``Adapter`` over one of SAINT's existing stores):
     scene      named routines (steps, phrase; not the schedule)
     reminder   reminders and timers (not scheduled commands: those act on one PC)
     settings   language preferences
+    actionlog  what SAINT did on every device: the phone's Activity and each PC's History
+    answer     answers a taught lesson keeps ("Mr Norton's email address")
+    journal    the learning journal (complaints and fixes the planner learns from)
+
+Each side says which kinds it can store ("kinds" in the manifest), so a device
+is never sent items it would only drop (the iPhone has no learning journal).
 
 How it works
     * Every item has a stable uid and, in the local mirror (data/link/sync.db),
@@ -288,15 +294,28 @@ class SettingsAdapter(Adapter):
         return []
 
 
+def _own_device() -> Tuple[str, str]:
+    """(device id, name) of this PC, for labelling its own History entries."""
+    try:
+        from modules.link.service import get_link
+        ident = get_link().identity
+        return ident.device_id, ident.name
+    except Exception:
+        return "", ""
+
+
 class ActionLogAdapter(Adapter):
-    """What SAINT did on your phone (the iPhone's Activity tab). Kept here so it shows up in
-    History, and so a sync never reads a missing entry as "deleted on the PC"."""
+    """What SAINT did, on every device. The phone's Activity entries are kept here and added to History;
+    this PC's own History is offered too (uid "<device id>-<ms>"), so the phone's Activity tab and your
+    other PCs show what happened here. A missing entry is never read as "deleted on the PC"."""
     kind = "actionlog"
     KEEP_DAYS = 30
 
-    def __init__(self, path: Optional[str] = None):
+    def __init__(self, path: Optional[str] = None, history_source=None, own=None):
         self.path = path or str(data_path("link", "phone_activity.json"))
         self._lock = threading.Lock()
+        self._history = history_source          # () -> History records; None: core.history
+        self._own = own or _own_device
 
     def _load(self) -> Dict[str, dict]:
         try:
@@ -307,6 +326,7 @@ class ActionLogAdapter(Adapter):
             return {}
 
     def _save(self, entries: Dict[str, dict]):
+        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(entries, f, ensure_ascii=False)
@@ -317,16 +337,47 @@ class ActionLogAdapter(Adapter):
             items = [dict(v, id=k) for k, v in self._load().items()]
         return sorted(items, key=lambda e: e.get("ts", 0), reverse=True)
 
+    def _own_entries(self, cutoff: float) -> Dict[str, dict]:
+        device_id, name = self._own()
+        if not device_id:
+            return {}
+        try:
+            if self._history is not None:
+                records = self._history()
+            else:
+                from core.history import history
+                records = history.read(3000)
+        except Exception:
+            log.debug("link.actionlog.history_read_failed", exc_info=True)
+            return {}
+        out = {}
+        for r in records:
+            ts = float(r.get("ts") or 0)
+            if ts < cutoff or r.get("source") in ("iphone", "remote") or not r.get("user"):
+                continue                         # synced in from elsewhere: not ours to offer
+            tools = r.get("tools") or []
+            failed = r.get("ok") is False or (tools and not all(t.get("ok") for t in tools))
+            out[f"{device_id[:8]}-{int(ts * 1000)}"] = {
+                "ts": round(ts, 3), "request": str(r.get("user", ""))[:300], "action": str(r.get("reply", ""))[:300],
+                "kind": "pc", "status": "failed" if failed else "done", "source": "pc", "device": name}
+        return out
+
     def snapshot(self) -> Dict[str, dict]:
         cutoff = time.time() - self.KEEP_DAYS * 86400
         with self._lock:
-            return {k: v for k, v in self._load().items() if float(v.get("ts", 0) or 0) >= cutoff}
+            stored = {k: v for k, v in self._load().items() if float(v.get("ts", 0) or 0) >= cutoff}
+        stored.update(self._own_entries(cutoff))
+        return stored
 
     def apply_batch(self, changes):
         new = []
+        device_id, _ = self._own()
+        mine = f"{device_id[:8]}-" if device_id else None
         with self._lock:
             entries = self._load()
             for uid, data in changes:
+                if mine and uid.startswith(mine):
+                    continue                     # our own History, coming back: it's already here
                 if data is None:
                     entries.pop(uid, None)
                     continue
@@ -342,7 +393,8 @@ class ActionLogAdapter(Adapter):
             from core.history import history
             for d in sorted(new, key=lambda e: e.get("ts", 0)):
                 reply = d.get("action", "") + (f" ({d['detail']})" if d.get("detail") else "")
-                history.append({"ts": float(d.get("ts") or time.time()), "source": "iphone",
+                history.append({"ts": float(d.get("ts") or time.time()),
+                                "source": "remote" if d.get("source") == "pc" else "iphone",
                                 "user": d.get("request", ""), "reply": reply, "tools": [],
                                 "device": d.get("device", ""), "ok": d.get("status") != "failed"})
         except Exception:
@@ -350,9 +402,60 @@ class ActionLogAdapter(Adapter):
         return []
 
 
+class AnswerAdapter(Adapter):
+    """What a lesson's "ask once" questions were answered ("What's Mr Norton's email address?")."""
+    kind = "answer"
+
+    def _store(self):
+        from modules.learning.lesson import answers
+        return answers
+
+    def snapshot(self):
+        return {hashlib.sha256(q.encode("utf-8")).hexdigest()[:16]: {"q": q, "a": a}
+                for q, a in self._store().all().items()}
+
+    def apply_batch(self, changes):
+        store = self._store()
+        current = {hashlib.sha256(q.encode("utf-8")).hexdigest()[:16]: q for q in store.all()}
+        for uid, data in changes:
+            if data is None:
+                if uid in current:
+                    store.remove(current[uid])
+            elif isinstance(data.get("q"), str) and isinstance(data.get("a"), str):
+                store.put(data["q"], data["a"])
+        return []
+
+
+class JournalAdapter(Adapter):
+    """The learning journal: what you complained about and how SAINT was corrected, so every PC learns
+    from a mistake made on one. Entries are only ever added."""
+    kind = "journal"
+    KEEP = 300
+
+    def _journal(self):
+        from modules.learning.feedback import journal
+        return journal
+
+    @staticmethod
+    def _uid(rec: dict) -> str:
+        return hashlib.sha256(canonical(rec).encode("utf-8")).hexdigest()[:16]
+
+    def snapshot(self):
+        return {self._uid(r): r for r in self._journal().recent(self.KEEP)}
+
+    def apply_batch(self, changes):
+        j = self._journal()
+        have = {self._uid(r) for r in j.recent(self.KEEP)}
+        for uid, data in changes:
+            if data is None or uid in have or not isinstance(data, dict):
+                continue
+            j.import_entry(data)
+        return []
+
+
 def default_adapters() -> List[Adapter]:
     return [MemoryAdapter(), SkillAdapter(), AliasAdapter(), SceneAdapter(), ReminderAdapter(), SettingsAdapter(),
-            ActionLogAdapter()]
+            ActionLogAdapter(), AnswerAdapter(), JournalAdapter()]
 
 
 # ---------------------------------------------------------------------- #
@@ -484,12 +587,14 @@ class SyncEngine:
             out: Dict[str, dict] = {}
             for m in self.mirror.all():
                 out.setdefault(m["kind"], {})[m["uid"]] = [m["ts"], m["origin"], m["deleted"]]
-            return {"clock": self._clock, "items": out}
+            return {"clock": self._clock, "items": out, "kinds": sorted(self.adapters)}
 
     def diff(self, remote: dict) -> Tuple[List[list], List[dict]]:
         """(what I want from them, items I have that are newer than theirs)."""
         self.observe(int(remote.get("clock", 0) or 0))
         theirs = remote.get("items") or {}
+        kinds = remote.get("kinds")
+        their_kinds = set(kinds) if isinstance(kinds, list) else None       # None: an older device, send everything
         want: List[list] = []
         offer: List[dict] = []
         with self._lock:
@@ -502,6 +607,8 @@ class SyncEngine:
                 if m is None or (int(meta[0]), str(meta[1])) > (m["ts"], m["origin"]):
                     want.append([kind, uid])
         for (kind, uid), m in mine.items():
+            if their_kinds is not None and kind not in their_kinds:
+                continue
             meta = (theirs.get(kind) or {}).get(uid)
             if meta is None or (m["ts"], m["origin"]) > (int(meta[0]), str(meta[1])):
                 offer.append(self._item(m))

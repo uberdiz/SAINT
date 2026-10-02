@@ -139,16 +139,17 @@ def lesson_env(monkeypatch, tmp_path):
             return ToolResult(success=False, error=f"I couldn't find {kw['name']} on the screen.")
         return ToolResult(success=True, result=Result(clicked=kw.get("name", ""), changed=True, title="Gmail"))
     monkeypatch.setattr(get_tool_registry(), "execute", execute)
-    drafts = []
+    drafts, systems = [], []
 
     def complete(prompt, system="", timeout=45.0, max_tokens=0):
         drafts.append(prompt)
+        systems.append(system)
         if prompt.startswith("Write a short subject"):
             return "Lunch tomorrow"
         return "Hi Bob, short." if "Change it like this" in prompt else "Hi Bob,\nStill on for lunch?\nSeb"
     monkeypatch.setattr("modules.agent.llm.complete", complete)
     L.lessons.stop()
-    yield {"tools": tools, "skills": store, "drafts": drafts, "lessons": L.lessons}
+    yield {"tools": tools, "skills": store, "drafts": drafts, "systems": systems, "lessons": L.lessons}
     L.lessons.stop()
 
 
@@ -297,3 +298,59 @@ def test_an_email_skill_learned_the_old_way_is_forgotten_once(lesson_env, monkey
     assert config.get("learning.email_skills_retired") is True
     res = _say("write an email")
     assert "Walk me through" in res.text
+
+
+# ------------------------------------------------------------------ 2026-10-02 evening: the Norton email
+def test_the_norton_email_lesson_is_summarized_and_parameterized(lesson_env):
+    """The lesson as it was taught: the address typed (not an email composed), the correction not kept as a
+    step, "type out a summary of what SAINT is" written by the model (not the words typed), and the saved
+    lesson asks who it's to and what it's about next time."""
+    tools, drafts = lesson_env["tools"], lesson_env["drafts"]
+    _say("write an email")
+    _say("go to https://mail.google.com/mail/u/0/#inbox")
+    _say("Click Compose")
+    res = _say("write mr norton's email (jnorton@essextech.net)")
+    assert res.ok and "Mr Norton's address" in res.text, res.text
+    assert ("desktop.type_text", {"text": "jnorton@essextech.net"}) in tools
+    res = _say("no only write the email")
+    assert "just the address" in res.text
+    _say("Click Subject")
+    res = _say("type out a summary of what SAINT is")
+    assert res.ok and "typed it" in res.text, res.text
+    assert "summary of what SAINT is" in drafts[-1]
+    assert not any(kw.get("text") == "a summary of what SAINT is" for _n, kw in tools)
+    saved = _say("done")
+    assert "Saved" in saved.text and "Who's it to?" in saved.text and "What's it about?" in saved.text
+    steps = lesson_env["skills"].all()[0].steps
+    assert steps[:3] == ["ask: Who's it to? -> recipient", "ask: What's it about? -> topic",
+                         "ask: Anything it has to say? (or “no”) -> points"]
+    assert "ask once: What's {recipient}'s email address? -> email" in steps and "type {email}" in steps
+    assert steps.count("type {email}") == 1 and not any("no only" in s for s in steps)
+    assert "write: the email's text about {topic} -> message" in steps and "type {message}" in steps
+
+    # Next time, for the same person: their address is remembered and the topic comes from the request.
+    tools.clear()
+    res = _say("write an email to Mr Norton about the meeting")
+    assert ("desktop.type_text", {"text": "jnorton@essextech.net"}) in tools
+    assert "Here's the message" in res.text and "topic: the meeting" in drafts[-1]
+    assert "recipient: Mr Norton" in drafts[-1]
+    lesson_env["lessons"].stop()
+
+    # Someone new: who, their address (once), what it's about, and what it has to say.
+    tools.clear()
+    assert _say("write an email").text == "Who's it to?"
+    assert _say("Sam").text == "What's it about?"
+    assert "Anything it has to say" in _say("the trip").text
+    assert _say("tell him to bring snacks").text == "What's Sam's email address?"
+    res = _say("sam@example.com")
+    assert ("desktop.type_text", {"text": "sam@example.com"}) in tools
+    assert "points: tell him to bring snacks" in drafts[-1]
+
+
+def test_type_out_a_description_writes_it_then_types_it(lesson_env):
+    tools, drafts = lesson_env["tools"], lesson_env["drafts"]
+    res = _say("type out a summary of what SAINT is")
+    assert res.ok and "typed it" in res.text
+    assert "SAINT is the user's own AI desktop assistant" in lesson_env["systems"][-1]
+    typed = [kw["text"] for n, kw in tools if n == "desktop.type_text"]
+    assert typed and typed[-1] != "a summary of what SAINT is"

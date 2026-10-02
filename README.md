@@ -942,7 +942,8 @@ The same notes go to the language model as facts, so it doesn't invent results. 
 
 ### Voice
 
-- *"pair my phone"*, *"add Gian as a friend"* — opens a pairing window and shows a QR code and a code.
+- *"pair my phone"*, *"add Gian as a friend"* — opens a pairing window and shows a QR code and a short code (`ABCD-EFGH`).
+- *"pair with code ABCD-EFGH"* — on another PC: finds the SAINT with that window open on your Wi-Fi (or among your Tailscale devices) by itself; no address to type.
 - *"send this prompt to Gian's PC on Claude: summarise my notes"* · *"send a message to Gian: dinner is ready"* · *"play lofi on Gian's PC"* · *"open https://… on Gian's PC"*
 - *"ask my laptop to lock itself"* · *"ask Gian's SAINT what the capital of Peru is"*
 - *"send that to Gian"* (the file Explorer has selected) · *"accept what Gian shared"* · *"share this scene with Gian"*
@@ -952,12 +953,14 @@ The common ones work in the languages above too ("manda este prompt al PC de Gia
 
 ### Pairing and security
 
-- **Pairing** uses a one-time 128-bit code (the QR code holds it), valid for five minutes and for one device; ten wrong tries close the window. It is the pre-shared key of a Noise `XXpsk3` handshake, so someone on your Wi-Fi who never saw the code cannot pair, and the code itself is never sent.
+- **Pairing** uses a one-time code (the QR code holds it), valid for five minutes and for one device; ten wrong tries close the window. It is the pre-shared key of a Noise `XXpsk3` handshake, so someone on your Wi-Fi who never saw the code cannot pair, and the code itself is never sent. Codes are eight characters (`ABCD-EFGH`, 40 bits) with the key stretched by PBKDF2 (20 000 rounds), so it can't be brute-forced in the five minutes it lives; the older 26-character codes still work.
+- **Own device or friend** is decided by the code's owner. If the person joining picked the other option, both sides keep the stricter one ("friend") instead of failing — a friend can never be upgraded to your own device by the joiner.
+- **Every address at once.** Devices tell each other all their addresses (Wi-Fi, Tailscale) and dial them in parallel, so away from home the Tailscale address answers instead of waiting out the home one. *Devices → Check connection* says which address answers and what's in the way.
 - **After pairing**, each device remembers the other's public key and reconnects with Noise `IK`: mutual authentication, forward secrecy, ChaCha20-Poly1305. A device that isn't in your list gets nothing and is counted as a failed probe. Device ids are the first 16 hex digits of the SHA-256 of the key, so an id can't be claimed without the key.
 - **Implementation.** `Noise_IK_25519_ChaChaPoly_SHA256` and `Noise_XXpsk3_25519_ChaChaPoly_SHA256` (Noise revision 34), written with the standard library so it runs where compiled packages are blocked by Application Control (it uses `cryptography` automatically when installed). It is cross-checked byte for byte against the `noiseprotocol` package, and the known-answer vectors in `tests/data/link_vectors.json` are checked by the iPhone app's tests too.
 - **A paired phone is you.** Your own devices can control this PC, so keep your phone locked, and unpair it from *Devices* if you lose it. For friends, start from the defaults (they can message you and send files; most everything else asks, or is off) and open up per person.
 - **Discovery** is mDNS (`_saint._tcp`, via `zeroconf`) plus a small UDP beacon on port 8766. Both only *advertise* an address; they carry no trust. Paired devices dial each other by the last address they saw, or you can type `IP:port`.
-- **Firewall.** Windows asks once to allow Python on private networks. The default port is 8765 (`link.port`).
+- **Firewall.** When Link starts, SAINT asks once (an admin prompt) to add a Windows Firewall rule for port 8765 from the local network and Tailscale (100.64.0.0/10) only — a dismissed "allow access?" prompt, or a Wi-Fi Windows calls "public", used to block devices that were "connected" in Tailscale. `link.manage_firewall: false` turns this off.
 
 ### Configuration
 
@@ -975,6 +978,17 @@ The common ones work in the languages above too ("manda este prompt al PC de Gia
 ### The iPhone app
 
 The iPhone app (SwiftUI) is in [`mobile/`](mobile/README.md): always listening for "SAINT", the same language layer, reminders, Spotify, and control of this PC from the phone. It dials *out* to this PC, so nothing on the phone listens for connections. [`mobile/docs/IPHONE_SETUP.md`](mobile/docs/IPHONE_SETUP.md) explains how to get it onto a phone, including from Windows without a Mac.
+
+---
+
+## MCP servers
+
+`modules/mcp` — SAINT is an MCP client: any [Model Context Protocol](https://modelcontextprotocol.io) server's tools become SAINT tools you can use by voice ("add *buy milk* to my notes", "what are my open pull requests on GitHub?").
+
+- **Set up** in *Settings → MCP*: paste the server's JSON the way its README shows it for Claude Desktop (`{"mcpServers": {"name": {"command": "npx", "args": [...]}}}` for a local program, `{"url": "https://…", "headers": {...}}` for a remote one). Saved in `data/mcp.json`; `mcp.servers` in the config works too. Say *"reload MCP servers"* after a change, *"what MCP servers do you have?"* to list them.
+- **Safety**: each tool is registered as `mcp.<server>.<tool>` with its input schema and goes through the same validation, permission policy and confirmations as SAINT's own tools. Tools a server marks read-only run straight away; anything else asks first, unless that server has `"trust": "allow"` (`"confirm"` makes every tool ask). A server that won't start is reported in *Settings → MCP* and the Startup panel; SAINT carries on without it.
+- **Small models stay focused**: only the MCP tools that fit the request (a server named in it, or tools whose name and description match it) are shown to the model.
+- Uses the local model's tool calling (Ollama), like the rest of SAINT's free-form requests.
 
 ---
 

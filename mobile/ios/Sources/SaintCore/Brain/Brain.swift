@@ -711,6 +711,9 @@ public final class Brain {
             if answer.text.trimmed.isEmpty {
                 o.ok = false
                 o.detail = "\(peer.name) sent back an empty answer"
+            } else if !answer.ok {
+                o.ok = false
+                o.detail = "\(peer.name)'s language model couldn't answer (\(answer.text.prefix(120)))"
             }
             if answer.expectsReply { pending = .pcFollowUp(peerID: peer.id) }
             return o
@@ -829,14 +832,25 @@ public final class Brain {
         if !preferPC, let bridge = pc, let own = ownPC(), own.online {
             return await ask(bridge, peer: own, text: original, turn: turn)
         }
-        var o = Outcome("I don't know how to do that yet.", ok: false)
+        // Say what's missing instead of a bare "I don't know how to do that yet."
+        let text: String
+        if model == nil || why.contains("model failed") || why.contains("No language model") {
+            text = ownPC() == nil
+                ? "I can't answer that on this phone yet — there's no language model here. Pair your PC (Devices), or turn on Claude in Settings → AI."
+                : "I can't answer that right now — \(why.isEmpty ? "your PC isn't reachable" : why), and there's no language model on this phone. Turn on Claude in Settings → AI to answer without your PC."
+        } else {
+            text = "I couldn't answer that just now\(why.isEmpty ? "" : " — \(why)")."
+        }
+        var o = Outcome(text, ok: false)
         o.detail = why
         return o
     }
 
     private func systemPrompt(_ turn: LangTurn) -> String {
-        var parts = ["You are SAINT, a voice assistant on the user's iPhone. Your answer is spoken aloud: be brief and conversational, "
-                     + "one or two short sentences, no lists or markdown."]
+        var parts = ["You are SAINT, the user's personal assistant on their iPhone (it also runs on their PC). Your answer may be "
+                     + "spoken aloud, so write plain conversational sentences with no markdown, bullet symbols or code. Usually answer in "
+                     + "one to three sentences; when the user asks you to explain, summarize, write, plan, compare or list something, give "
+                     + "a complete, genuinely useful answer. Never invent facts about the user."]
         let directive = turn.directive(mixedMode: lang.settings.mixedMode)
         if !directive.isEmpty { parts.append(directive) }
         let facts = memory.search(turn.routedText, limit: 4).map { "- " + Brain.flip($0.content) }

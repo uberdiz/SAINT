@@ -256,7 +256,27 @@ This checklist contains only tests that still need verification, fixes, or a rea
 - [ ] Start SAINT with optional model files missing.
 - [ ] Confirm failures are isolated and SAINT still launches when optional components are unavailable.
 
-## 23. Final release gate
+## 23. 2026-10-02 round (Link, MCP, lessons, iPhone)
+
+- [ ] PC ↔ PC on the same Wi-Fi: “Pair another PC” on one, type only the 8-character code into Join on the other — pairs without an address.
+- [ ] PC ↔ PC over Tailscale only (different networks): type only the code — pairs (the other PC is found among Tailscale devices).
+- [ ] First Link start shows one admin prompt for the firewall rule; after accepting, the phone connects over Tailscale away from home.
+- [ ] Devices → a disconnected device → “Check connection” names each address and what's in the way.
+- [ ] Friend's phone joins your PC with “A friend's SAINT” on an *own* code (and the reverse) — pairs as Friend on both sides.
+- [ ] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
+- [ ] Stop Ollama on the PC: the iPhone answers with Claude / the on-device model instead of reading the PC's error.
+- [ ] iPhone: the keyboard's Send key sends the typed message (and the arrow button still does).
+- [ ] iPhone: “SAINT …” wakes reliably at normal distance (10 tries); “Hey SAINT” too; normal conversation doesn't wake it.
+- [ ] Spotify (desktop): press Connect, close the browser tab, press “Cancel sign-in”, Connect again — works without waiting 3 minutes.
+- [ ] Spotify (iPhone): a failed sign-in can be retried at once.
+- [ ] Alt+` overlay: “Shut down” → “Click again to quit” → SAINT quits.
+- [ ] “make a new folder in downloads” then “add a text file in that folder” → New Text Document.txt inside it; no code is spoken.
+- [ ] “type out a summary of what SAINT is” in Notepad → a written summary, not the words.
+- [ ] Teach the Gmail email (open Gmail, click Compose, “write mr norton's email (jnorton@essextech.net)”, click Subject, “type out a summary of what SAINT is”, done) → the read-back lists the steps and asks who / about / what to say; “write an email to Mr Norton about the meeting” fills his address by itself.
+- [ ] MCP: paste a filesystem or notes server in Settings → MCP, Save & connect, then use one of its tools by voice; a non-read-only tool asks first.
+- [ ] Sync: a command run on PC A appears in PC B's History (“Other PC”) and on the iPhone's Activity tab; an “ask once” answer (an email address) taught on A is known on B.
+
+## 24. Final release gate
 
 Do not consider `unified-release` ready until:
 

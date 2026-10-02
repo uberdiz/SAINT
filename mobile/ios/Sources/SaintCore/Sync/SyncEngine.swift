@@ -151,7 +151,8 @@ public final class SyncEngine {
         for m in items.values {
             byKind[m.kind, default: [:]][m.uid] = [m.ts, m.origin, m.deleted] as [Any]
         }
-        return ["clock": clock, "items": byKind]
+        // "kinds": what this device can store, so the other side doesn't send kinds it would only drop.
+        return ["clock": clock, "items": byKind, "kinds": Array(adapters.keys).sorted()]
     }
 
     /// (what I want from them as [kind, uid], items I have that are newer than theirs)
@@ -173,7 +174,9 @@ public final class SyncEngine {
                 }
             }
         }
+        let theirKinds = (remote["kinds"] as? [String]).map { Set($0) }
         for m in items.values {
+            if let kinds = theirKinds, !kinds.contains(m.kind) { continue }
             let meta = ((theirs[m.kind] as? [String: Any])?[m.uid]) as? [Any]
             if let meta = meta, meta.count >= 2, let ts = (meta[0] as? NSNumber)?.int64Value, let origin = meta[1] as? String {
                 if (m.ts, m.origin) > (ts, origin) { offer.append(item(from: m)) }

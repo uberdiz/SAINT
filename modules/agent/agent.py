@@ -384,7 +384,7 @@ class Agent:
     # Intents never started from speech SAINT wasn't addressed with: song lyrics
     # like "my name is ..." or "type ..." must not be saved or typed.
     _UNADDRESSED_BLOCKED = ("memory.remember", "memory.forget", "memory.forget_all", "desktop.type_text",
-                            "automation.schedule_command")
+                            "desktop.compose_type", "automation.schedule_command")
 
     def accepts_followup(self, text: str) -> bool:
         """Would ``text`` do something if it were a command? Used by the voice

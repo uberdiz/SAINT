@@ -174,6 +174,14 @@ struct HomeView: View {
                     .focused($typing)
                     .submitLabel(.send)
                     .onSubmit(send)
+                    // A vertical TextField puts a newline in the text instead of calling onSubmit, so the
+                    // keyboard's Send key never sent anything: treat the newline as Send.
+                    .onChange(of: draft) { _, new in
+                        if new.contains("\n") {
+                            draft = new.replacingOccurrences(of: "\n", with: " ")
+                            send()
+                        }
+                    }
                     .foregroundStyle(Theme.text)
                 if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(action: send) {
@@ -229,8 +237,10 @@ struct HomeView: View {
     }
 
     private func send() {
-        let text = draft
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = ""
+        guard !text.isEmpty else { return }
+        typing = false
         Task { await model.submit(text) }
     }
 }

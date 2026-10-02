@@ -58,8 +58,16 @@ final class LinkCryptoTests: XCTestCase {
         // forgiving input: lower case, spaces, 0/1 typed for O/I
         let sloppy = (c["code"] ?? "").lowercased().replacingOccurrences(of: "-", with: " ")
         XCTAssertEqual(try Pairing.decodeCode(sloppy), token)
-        XCTAssertThrowsError(try Pairing.decodeCode("ABCD-EFGH"))
+        XCTAssertThrowsError(try Pairing.decodeCode("ABCD-EFG"))          // 4 bytes: neither short nor long
         XCTAssertThrowsError(try Pairing.decodeCode("not a code!"))
+        // short codes (desktop 2.3+): eight characters, PBKDF2-stretched key — the same answer as Python
+        let short = try XCTUnwrap(vectors["pairing_code_short"] as? [String: Any])
+        let shortToken = hexData(short["token"] as? String ?? "")
+        XCTAssertEqual(Pairing.encodeCode(shortToken), short["code"] as? String)
+        XCTAssertEqual(try Pairing.decodeCode((short["code"] as? String ?? "").lowercased()), shortToken)
+        XCTAssertEqual(Pairing.psk(forToken: shortToken).hex, short["psk"] as? String)
+        XCTAssertTrue(Pairing.looksLikeCode("abcd efgh"))
+        XCTAssertFalse(Pairing.looksLikeCode("192.168.1.20:8765"))
     }
 
     func testPairingLinksAndAddresses() throws {
