@@ -70,6 +70,12 @@ class FasterWhisperSTT(STTEngine):
         if self._model is not None:
             return
         try:
+            from core.model_assets import ensure_whisper
+            if not ensure_whisper():
+                raise RuntimeError(
+                    "Whisper base.en is not installed. SAINT could not download "
+                    "the GitHub model asset."
+                )
             from faster_whisper import WhisperModel  # type: ignore
             self._model = WhisperModel(
                 self._model_name,
