@@ -9,10 +9,9 @@ Outputs (build/ is git-ignored):
     build/windows/SAINT/SAINT.exe      the app (with its _internal folder and bundled models)
     build/windows/SAINT-Setup.exe      per-user installer (Start menu + optional desktop shortcut)
 
-Needs: the project's .venv with requirements installed, PyInstaller, and
-Inno Setup 6 (ISCC.exe) for the installer. The speech models are copied from
-the local Hugging Face cache (they're downloaded the first time SAINT speaks
-or listens from source), so the packaged app works offline.
+Needs: Python 3.12, the project's dependencies, PyInstaller, and Inno Setup 6.
+The release installer does not contain the large Whisper/Kokoro model files;
+the installed app downloads those files from the SAINT GitHub Release.
 """
 
 import argparse
@@ -31,11 +30,8 @@ APP = OUT / "SAINT"
 
 from core.version import VERSION, VERSION_TUPLE  # noqa: E402
 
-# Hugging Face repos SAINT loads by default (Settings > Voice): Whisper base.en. The voice (Kokoro on
-# onnxruntime, data/tts/kokoro-onnx) is bundled by saint.spec.
-MODELS = {
-    "Systran/faster-whisper-{stt}": None,                       # everything in the snapshot
-}
+# Large voice models are release assets, not part of the Windows installer.
+# The installed app downloads them from the rolling GitHub release on first use.
 
 
 def make_icon():
@@ -108,6 +104,16 @@ def bundle_models(stt: str):
 
 
 
+def ensure_supported_python():
+    """The native Windows dependency stack is released against Python 3.12."""
+    if sys.version_info[:2] != (3, 12):
+        raise RuntimeError(
+            f"SAINT Windows releases must be built with Python 3.12.x; "
+            f"this interpreter is {sys.version.split()[0]}. "
+            "Use the GitHub Actions release workflow instead of installing Python manually."
+        )
+
+
 def venv_python() -> Path:
     return ROOT / ".venv" / "Scripts" / "python.exe"
 
@@ -118,7 +124,8 @@ def run_checked(cmd, *, cwd=ROOT, env=None):
 
 
 def ensure_build_environment():
-    """Make build.py self-contained: create/repair .venv and install build dependencies."""
+    """Create/repair the build venv without ever silently using an unsupported Python."""
+    ensure_supported_python()
     target = venv_python()
 
     if Path(sys.executable).resolve() != target.resolve():
@@ -210,19 +217,18 @@ def installer():
 
 
 def main():
+    ensure_supported_python()
     ensure_build_environment()
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-installer", action="store_true")
-    ap.add_argument("--no-models", action="store_true")
+    ap.add_argument("--no-models", action="store_true", help="do not bundle large speech models (default for releases)")
     ap.add_argument("--stt-model", default="base.en")
     args = ap.parse_args()
-    from tools.get_kokoro_onnx import ensure as ensure_voice
-    ensure_voice()                                   # the ONNX voice the spec bundles
     make_icon()
     make_version_file()
     pyinstaller()
-    if not args.no_models:
-        bundle_models(args.stt_model)
+    # Models are intentionally not bundled into the installer. They are published
+    # as separate GitHub Release assets and downloaded into the user's data folder.
     if not args.no_installer:
         installer()
     print(f"\nSAINT {VERSION}: {APP / 'SAINT.exe'}")
