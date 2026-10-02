@@ -36,12 +36,8 @@ datas = [
     (str(ROOT / "data" / "wake" / "embedding_model.onnx"), "data/wake"),
     (str(ROOT / "modules" / "lang" / "lexicon"), "modules/lang/lexicon"),
 ]
-# Kokoro's ONNX model and voices (python tools/get_kokoro_onnx.py downloads them).
-_ONNX = ROOT / "data" / "tts" / "kokoro-onnx"
-for name in ("kokoro-v1.0.onnx", "voices-v1.0.bin"):
-    if not (_ONNX / name).exists():
-        raise SystemExit(f"{_ONNX / name} is missing: run python tools/get_kokoro_onnx.py first")
-    datas.append((str(_ONNX / name), "data/tts/kokoro-onnx"))
+# Large Kokoro model files are deliberately excluded. The installed app downloads
+# them from the SAINT GitHub Release into %LOCALAPPDATA%/SAINT/data.
 for pkg in ("faster_whisper", "kokoro_onnx", "misaki", "espeakng_loader", "en_core_web_sm", "spacy", "language_tags",
             "phonemizer", "segments", "csvw", "jieba", "unidic_lite", "certifi", "openwakeword", "onnxruntime",
             "ctranslate2", "_sounddevice_data", "soundfile", "uiautomation"):
