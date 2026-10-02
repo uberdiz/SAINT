@@ -1,4 +1,7 @@
-# SAINT — Python 3.12+ (developed and tested on Python 3.14, Windows 11)
+# SAINT — Python 3.12 target for Windows builds, Windows 11 runtime
+#
+# The end-user EXE/installer does not require Python. Python 3.12 is only the
+# reproducible build environment used by GitHub Actions.
 #
 # PyTorch: install the correct CUDA build FIRST on NVIDIA systems (RTX 50-series /
 # Blackwell needs CUDA 12.8+ wheels). setup.bat handles this automatically.
