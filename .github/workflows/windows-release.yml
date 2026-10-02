@@ -27,7 +27,6 @@ jobs:
           python --version
           pip --version
           where.exe ISCC.exe
-          where.exe cl.exe
       - name: Install dependencies
         shell: pwsh
         run: |
