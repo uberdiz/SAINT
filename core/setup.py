@@ -55,16 +55,19 @@ class SetupWizard:
         # 5. Microphone
         self._check_microphone()
 
-        # 6. TTS
+        # 6. Large voice model assets
+        self._check_model_assets()
+
+        # 7. TTS
         self._check_tts()
 
-        # 7. Automation
+        # 8. Automation
         self._check_automation()
 
-        # 8. Database
+        # 9. Database
         self._check_database()
 
-        # 9. Data directories
+        # 10. Data directories
         self._check_directories()
 
         return self.results
@@ -202,10 +205,38 @@ class SetupWizard:
                 details={"error": str(e)}
             ))
 
+    def _check_model_assets(self):
+        """Download the large voice models from the GitHub release on first run."""
+        try:
+            from core.model_assets import ensure_all
+            assets = ensure_all()
+            if assets.get("whisper") and assets.get("kokoro"):
+                self.results.append(CheckResult(
+                    name="Voice models",
+                    passed=True,
+                    message="Whisper + Kokoro downloaded and ready",
+                    details=assets,
+                ))
+            else:
+                missing = ", ".join(k for k, ready in assets.items() if not ready)
+                self.results.append(CheckResult(
+                    name="Voice models",
+                    passed=False,
+                    message=f"Could not download: {missing}. SAINT can retry on first voice use.",
+                    details=assets,
+                ))
+        except Exception as e:
+            self.results.append(CheckResult(
+                name="Voice models",
+                passed=False,
+                message=f"Model download failed: {e}",
+                details={"error": str(e)},
+            ))
+
     def _check_tts(self):
         tts_backend = config.get("voice.tts_backend", "kokoro")
         if tts_backend in ("kokoro", "kokoro_onnx"):
-            # The ONNX voice (what SAINT.exe ships) needs no PyTorch; otherwise the kokoro package.
+            # The ONNX voice is downloaded as a separate release asset; no large model is in the installer.
             from modules.voice import kokoro_onnx
             if kokoro_onnx.available():
                 self.results.append(CheckResult(
