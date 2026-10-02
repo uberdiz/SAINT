@@ -8,7 +8,9 @@ where modules/voice/kokoro_onnx.py looks for them. packaging/windows/build.py
 runs this first and bundles the files into SAINT.exe.
 """
 
+import shutil
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -26,7 +28,17 @@ def ensure() -> Path:
             continue
         part = target.with_suffix(target.suffix + ".part")
         print(f"downloading {name} …", flush=True)
-        urllib.request.urlretrieve(BASE + name, part)
+        for attempt in range(1, 4):
+            try:
+                req = urllib.request.Request(BASE + name, headers={"User-Agent": "SAINT"})
+                with urllib.request.urlopen(req, timeout=120) as r, open(part, "wb") as f:
+                    shutil.copyfileobj(r, f, 1024 * 1024)
+                break
+            except OSError as e:
+                if attempt == 3:
+                    raise
+                print(f"  retry {attempt} after error: {e}", flush=True)
+                time.sleep(3 * attempt)
         if part.stat().st_size < minimum:
             raise RuntimeError(f"{name} looks incomplete ({part.stat().st_size} bytes)")
         part.replace(target)

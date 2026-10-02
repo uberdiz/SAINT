@@ -70,38 +70,6 @@ def pyinstaller():
     subprocess.run(cmd, check=True, cwd=str(ROOT), env=env)
 
 
-def hf_cache() -> Path:
-    if os.environ.get("HF_HUB_CACHE"):
-        return Path(os.environ["HF_HUB_CACHE"])
-    home = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
-    return home / "hub"
-
-
-def bundle_models(stt: str):
-    """Copy the speech models into SAINT/models/hf/hub in the Hugging Face cache layout."""
-    src_root, dst_root = hf_cache(), APP / "models" / "hf" / "hub"
-    for repo, keep in MODELS.items():
-        repo = repo.format(stt=stt)
-        name = "models--" + repo.replace("/", "--")
-        src = src_root / name
-        refs = src / "refs" / "main"
-        if not refs.exists():
-            print(f"!! {repo} isn't in the Hugging Face cache ({src}); SAINT will download it on first use.")
-            continue
-        commit = refs.read_text().strip()
-        snap = src / "snapshots" / commit
-        dst = dst_root / name
-        (dst / "refs").mkdir(parents=True, exist_ok=True)
-        (dst / "refs" / "main").write_text(commit)
-        for f in snap.rglob("*"):
-            rel = f.relative_to(snap).as_posix()
-            if f.is_dir() or (keep and not any(rel == k or (k.endswith("/") and rel.startswith(k)) for k in keep)):
-                continue
-            out = dst / "snapshots" / commit / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f.resolve(), out)                # real files, not cache symlinks
-        print(f"bundled {repo} @ {commit[:8]}")
-
 
 
 def ensure_supported_python():

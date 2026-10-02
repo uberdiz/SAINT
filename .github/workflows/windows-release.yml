@@ -2,7 +2,7 @@ name: Windows desktop release
 
 on:
   push:
-    branches: [unified-release]
+    branches: [unified-release, claude/saint-windows-pipeline-import-vxg7gs]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Use pinned Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           architecture: x64
@@ -26,7 +26,11 @@ jobs:
         run: |
           python --version
           pip --version
-          where.exe ISCC.exe
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "Could not install Inno Setup" }
+          }
       - name: Install dependencies
         shell: pwsh
         run: |
@@ -40,7 +44,13 @@ jobs:
         run: python packaging/windows/build.py --no-models
       - name: Prepare large GitHub model assets
         shell: pwsh
+        env:
+          # Optional: raises Hugging Face rate limits; the build works without it.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: python packaging/windows/prepare_model_assets.py
+      - name: Verify model assets install correctly
+        shell: pwsh
+        run: python packaging/windows/verify_assets.py
       - name: Verify release files
         shell: pwsh
         run: |
