@@ -126,6 +126,11 @@ def run_checked(cmd, *, cwd=ROOT, env=None):
 def ensure_build_environment():
     """Create/repair the build venv without ever silently using an unsupported Python."""
     ensure_supported_python()
+    # GitHub Actions already installed the pinned dependencies into its
+    # Python 3.12 environment. Do not create a second venv there.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        return
+
     target = venv_python()
 
     if Path(sys.executable).resolve() != target.resolve():
