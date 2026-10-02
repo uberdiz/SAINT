@@ -178,8 +178,7 @@ struct HomeView: View {
                     // keyboard's Send key never sent anything: treat the newline as Send.
                     .onChange(of: draft) { _, new in
                         if new.contains("\n") {
-                            draft = new.replacingOccurrences(of: "\n", with: " ")
-                            send()
+                            submitText(new.replacingOccurrences(of: "\n", with: " "))
                         }
                     }
                     .foregroundStyle(Theme.text)
@@ -237,7 +236,11 @@ struct HomeView: View {
     }
 
     private func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        submitText(draft)
+    }
+
+    private func submitText(_ raw: String) {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         draft = ""
         guard !text.isEmpty else { return }
         typing = false
