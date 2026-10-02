@@ -85,6 +85,9 @@ def run_meta(meta: Meta) -> str:
         cancel.trip("all" if meta.kind == "stop_all" else "current")
         confirmations.clear("dismissed")
         choices.clear()
+        from modules.learning.lesson import lessons
+        if lessons.stop() and meta.kind == "stop":
+            return "Okay, I stopped."
         if meta.kind == "stop_all":
             return "Stopped everything."
         return "Okay."

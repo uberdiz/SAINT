@@ -68,6 +68,7 @@ public final class Brain {
         var stop = false
         var source = "phone"
         var language = ""
+        var detail = ""              // where it ran and why, for the Activity log ("Your PC wasn't reachable: ...")
         init(_ text: String, ok: Bool = true) {
             self.text = text
             self.ok = ok
@@ -255,7 +256,7 @@ public final class Brain {
         if let o = memoryCommands(command) { routeKind = "memory"; return o }
         // The phone before music ("open Spotify" opens the app) and before "that needs your PC".
         if let o = await phoneCommands(command) { routeKind = "phone"; return o }
-        if let o = await musicCommands(command) { routeKind = "music"; return o }
+        if let o = await musicCommands(command, turn: turn, original: original) { routeKind = "music"; return o }
         if P.pcOnly.matches(command) {
             routeKind = "pc"
             return await forwardToOwnPC(original, turn: turn, because: "That one needs your PC.")
@@ -268,7 +269,8 @@ public final class Brain {
         let kind = outcome.source == "pc" ? "pc" : routeKind
         let status = !outcome.ok ? "failed" : (outcome.source == "pc" ? "sent" : "done")
         actions.add(ActionEntry(request: utterance.trimmed, action: reply.isEmpty ? outcome.text : reply, kind: kind,
-                                status: status, source: outcome.source, device: deviceName))
+                                status: status, source: outcome.source, device: deviceName,
+                                detail: outcome.detail.isEmpty ? nil : outcome.detail))
     }
 
     private func resolvePending(_ p: Pending, command: String, turn: LangTurn, original: String) async -> Outcome? {
@@ -346,6 +348,11 @@ public final class Brain {
         }
         if let skill = skills.match(command) {
             skills.noteUse(id: skill.id)
+            if Brain.isLesson(skill.steps) {
+                // Taught step by step on the PC: it asks questions and drives the PC's screen, so it runs there.
+                routeKind = "pc"
+                return await forwardToOwnPC(original, turn: turn, because: "That one runs on your PC.")
+            }
             return await runSteps(skill.steps, turn: turn)
         }
         let spoken = command.replacingOccurrences(of: "^(?:run|start|activate|turn on|do|launch) ", with: "", options: [.regularExpression, .caseInsensitive])
@@ -370,7 +377,7 @@ public final class Brain {
         for step in steps {
             let command = Brain.tidy(step)
             let o: Outcome
-            if let m = await musicCommands(command) { o = m }
+            if let m = await musicCommands(command, turn: turn, original: step) { o = m }
             else if let r = reminderCommands(command, turn: turn) { o = r }
             else if let b = basics(command) { o = b }
             else if pc != nil { o = await forwardToOwnPC(step, turn: turn, because: "That step needs your PC.") }
@@ -567,11 +574,37 @@ public final class Brain {
         return nil
     }
 
-    private func musicCommands(_ command: String) async -> Outcome? {
+    private func musicCommands(_ command: String, turn: LangTurn, original: String) async -> Outcome? {
         guard let intent = musicIntent(command) else { return nil }
-        guard let service = music else { return Outcome("Spotify isn't connected.", ok: false) }
+        guard let service = music else {
+            return await musicOnPC(original, turn: turn, because: "Spotify isn't connected on this phone")
+                ?? Outcome("Spotify isn't connected.", ok: false)
+        }
         let text = await service.perform(intent)
-        return Outcome(text, ok: !text.lowercased().contains("isn't"))
+        if musicFailed(text), let o = await musicOnPC(original, turn: turn, because: text) { return o }
+        var o = Outcome(text, ok: !musicFailed(text))
+        if !o.ok { o.detail = "Spotify on this phone: \(text)" }
+        return o
+    }
+
+    /// The phone's Spotify couldn't do it (not signed in, no device, refused): your PC's SAINT does it instead.
+    private func musicOnPC(_ text: String, turn: LangTurn, because: String) async -> Outcome? {
+        guard let bridge = pc, let own = ownPC() else { return nil }
+        var reachable = own.online
+        if !reachable { reachable = await bridge.reachable(peerID: own.id) }
+        guard reachable else { return nil }
+        var o = await ask(bridge, peer: own, text: text, turn: turn)
+        guard o.ok else { return nil }
+        o.detail = "Played through \(own.name) — \(because.trimmingCharacters(in: CharacterSet(charactersIn: ".")))"
+        return o
+    }
+
+    /// Steps written by a lesson on the PC ("ask: Who's it to? -> recipient", "type {recipient}").
+    static func isLesson(_ steps: [String]) -> Bool {
+        steps.contains { step in
+            step.range(of: #"^\s*(?:ask once|ask|write|confirm|you)\s*:"#, options: [.regularExpression, .caseInsensitive]) != nil
+                || step.range(of: #"\{[a-z_][a-z0-9_]*\}"#, options: [.regularExpression, .caseInsensitive]) != nil
+        }
     }
 
     // MARK: the phone itself
@@ -674,10 +707,17 @@ public final class Brain {
             o.source = "pc"
             o.language = answer.language
             o.expectsReply = answer.expectsReply
+            o.detail = "Ran on \(peer.name)"
+            if answer.text.trimmed.isEmpty {
+                o.ok = false
+                o.detail = "\(peer.name) sent back an empty answer"
+            }
             if answer.expectsReply { pending = .pcFollowUp(peerID: peer.id) }
             return o
         } catch {
-            return linkError(error, peer: peer)
+            var o = linkError(error, peer: peer)
+            o.detail = "Couldn't reach \(peer.name): \((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)"
+            return o
         }
     }
 
@@ -759,9 +799,19 @@ public final class Brain {
     // MARK: everything else
 
     private func fallback(_ command: String, turn: LangTurn, original: String) async -> Outcome {
-        if preferPC, let bridge = pc, let own = ownPC(), own.online {
-            let o = await ask(bridge, peer: own, text: original, turn: turn)
-            if o.ok { return o }
+        // Your PC's SAINT has the bigger model, your memory and the tools: use it whenever it can be reached —
+        // dialling it if the link happens to be down — and only answer on the phone when it can't.
+        var why = ""
+        if preferPC, let bridge = pc, let own = ownPC() {
+            var reachable = own.online
+            if !reachable { reachable = await bridge.reachable(peerID: own.id) }
+            if reachable {
+                let o = await ask(bridge, peer: own, text: original, turn: turn)
+                if o.ok { return o }
+                why = o.detail
+            } else {
+                why = "\(own.name) wasn't reachable"
+            }
         }
         if let model = model {
             do {
@@ -770,15 +820,18 @@ public final class Brain {
                 o.localized = true
                 o.source = "model"
                 o.language = turn.language
+                o.detail = why.isEmpty ? "Answered on this phone" : "Answered on this phone — \(why)"
                 if !o.text.isEmpty { return o }
             } catch {
-                // fall through
+                why = why.isEmpty ? "the phone's model failed: \(error.localizedDescription)" : why
             }
         }
         if !preferPC, let bridge = pc, let own = ownPC(), own.online {
             return await ask(bridge, peer: own, text: original, turn: turn)
         }
-        return Outcome("I don't know how to do that yet.", ok: false)
+        var o = Outcome("I don't know how to do that yet.", ok: false)
+        o.detail = why
+        return o
     }
 
     private func systemPrompt(_ turn: LangTurn) -> String {

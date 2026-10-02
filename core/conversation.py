@@ -271,6 +271,15 @@ class ConversationController:
             if self._looks_like_echo(text, confidence, state):
                 return
 
+        if busy and self._thinking_lock.locked():
+            # The previous turn is still working (a long automation): stop it at
+            # its next step, or the new request waits behind it and is dropped.
+            # Not when it's only saying its answer: talking over a question
+            # ("Which account?" — "School.") answers it.
+            from core.activity import activity
+            if state == ConvState.THINKING or activity.foreground:
+                from core.cancel import cancel
+                cancel.trip("current")
         if state in (ConvState.THINKING, ConvState.SPEAKING):
             # New speech while SAINT is busy = an interruption with a new
             # request: cancel the current answer and handle the new one.
@@ -324,6 +333,9 @@ class ConversationController:
                 self._active_turn_id = -1
             event_bus.emit_event(EventType.CONVERSATION_INTERRUPTED, {"source": source})
             if source == "button":
+                # The stop button also stops an automation that's running.
+                from core.cancel import cancel
+                cancel.trip("current")
                 assistant_state.end_turn()
 
     _STOP_FILLER = {"okay", "ok", "saint", "hey", "please", "just", "now", "oh", "um", "uh", "wait",
@@ -411,9 +423,10 @@ class ConversationController:
 
     def _thinking_thread(self, text, is_interruption, turn_id, session_id, request_id, stream_id):
         """Runs in background thread: agent/AI tokens → TTS."""
-        # A previous (cancelled) turn may still be unwinding; wait for it
-        # rather than silently dropping this request.
-        if not self._thinking_lock.acquire(timeout=5.0):
+        # A previous (cancelled) turn may still be unwinding — a step of an
+        # automation finishing (a page loading, a click being verified); wait
+        # for it rather than dropping this request.
+        if not self._thinking_lock.acquire(timeout=float(config.get("conversation.turn_wait_sec", 20.0))):
             log.error("conversation.turn.dropped turn=%d (previous turn stuck)", turn_id)
             event_bus.emit_event(EventType.ERROR, {"error": "Previous request is still running."})
             return

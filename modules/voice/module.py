@@ -430,8 +430,11 @@ class VoiceModule(BaseModule):
         self._spot_voiced.append(bool(raw_voice and mic_rms >= 0.6 * self._floor_cache))
         voiced = sum(self._spot_voiced)
         now = time.monotonic()
-        # Check once a burst of speech (>= 240 ms) has ended.
-        if self._spot_busy or voiced < 8 or self._spot_voiced[-1] or now - self._spot_at < 0.6:
+        # Check once a burst of speech (>= 240 ms) has ended — or every second while the
+        # sound never stops (music on, a loud room): the burst then never "ends", and
+        # "stop" said over it went unheard (2026-10-01).
+        ended = not self._spot_voiced[-1]
+        if self._spot_busy or voiced < 8 or now - self._spot_at < (0.6 if ended else 1.0):
             return False
         self._spot_busy = True
         self._spot_at = now
@@ -441,7 +444,14 @@ class VoiceModule(BaseModule):
             try:
                 res = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
                 heard = (getattr(res, "text", "") or "").strip()
-                if heard and self._STOP_PHRASE.search(heard) and not self._is_own_echo(heard):
+                m = self._STOP_PHRASE.search(heard) if heard else None
+                if m and self._music_playing:
+                    from modules.spotify.lyrics import lyrics_service
+                    if lyrics_service.matches_current(heard):
+                        m = None                  # the song singing "wait" / "stop", not the user
+                if m and (not self._saint_said(m.group(0)) or not self._is_own_echo(heard)):
+                    # A stop word SAINT isn't saying can't be its echo, even when the rest of
+                    # the transcript is SAINT's sentence ("…what I found about stop").
                     self._spotted_text = heard
                     self._spot_hit = True
             except Exception:
@@ -450,6 +460,10 @@ class VoiceModule(BaseModule):
                 self._spot_busy = False
         threading.Thread(target=run, daemon=True, name="voice-stop-spotter").start()
         return False
+
+    def _saint_said(self, words: str) -> bool:
+        """Is ``words`` in the sentence SAINT is speaking?"""
+        return bool(re.search(rf"\b{re.escape(words.lower())}\b", (self._tts_text or "").lower()))
 
     def _is_own_echo(self, heard: str) -> bool:
         """Is ``heard`` just SAINT's own sentence picked up by the mic?"""
@@ -1031,6 +1045,11 @@ class VoiceModule(BaseModule):
             # word counts — or, while music plays, a bare playback hot-word
             # ("skip", "pause"). Nothing else from passive listening is kept or shown.
             hot = not self._starts_with_wake(raw_text) and self._is_music_hotword(raw_text, confidence)
+            if hot and 0 < rms < self._background_floor():
+                # "Next" / "skip it" sung by the song itself, coming back through the
+                # speakers: far quieter than the user saying it (2026-10-01).
+                log.info("voice.hotword.too_quiet rms=%.4f text=%r", rms, raw_text)
+                return ""
             if hot:
                 text = raw_text.strip()
                 log.info("voice.hotword session=%s conf=%.2f text=%r", session_id, confidence, text)

@@ -1558,14 +1558,62 @@ class SpotifyTools:
         if not r["queued"]:
             threading.Thread(target=self._radio_fill, args=(r["gen"],), daemon=True, name="spotify-radio").start()
 
-    def _radio_stop(self, why: str = ""):
+    def _radio_stop(self, why: str = "", orphan: bool = True):
+        """``orphan``: SAINT replaced the music, so the auto-queue's songs still in
+        Spotify's queue are leftovers to skip. When it only *noticed* something else
+        playing, what's queued is the user's queue now and is left alone."""
         with self._lock:
             if self._radio is None:
                 return
-            self._radio_orphan_leftovers()
+            if orphan:
+                self._radio_orphan_leftovers()
             logger.info("spotify.radio.stop (%s)", why)
             self._radio = None
             self._radio_gen += 1
+
+    @staticmethod
+    def _song_key(item: Optional[Dict[str, Any]]) -> str:
+        """'name|first artist' — the same song under another id (Spotify relinks
+        tracks per market, so the id that plays can differ from the one queued)."""
+        if not item:
+            return ""
+        artists = item.get("artists") or []
+        first = artists[0].get("name", "") if artists and isinstance(artists[0], dict) else ""
+        return f"{(item.get('name') or '').strip().lower()}|{first.strip().lower()}"
+
+    def _radio_id(self, r: Dict[str, Any], st: Dict[str, Any]) -> Optional[str]:
+        """The id the radio knows the playing song by (queued, seed or known), or None."""
+        item = st.get("item") or {}
+        ids = [st.get("id"), (item.get("linked_from") or {}).get("id")]
+        known = set(r["queued"]) | set(r["known"]) | ({r["played"]} if r["played"] else set())
+        for i in ids:
+            if i and i in known:
+                return i
+        key = self._song_key(item)
+        if not key:
+            return None
+        if r.get("seed") and self._song_key(r["seed"]) == key:
+            return r["played"] or r["seed"].get("id")
+        for qid in list(r["queued"]) + list(r["known"]):
+            t = (self._rec_ids.get(qid) or {}).get("track") or {}
+            if t and f"{(t.get('name') or '').strip().lower()}|{(t.get('artist') or '').strip().lower()}" == key:
+                return qid
+        return None
+
+    def _may_auto_skip(self) -> bool:
+        """At most three automatic skips in two minutes: a wrong guess (a song
+        marked a leftover that the user wanted) must not turn into a skip storm."""
+        now = time.time()
+        recent = [t for t in self.__dict__.setdefault("_auto_skips", []) if now - t < 120]
+        if len(recent) >= 3:
+            if self._radio_orphans:
+                logger.warning("spotify.autoskip.guard: %d auto-skips in 2 min, forgetting leftovers", len(recent))
+            self._radio_orphans.clear()
+            self._skip_when_up.clear()
+            self._auto_skips = recent
+            return False
+        self._auto_skips = recent + [now]
+        return True
 
     def _radio_orphan_leftovers(self):
         """Caller holds the lock. Queued songs of the radio being replaced that
@@ -1632,7 +1680,7 @@ class SpotifyTools:
             if self._skip_when_up.pop(tid, None) is not None:
                 orphan = True                   # the user said it doesn't fit before it came up
             r = self._radio
-        if orphan and st.get("is_playing"):
+        if orphan and st.get("is_playing") and self._may_auto_skip():
             # Left over from an earlier auto-queue: the user has moved on from it.
             logger.info("spotify.radio.skip_leftover %r", st.get("track"))
             with self._lock:
@@ -1646,6 +1694,7 @@ class SpotifyTools:
             return
         if r is None:
             return
+        tid = self._radio_id(r, st) or tid
         if tid in r["queued"]:
             i = r["queued"].index(tid)
             r["last_index"] = max(r.get("last_index", -1), i)
@@ -1659,7 +1708,9 @@ class SpotifyTools:
                 threading.Thread(target=self._radio_fill, args=(r["gen"],), daemon=True,
                                  name="spotify-radio").start()
         elif time.time() - r["started"] > 20:
-            self._radio_stop("something else is playing")
+            # The user (or Spotify) chose this: stop topping up, but never skip
+            # what's already queued — that skipped songs the user wanted (2026-10-01).
+            self._radio_stop("something else is playing", orphan=False)
 
     def radio_status(self) -> Dict[str, Any]:
         with self._lock:
@@ -1962,7 +2013,7 @@ class SpotifyTools:
                 self._last = {"id": st["id"], "item": st["item"], "progress_ms": st["progress_ms"],
                               "duration_ms": st["duration_ms"] or 1, "seen_at": time.time(),
                               "is_playing": bool(st["is_playing"]), "context_uri": st.get("context_uri", "")}
-        if skip_disliked:
+        if skip_disliked and self._may_auto_skip():
             # A song they always skip in this playlist came up on its own: skip it for them.
             logger.info("spotify.skip_disliked %r in %s", st.get("track"), st.get("context_uri"))
             with self._lock:

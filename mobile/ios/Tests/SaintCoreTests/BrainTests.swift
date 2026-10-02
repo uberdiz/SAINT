@@ -248,6 +248,60 @@ final class BrainTests: XCTestCase {
 
     // MARK: everything else
 
+    func testMusicThePhonesSpotifyCantPlayGoesThroughThePC() async {
+        let r = rig(pc: true)
+        r.music.reply = "Spotify isn't connected."
+        let reply = await r.brain.handle("play Blinding Lights")
+        XCTAssertEqual(r.bridge.asked.first?.text, "play Blinding Lights")
+        XCTAssertEqual(reply.source, "pc")
+        XCTAssertTrue(reply.ok)
+        XCTAssertTrue(r.brain.actions.all().first?.detail?.contains("Played through Home PC") ?? false)
+    }
+
+    func testAMusicFailureIsLoggedAsFailedWithTheReason() async {
+        let r = rig()
+        r.music.reply = "Open Spotify on a device first, then try again."
+        let reply = await r.brain.handle("play some jazz")
+        XCTAssertFalse(reply.ok)
+        XCTAssertEqual(r.brain.actions.all().first?.status, "failed")
+    }
+
+    func testAPCWhoseLinkIsDownIsDialledBeforeThePhoneAnswers() async {
+        let r = rig(pc: true, model: true)
+        r.bridge.peers = [PeerInfo(id: "home", name: "Home PC", role: "own", platform: "windows", online: false)]
+        r.bridge.canReach = true
+        let reply = await r.brain.handle("why is the sky blue")
+        XCTAssertEqual(reply.source, "pc")
+        XCTAssertTrue(r.model.prompts.isEmpty)
+        XCTAssertEqual(r.brain.actions.all().first?.detail, "Ran on Home PC")
+    }
+
+    func testWhenThePCCantBeReachedThePhoneAnswersAndTheLogSaysWhy() async {
+        let r = rig(pc: true, model: true)
+        r.bridge.peers = [PeerInfo(id: "home", name: "Home PC", role: "own", platform: "windows", online: false)]
+        let reply = await r.brain.handle("why is the sky blue")
+        XCTAssertEqual(reply.source, "model")
+        XCTAssertTrue(r.bridge.asked.isEmpty)
+        XCTAssertEqual(r.brain.actions.all().first?.detail, "Answered on this phone — Home PC wasn't reachable")
+    }
+
+    func testAnEmptyAnswerFromThePCIsNotTakenAsTheReply() async {
+        let r = rig(pc: true, model: true)
+        r.bridge.answer = AskAnswer(text: "")
+        let reply = await r.brain.handle("why is the sky blue")
+        XCTAssertEqual(reply.source, "model")
+        XCTAssertEqual(reply.text, "Because of Rayleigh scattering.")
+    }
+
+    func testATaskTaughtStepByStepOnThePCRunsThere() async {
+        let r = rig(pc: true)
+        r.brain.skills.learn(phrase: "write an email", steps: ["ask: Who's it to? -> recipient", "type {recipient}"],
+                             how: "lesson")
+        let reply = await r.brain.handle("write an email")
+        XCTAssertEqual(r.bridge.asked.first?.text, "write an email")
+        XCTAssertEqual(reply.source, "pc")
+    }
+
     func testUnknownThingsGoToThePCFirstThenTheModel() async {
         let withPC = rig(pc: true, model: true)
         let viaPC = await withPC.brain.handle("why is the sky blue")

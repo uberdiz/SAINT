@@ -11,9 +11,12 @@ public struct ActionEntry: Codable, Equatable, Identifiable {
     public var status: String            // done, failed, queued, sent (ran on the PC), info
     public var source: String            // phone, pc, model
     public var device: String            // this phone's name
+    /// Where it ran and why ("Ran on Home PC", "Answered on this phone — Home PC wasn't reachable"). Optional so
+    /// logs written before it existed still load.
+    public var detail: String?
 
     public init(id: String = Ids.make(12), ts: Date = Date(), request: String, action: String, kind: String,
-                status: String, source: String = "phone", device: String = "") {
+                status: String, source: String = "phone", device: String = "", detail: String? = nil) {
         self.id = id
         self.ts = ts
         self.request = String(request.prefix(300))
@@ -22,6 +25,7 @@ public struct ActionEntry: Codable, Equatable, Identifiable {
         self.status = status
         self.source = source
         self.device = device
+        self.detail = detail.map { String($0.prefix(300)) }
     }
 }
 
@@ -66,8 +70,10 @@ public final class ActionLog: SyncAdapter {
     public func snapshot() -> [String: JSONObject] {
         var out: [String: JSONObject] = [:]
         for e in all() {
-            out[e.id] = ["ts": e.ts.timeIntervalSince1970, "request": e.request, "action": e.action, "kind": e.kind,
-                         "status": e.status, "source": e.source, "device": e.device]
+            var item: JSONObject = ["ts": e.ts.timeIntervalSince1970, "request": e.request, "action": e.action,
+                                    "kind": e.kind, "status": e.status, "source": e.source, "device": e.device]
+            if let detail = e.detail, !detail.isEmpty { item["detail"] = detail }
+            out[e.id] = item
         }
         return out
     }
@@ -81,7 +87,7 @@ public final class ActionLog: SyncAdapter {
                 d.append(ActionEntry(id: change.uid, ts: ts, request: data["request"] as? String ?? "",
                                      action: data["action"] as? String ?? "", kind: data["kind"] as? String ?? "",
                                      status: data["status"] as? String ?? "info", source: data["source"] as? String ?? "phone",
-                                     device: data["device"] as? String ?? ""))
+                                     device: data["device"] as? String ?? "", detail: data["detail"] as? String))
             }
             ActionLog.prune(&d)
             return []

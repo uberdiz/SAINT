@@ -235,7 +235,8 @@ def _context() -> str:
             f'{"" if t["ok"] else " (failed)"}: "{t["reply"]}"' for t in turns[-4:]))
     if lessons:
         lines.append("Mistakes SAINT made before (don't repeat them):\n" + lessons)
-    learned = skills.recent(12)
+    from modules.learning.lesson import is_lesson
+    learned = [s for s in skills.recent(16) if not is_lesson(s.steps)][:12]   # lessons ask questions: not plan steps
     if learned:
         lines.append("Things SAINT has already learned:\n" +
                      "\n".join(f"  - {s.phrase} -> {json.dumps(s.steps)}" for s in learned))

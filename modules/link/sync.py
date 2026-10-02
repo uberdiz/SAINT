@@ -333,14 +333,17 @@ class ActionLogAdapter(Adapter):
                 if uid not in entries:
                     new.append(data)
                 entries[uid] = {k: data.get(k) for k in ("ts", "request", "action", "kind", "status", "source", "device")}
+                if data.get("detail"):
+                    entries[uid]["detail"] = data["detail"]          # where it ran and why (iPhone 0.4)
             cutoff = time.time() - self.KEEP_DAYS * 86400
             entries = {k: v for k, v in entries.items() if float(v.get("ts", 0) or 0) >= cutoff}
             self._save(entries)
         try:
             from core.history import history
             for d in sorted(new, key=lambda e: e.get("ts", 0)):
+                reply = d.get("action", "") + (f" ({d['detail']})" if d.get("detail") else "")
                 history.append({"ts": float(d.get("ts") or time.time()), "source": "iphone",
-                                "user": d.get("request", ""), "reply": d.get("action", ""), "tools": [],
+                                "user": d.get("request", ""), "reply": reply, "tools": [],
                                 "device": d.get("device", ""), "ok": d.get("status") != "failed"})
         except Exception:
             log.exception("link.actionlog.history_failed")

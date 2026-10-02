@@ -424,9 +424,9 @@ final class AppModel: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
         let lines = brain.actions.all().map { e in
-            [f.string(from: e.ts), e.kind, e.status, e.source, e.request, e.action].joined(separator: "\t")
+            [f.string(from: e.ts), e.kind, e.status, e.source, e.request, e.action, e.detail ?? ""].joined(separator: "\t")
         }
-        return (["time\tkind\tstatus\twhere\tyou asked\tSAINT did"] + lines).joined(separator: "\n")
+        return (["time\tkind\tstatus\twhere\tyou asked\tSAINT did\tdetail"] + lines).joined(separator: "\n")
     }
 
     func pair(address: String, code: String, role: String) async -> String? {
@@ -500,8 +500,17 @@ final class AppModel: ObservableObject {
     }
 
     func syncNow() async {
-        let n = await link.syncNow()
-        banner = n > 0 ? "Synced." : "No device to sync with right now."
+        let results = await link.syncAll()
+        if results.isEmpty {
+            banner = "Pair your PC first (Devices), then sync."
+        } else {
+            banner = results.map { r -> String in
+                if let why = r.error { return "Couldn't reach \(r.peer): \(why)" }
+                if r.received == 0 && r.sent == 0 { return "Already in sync with \(r.peer) — nothing new on either side." }
+                return "Synced with \(r.peer): got \(r.received), sent \(r.sent)."
+            }.joined(separator: " ")
+            if results.contains(where: { $0.error == nil }) { lastSync = Date() }
+        }
         refresh()
     }
 

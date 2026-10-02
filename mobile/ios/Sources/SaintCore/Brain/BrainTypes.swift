@@ -32,6 +32,14 @@ public protocol MusicService: AnyObject {
     func perform(_ intent: MusicIntent) async -> String
 }
 
+/// The phrases a MusicService answers with when it couldn't do it (they used to be logged as done).
+public func musicFailed(_ text: String) -> Bool {
+    let t = text.lowercased()
+    return ["isn't connected", "open spotify on a device", "spotify said no", "spotify is busy",
+            "couldn't reach spotify", "didn't find anything", "isn't playing anything", "nothing found"]
+        .contains { t.contains($0) }
+}
+
 /// Things the phone itself can do. Anything iOS doesn't let an app do directly goes through a Shortcut the user
 /// made (``shortcut``/``system``), and sending a text or placing a call is always confirmed by the user in
 /// Apple's own sheet.
@@ -107,6 +115,12 @@ public protocol PCBridge: AnyObject {
     /// One of the closed list of remote automations (send_prompt, message, open_url, run_scene, play_music, ask).
     func runAutomation(peerID: String, name: String, args: JSONObject) async throws -> String
     func syncNow() async -> Int
+    /// Can that device be reached right now (dialling it if the link is down)?
+    func reachable(peerID: String) async -> Bool
+}
+
+public extension PCBridge {
+    func reachable(peerID: String) async -> Bool { false }
 }
 
 public protocol LanguageModel: AnyObject {

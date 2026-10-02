@@ -339,6 +339,21 @@ public final class LinkManager: PCBridge {
 
     // MARK: asking and doing
 
+    /// Reach that device now if the link is down — a few seconds at most — so the phone uses your PC
+    /// whenever it can instead of only while a connection happens to be open.
+    public func reachable(peerID: String) async -> Bool {
+        if liveConnection(peerID) != nil { return true }
+        do {
+            _ = try await withTimeout(5) { [weak self] () async throws -> LinkConnection in
+                guard let self = self else { throw LinkError.closed }
+                return try await self.connect(peerID: peerID)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
     public func ask(peerID: String, text: String, language: String) async throws -> AskAnswer {
         let connection = try await connect(peerID: peerID)
         let reply = try await connection.request("chat.ask", ["text": String(text.prefix(2000)), "lang": language], timeout: 150)
@@ -383,14 +398,41 @@ public final class LinkManager: PCBridge {
 
     // MARK: sync
 
+    /// What one device sync did, for "Synced: got 3, sent 1" / "Already in sync" / why it couldn't.
+    public struct SyncResult {
+        public var peer: String
+        public var received: Int
+        public var sent: Int
+        public var error: String?
+    }
+
+    /// Sync with every paired device of your own, dialling it first when the link is down (an explicit
+    /// "sync now" used to skip a PC that wasn't connected at that moment and report nothing).
+    public func syncAll() async -> [SyncResult] {
+        var out: [SyncResult] = []
+        for peer in peerStore.all() where peer.isOwn {
+            do {
+                let r = try await syncWith(peerID: peer.id)
+                out.append(SyncResult(peer: peer.name, received: r.received, sent: r.sent, error: nil))
+            } catch {
+                let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                out.append(SyncResult(peer: peer.name, received: 0, sent: 0, error: why))
+            }
+        }
+        return out
+    }
+
     @discardableResult
     public func syncNow() async -> Int {
-        var n = 0
+        await syncAll().filter { $0.error == nil }.count
+    }
+
+    /// The background path: only devices that are connected right now.
+    private func syncConnected() async {
         for id in connectedIDs() {
             guard let peer = peerStore.get(id), peer.isOwn else { continue }
-            if (try? await syncWith(peerID: id)) != nil { n += 1 }
+            _ = try? await syncWith(peerID: id)
         }
-        return n
     }
 
     private func syncSoon(delay: TimeInterval = 3) {
@@ -399,7 +441,7 @@ public final class LinkManager: PCBridge {
         debounce = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             if Task.isCancelled { return }
-            _ = await self?.syncNow()
+            await self?.syncConnected()
         }
         lock.unlock()
     }

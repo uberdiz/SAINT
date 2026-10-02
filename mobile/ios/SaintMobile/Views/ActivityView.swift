@@ -147,6 +147,10 @@ struct ActivityRow: View {
                     .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(2)
                 Text("“\(entry.request)” · \(entry.ts.formatted(date: .omitted, time: .shortened))\(entry.source == "pc" ? " · on PC" : "")")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(2)
+                if let detail = entry.detail, !detail.isEmpty {
+                    // Where it ran and why: "Answered on this phone — Home PC wasn't reachable".
+                    Text(detail).font(.system(size: 11)).foregroundStyle(Theme.muted).lineLimit(2)
+                }
             }
             Spacer(minLength: 6)
             StatusChip(status: entry.status)

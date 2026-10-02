@@ -43,6 +43,12 @@ class Activity:
                 self._steps[index] = name
         self._emit()
 
+    @property
+    def foreground(self) -> bool:
+        """A multi-step job (plan, scene, lesson) is running right now."""
+        with self._lock:
+            return bool(self._label)
+
     def end(self):
         with self._lock:
             if self._stack:

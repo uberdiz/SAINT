@@ -52,6 +52,19 @@ page — is in the rest of this repository. The phone and the PC share their lan
 
 ## Honest status
 
+**Unreleased — your PC's brain whenever it can be reached:**
+
+- Anything the phone doesn't do itself goes to your PC's SAINT first — the phone dials it if the link is down (up to
+  5 s) — and only then to Apple's on-device model or Claude. An empty answer from the PC isn't taken as the reply.
+- Music the phone's Spotify can't play (not signed in, no device, refused) is played through your PC instead, and a
+  Spotify failure is logged as *failed* (it used to be logged as done).
+- The Activity log shows where each request ran and why: "Ran on Home PC", "Answered on this phone — Home PC wasn't
+  reachable", "Played through Home PC — Spotify isn't connected". The detail syncs to the PC's History.
+- **Sync now** dials your PC if it isn't connected and says what happened: "Synced with Home PC: got 3, sent 1",
+  "Already in sync — nothing new on either side", or why it couldn't reach it.
+- Tasks taught to the PC step by step (lessons, e.g. "write an email") run on the PC when asked from the phone; its
+  questions come back to the phone and your answers go to the PC.
+
 **0.3.0 (build 3) — the desktop's look, and the whole phone by voice:**
 
 - **New UI** (designed in Figma from the desktop app; mockup in [docs/design/iphone-ui-2.0.png](../docs/design/iphone-ui-2.0.png)):

@@ -181,15 +181,43 @@ def test_playing_a_playlist_stops_the_auto_queue(sp):
     assert sp._radio is None
 
 
-def test_user_moving_on_stops_radio_and_leftovers_are_skipped(sp):
+def test_user_moving_on_stops_radio_but_never_skips_what_is_queued(sp):
+    # 2026-10-01: noticing "something else" playing used to mark the whole auto-queue
+    # as leftovers, and SAINT then skipped song after song the user wanted.
     sp.play_query("Titi Me Pregunto by Bad Bunny")
     assert _wait_for(lambda: len(sp.client.queued()) >= RADIO_BATCH)
-    leftover = sp._radio["queued"][2]
+    queued = sp._radio["queued"][2]
     sp._radio["started"] -= 60
     sp._radio_tick({"id": "something-else", "is_playing": True}, None)
     assert sp._radio is None
-    sp._radio_tick({"id": leftover, "is_playing": True}, None)
-    assert ("next",) in sp.client.calls
+    sp._radio_tick({"id": queued, "is_playing": True}, None)
+    assert ("next",) not in sp.client.calls
+
+
+def test_a_queued_song_playing_under_another_id_keeps_the_radio(sp):
+    """Spotify relinks tracks per market: the id that plays isn't always the one queued."""
+    sp.play_query("Titi Me Pregunto by Bad Bunny")
+    assert _wait_for(lambda: len(sp.client.queued()) >= RADIO_BATCH)
+    r = sp._radio
+    r["started"] -= 60
+    rec = sp._rec_ids[r["queued"][1]]["track"]
+    item = {"id": "relinked-id", "name": rec["name"], "artists": [{"name": rec["artist"]}]}
+    sp._radio_tick({"id": "relinked-id", "is_playing": True, "item": item}, None)
+    assert sp._radio is r and r["last_index"] == 1
+    linked = {"id": "other-id", "name": "x", "artists": [], "linked_from": {"id": r["queued"][2]}}
+    sp._radio_tick({"id": "other-id", "is_playing": True, "item": linked}, None)
+    assert sp._radio is r and r["last_index"] == 2
+
+
+def test_leftover_skips_never_turn_into_a_skip_storm(sp):
+    sp.play_query("Titi Me Pregunto by Bad Bunny")
+    assert _wait_for(lambda: len(sp.client.queued()) >= RADIO_BATCH)
+    leftovers = list(sp._radio["queued"])
+    sp.play_query("Stand By Me")                       # replaced by SAINT: those are leftovers now
+    for tid in leftovers:
+        sp._radio_tick({"id": tid, "is_playing": True}, None)
+    assert sp.client.calls.count(("next",)) == 3
+    assert not sp._radio_orphans
 
 
 def test_queue_more_like_this_keeps_the_song_playing(sp):

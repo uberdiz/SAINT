@@ -1294,7 +1294,8 @@ def parse_desktop(text: str) -> Optional[Intent]:
     # type
     m = re.match(r"^(?:type|write|enter)\s+(?:out\s+)?(.+?)(?:\s+(?:in|into|in the|into the|on)\s+(?:the\s+)?(.+?))?"
                  r"(?:\s+and (?:press|hit) enter)?$", raw, re.I)
-    if m and t.split()[0] in ("type", "write", "enter"):
+    if m and t.split()[0] in ("type", "write", "enter") and not (
+            t.startswith("write ") and _WRITE_A_THING.match(m.group(1).strip())):
         text_to_type = m.group(1).strip().strip('"“”')
         target = m.group(2)
         enter = bool(re.search(r"and (press|hit) enter$", t))
@@ -1937,6 +1938,14 @@ def _route_composite(text: str) -> Optional[Intent]:
         task = task_memory.begin(text, [dict(src, label=step_label(it.name)) for it, src in zip(intents, sources)])
         return run_plan(intents, task=task)
     return Intent("composite:" + "+".join(i.name for i in intents), run, "composite")
+
+
+# "Write an email to Sam" / "write a reply" is a job to do, not the words "an email"
+# to type into whatever has focus (2026-10-01): it goes to modules/learning/lesson.py.
+_WRITE_A_THING = re.compile(r"^(?:me\s+)?(?:a|an|the|my|another|a new)\s+(?:new\s+|short\s+|quick\s+)?"
+                            r"(?:e-?mail|message|reply|letter|post|tweet|title|subject(?: line)?|essay|paragraph|"
+                            r"summary|text|draft|response|comment|review|bio|caption|description|cover letter)\b",
+                            re.I)
 
 
 # A new command starting mid-sentence: "open my browser search YouTube for X"

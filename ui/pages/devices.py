@@ -405,7 +405,8 @@ class DevicesPage(Page):
     def _sync(self, peer_id):
         self._say("Syncing…")
         run_async(lambda: _link().sync_with(peer_id),
-                  lambda r: self._say(f"Synced: received {r['received']}, sent {r['sent']}."),
+                  lambda r: self._say(f"Synced: received {r['received']}, sent {r['sent']}." if r["received"] or r["sent"]
+                                      else "Already in sync — nothing new on either side."),
                   lambda e: self._say(str(e), True))
 
     def _send_file(self, peer_id):

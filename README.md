@@ -46,6 +46,29 @@ UI elements). The language model runs locally through [Ollama](https://ollama.co
 
 ## What's new in this version
 
+**Since 2.2 — SAINT learns long tasks by asking, and interrupting works mid-automation:**
+
+- **Walk SAINT through a task once.** Ask for something it was never taught that takes several steps ("write an
+  email", "post on Reddit", "fill out the form") and it no longer guesses ("write an email" used to type the words
+  "an email"): it asks where to start, does each step as you say it, and keeps them. Steps can be questions it
+  asks every time ("ask me who it's to", "ask me which account, personal or school"), text the model writes
+  ("write a short subject line"), a yes before something final ("ask me before you send it"), or a part only you
+  can do ("I'll do it" — next time it waits for "next"). Next time, "write an email to Sam about the trip" fills in
+  what you said and asks only the rest; a step that stops working is asked about and replaced. See
+  [Learning](#learning).
+- **Interrupting a long automation.** A new request while SAINT is still working stops the old one at its next step
+  and runs — it used to wait 5 s and then be dropped. The Stop button stops automations too. Talking over a question
+  SAINT is asking still just answers it.
+- **Spotify stops skipping songs you wanted.** When SAINT only noticed something else playing it marked the whole
+  auto-queue as leftovers and skipped them one after another; now only music SAINT itself replaced is skipped, at
+  most three songs in two minutes, and a queued song playing under a relinked Spotify id is recognised. "Next" or
+  "skip it" sung by the song (too quiet to be you) no longer skips.
+- **iPhone uses your PC when it can.** Anything the phone doesn't do itself goes to your PC — dialled on demand when
+  the link is down — and only then to the phone's own model. Music the phone's Spotify can't play is played through
+  the PC. The Activity log says where each request ran and why ("Answered on this phone — Home PC wasn't
+  reachable"), and Sync now reaches the PC even when it wasn't connected and says "Already in sync" instead of
+  "received 0, sent 0".
+
 **2.2 — a 3x smaller install, your iPhone in History, and SAINT from anywhere:**
 
 - **Smaller, faster installer.** SAINT.exe speaks with the same Kokoro voice through onnxruntime instead of PyTorch +
@@ -649,6 +672,11 @@ The microphone is **never muted** while SAINT speaks:
 You can also say "stop" or "never mind", or press **Stop speaking**. Tune this in Settings → Voice →
 Interruptions.
 
+While SAINT is *working* (a multi-step automation, a lesson step) rather than talking, a new request
+interrupts too: the automation stops at its next step and the new request runs (it waits up to
+`conversation.turn_wait_sec`, 20 s, for a step that's mid-way, e.g. a page loading). "Stop" ends it
+without a new request. Talking over a question SAINT is asking only answers the question.
+
 ---
 
 ## AI provider / Ollama
@@ -985,8 +1013,35 @@ request ─► learned skill? ─► run its steps
   screen, maximized or minimized are. Programs SAINT couldn't find by name are added to `desktop.apps` with
   the .exe that ran. Plain typing is never recorded, only that it happened. Nothing is kept but the
   commands. After a failure SAINT only *offers* to watch; "yes" starts it.
+* **Lessons** (`lesson.py`) — a task with several steps that SAINT was never taught ("write an email",
+  "post on Reddit") is never guessed at. SAINT says so and asks where to start, then does each step as you
+  say it (one at a time, so a wrong step is caught at once) and keeps it:
+
+  ```
+  you   write an email                         SAINT  I haven't learned how … where do I start?
+  you   go to https://mail.google.com/…        (done, kept)
+  you   ask me which account to send from, personal or school
+  SAINT Which account should I send from, personal or school?        you  school
+  you   click me@school.edu     SAINT  Is that the one for "school"? … and for "personal"?
+  you   click compose · ask me who it's to · type it in the to box · ask me what to write about
+  you   write a short subject line · click the subject box · type the subject
+  you   write the email · click the message body · type the email
+  you   ask me before you send it · click send · done
+  ```
+
+  Next time "send an email to Sam about the trip" runs it: Sam and the trip are taken from the request, so
+  it only asks which account; it reads each draft out ("Should I use it, or what should I change?" —
+  "make it shorter" rewrites it), and stops before "click send" unless you say yes. The model is used only
+  for the *write* steps; everything else is the normal router. A step that fails asks "How should I do it
+  now?" and the answer replaces just that step; "skip" skips it, "I'll do it" makes it your part.
+  "ask me … if you don't know it" keeps the answer for that exact question (e.g. each person's address).
+  Answers you give that appear in a step become `{names}`, so the next run uses the new ones. Say "undo"
+  to drop the last step, "cancel" to throw the lesson away, "stop" while it runs. Start one yourself with
+  "let me teach you how to …". Lessons are skills with step lines such as `ask: Who's it to? -> recipient`,
+  `write: a short subject line -> subject`, `type {subject}`, `confirm: Should I send it?`,
+  `you: hover over the profile picture`; on the iPhone they run on your PC.
 * Settings: `learning.planner`, `planner_timeout_sec`, `watch_and_learn`, `watch_after_failure`,
-  `watch_max_sec`, `watch_idle_sec`.
+  `watch_max_sec`, `watch_idle_sec`, `guided_lessons` (ask to be walked through unknown tasks; on).
 
 ---
 

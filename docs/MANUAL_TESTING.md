@@ -316,6 +316,28 @@ Learned requests show on **Automations → Learned** (Try it / Forget). Say "wha
 | 🔲 | A planned action you didn't want → "no, I didn't ask for that" | "Sorry — I won't do that … again"; the skill is gone from Learned; data/learning_journal.jsonl has the complaint |
 | No it cant find Giancarlos in my instagram and if i do it in a browser it doesnt work I have to be on the desktop. | "Open what Gian sent me on Instagram" | Instagram (app or web inbox) opens and the chat with Gian is clicked |
 
+## 2026-10-02: lessons, interrupting automations, Spotify skips, iPhone → PC
+
+- [ ] "Write an email" → SAINT says it hasn't learned it and asks where to start (nothing is typed). Walk it through:
+      go to Gmail, "ask me which account to send from, personal or school", answer, click your account (it asks
+      whether that's the one for your answer, then what to use for the other), "click compose", "ask me who it's
+      to", "type it in the to box", "ask me what to write about", "write a short subject line", click the subject
+      box, "type the subject", "write the email", click the body, "type the email", "ask me before you send it",
+      "click send", "done". Each step happens as you say it.
+- [ ] "Send an email to <someone> about <topic>": it only asks which account; reads the subject and the email
+      out ("make it more formal" rewrites it); stops before Send unless you say yes.
+- [ ] A step that can't be done ("hover over my profile") → "I did it" → next run says "Your turn: …" and waits
+      for "next". Break a step (rename the button it clicks) → it asks how to do it now and remembers the answer.
+- [ ] "Stop" while a lesson runs or waits → "Okay, I stopped."; the next sentence is a normal request again.
+- [ ] Start a long multi-step request, then say something else before it finishes → the old one stops at its
+      next step and the new request is answered (no "Previous request is still running").
+- [ ] Music on, SAINT talking: say "stop" → it stops within ~1 s.
+- [ ] "Play <song>" → it plays and similar songs follow; skip one yourself in Spotify, let a few play → nothing is
+      skipped that you didn't skip. A song with "next"/"skip" in the lyrics doesn't skip.
+- [ ] iPhone, PC on but the app's link dropped: ask something only the PC knows → answered by the PC (Activity:
+      "Ran on <PC>"). PC off → answered on the phone, Activity says why. "Play <song>" with the phone's Spotify
+      signed out → played through the PC. Sync now → "Synced …" / "Already in sync …" / why it couldn't.
+
 ## 2.1: Gaming Mode, monitors, tasks, startup, SAINT.exe
 
 - [ ] Start a single-player game with *Auto Gaming Mode* off: Gaming Mode stays off, the Halo hides over the

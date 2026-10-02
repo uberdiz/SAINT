@@ -201,6 +201,9 @@ final class FakeBridge: PCBridge {
     var asked: [(peer: String, text: String, language: String)] = []
     var automations: [(peer: String, name: String, args: JSONObject)] = []
     var answer = AskAnswer(text: "Done on the PC.")
+    /// What reachable(peerID:) says for a PC whose link is down (dialling it would work).
+    var canReach = false
+    func reachable(peerID: String) async -> Bool { canReach }
     func ask(peerID: String, text: String, language: String) async throws -> AskAnswer {
         asked.append((peer: peerID, text: text, language: language))
         return answer
