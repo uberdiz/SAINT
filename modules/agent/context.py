@@ -26,6 +26,7 @@ class DesktopContext:
         self._domain = ("", 0.0)
         self._spotify_playing = (False, 0.0)
         self._follow_monitor = None   # "watch my left screen": screen commands prefer this monitor
+        self._volume = ("", 0, 0.0)   # what "turn it back up" means: (system|spotify, points, time)
         try:
             from core.events import event_bus, EventType
             event_bus.subscribe(self._on_event)
@@ -98,6 +99,19 @@ class DesktopContext:
             d, t = self._domain
         return d if time.time() - t <= max_age else ""
 
+    def note_volume(self, target: str, points: int = 0):
+        """SAINT just changed the system or the Spotify volume."""
+        with self._lock:
+            self._volume = (target, int(points or 0), time.time())
+
+    def volume_target(self):
+        """(target, points) of the last volume change, or ("", 0) once it's old.
+        "Turn it down" ... "turn it back up" moves the same thing back
+        (it went to Spotify after a system change on 2026-09-30)."""
+        with self._lock:
+            target, points, t = self._volume
+        return (target, points) if target and time.time() - t < REFERENCE_TTL else ("", 0)
+
     def follow_monitor(self):
         with self._lock:
             return self._follow_monitor
@@ -111,6 +125,7 @@ class DesktopContext:
             self._window = self._element = None
             self._domain = ("", 0.0)
             self._spotify_playing = (False, 0.0)
+            self._volume = ("", 0, 0.0)
 
 
 desktop_context = DesktopContext()

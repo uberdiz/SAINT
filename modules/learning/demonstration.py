@@ -255,7 +255,7 @@ class Recorder:
         if os.name != "nt" or not config.get("learning.watch_and_learn", True):
             return False
         from core.game_mode import game_mode
-        if game_mode.active:                  # never poll the keyboard while a game runs
+        if game_mode.busy:                    # never poll the keyboard while a game runs
             log.info("learning.watch.skipped game_mode game=%r", game_mode.game)
             return False
         if self.active:
@@ -587,7 +587,12 @@ def _save(phrase: str, good: List[str], skipped: bool = False) -> str:
     from modules.learning.skills import skills
     skill = skills.learn(phrase, good, "shown")
     if skill is None:
-        return "Okay."
+        # This used to answer just "Okay." and keep nothing (2026-10-02: "add a text file in that folder").
+        word = skills.pointing_word(phrase)
+        if word:
+            return (f"I saw it, but “{phrase}” points at something different each time (“{word}”), so I can't keep "
+                    f"it as a fixed recipe. Say it with the actual name — like “… in Downloads” — and I'll learn it.")
+        return f"I saw it, but “{phrase}” is too general to save as its own command, so I haven't kept it."
     what = ", then ".join(good)
     note = " Some of what you did I can't repeat, so I left it out." if skipped else ""
     text = (f"Got it. Next time you say “{skill.said or phrase}”, I'll {what}.{note} "
@@ -616,16 +621,29 @@ def watch_for(phrase: str) -> bool:
     return recorder.start(phrase, on_done=done)
 
 
-def offer(phrase: str) -> bool:
-    """After a failure: *ask* to watch ("want to show me?") instead of starting
-    to record whatever the user does next. "Yes" starts watching."""
+def can_watch() -> bool:
+    """Watching the user is possible right now (never while a game runs)."""
     if os.name != "nt" or not config.get("learning.watch_and_learn", True):
         return False
+    from core.game_mode import game_mode
+    return not game_mode.busy
+
+
+def offer(phrase: str) -> bool:
+    """After a failure: *ask* to watch ("want to show me?") instead of starting
+    to record whatever the user does next. "Yes" starts watching. Not offered
+    when SAINT can't watch: "Yes." during Roblox got "I can't watch the screen
+    on this computer." (2026-09-30) — the user is asked to *say* it instead."""
+    if not can_watch():
+        return False
+    from modules.learning.skills import skills
+    if skills.pointing_word(phrase):
+        return False          # "... in that folder" can't be saved as a recipe: don't ask to watch for nothing
     from modules.agent.confirm import PendingAction, confirmations
 
     def run():
         if not watch_for(phrase):
-            return "I can't watch the screen on this computer."
+            return "I can't watch right now — just tell me what it should do and I'll remember it."
         return "Okay, I'm watching. Do it now, then say “done”."
     confirmations.ask(PendingAction(description="watch you do it", run=run, tool="learning.watch"))
     return True

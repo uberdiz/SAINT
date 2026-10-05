@@ -10,12 +10,13 @@ the GUI thread and reports back.
 
 from modules.automation.tools import P, PermissionLevel, Tool, ToolError
 
-PAGES = ("Home", "Music", "Automations", "History", "Memory", "Activity", "Storage", "System", "Settings")
+PAGES = ("Home", "Music", "Automations", "History", "Memory", "Activity", "Storage", "System", "Devices", "Settings")
 _PAGE_ALIASES = {"dashboard": "Home", "home": "Home", "main": "Home", "music": "Music", "spotify": "Music",
                  "automations": "Automations", "automation": "Automations", "scenes": "Automations",
                  "reminders": "Automations", "history": "History", "stats": "History", "memory": "Memory",
                  "memories": "Memory", "activity": "Activity", "console": "Activity", "logs": "Activity",
-                 "system": "System", "storage": "Storage", "junk": "Storage", "disk space": "Storage", "drives": "Storage", "settings": "Settings", "preferences": "Settings"}
+                 "system": "System", "devices": "Devices", "device": "Devices", "link": "Devices", "phone": "Devices",
+                 "collaborators": "Devices", "storage": "Storage", "junk": "Storage", "disk space": "Storage", "drives": "Storage", "settings": "Settings", "preferences": "Settings"}
 FEATURES = ("mini_player", "lyrics", "halo", "overlay", "action_notices", "theme")
 
 

@@ -1,15 +1,20 @@
-# SAINT — Python 3.12+ (developed and tested on Python 3.14, Windows 11)
+# SAINT — Python 3.12 target for Windows builds, Windows 11 runtime
 #
-# PyTorch: Kokoro TTS runs on PyTorch. For GPU speech output install the CUDA
-# build FIRST (RTX 50-series / Blackwell needs CUDA 12.8+ wheels), e.g.
-#   pip install --index-url https://download.pytorch.org/whl/cu128 torch torchaudio
-# then install the rest with:  pip install -r requirements.txt
+# The end-user EXE/installer does not require Python. Python 3.12 is only the
+# reproducible build environment used by GitHub Actions.
+#
+# PyTorch: install the correct CUDA build FIRST on NVIDIA systems (RTX 50-series /
+# Blackwell needs CUDA 12.8+ wheels). setup.bat handles this automatically.
+#
+# All normal runtime and Windows release-build dependencies are listed here so a
+# fresh checkout can be prepared with:
+#   python -m pip install -r requirements.txt
 
 # UI / core
 PySide6>=6.6.0
 requests>=2.31.0
 psutil>=5.9.0
-numpy>=1.24.0
+numpy>=2.0.0,<3.0.0
 
 # Audio, wake word, speech recognition
 sounddevice>=0.4.6
@@ -17,10 +22,14 @@ soundfile>=0.12.1
 onnxruntime>=1.16.0          # runs the hey_saint.onnx wake-word model (CPU)
 faster-whisper>=1.0.3        # speech-to-text (CTranslate2; bundles its own CUDA runtime)
 
-# Speech output
+# Speech output — Kokoro. SAINT.exe runs it on onnxruntime (kokoro-onnx); source runs use PyTorch when it loads.
+# Install requirements WITHOUT --upgrade: that replaces the CUDA torch wheel with PyPI's CPU one and leaves
+# torchaudio on the old version, which breaks `import kokoro` (libtorchaudio.pyd won't load).
+kokoro-onnx>=0.4.9           # the voice in SAINT.exe (no PyTorch); model: tools/get_kokoro_onnx.py
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 torch>=2.2.0
 kokoro>=0.7.0
-misaki[en]>=0.7.0
+misaki[en]>=0.7.0            # text -> phonemes (needs en_core_web_sm above; it can't download it inside SAINT.exe)
 espeakng_loader>=0.2.4       # espeak-ng for out-of-dictionary words (e.g. names)
 phonemizer>=3.2.0
 
@@ -40,6 +49,14 @@ winrt-Windows.Storage.Streams>=3.0
 
 # Spotify login tokens are stored in the Windows Credential Manager
 keyring>=25.0.0
+
+# SAINT Link: connect your phone, other PCs and friends' SAINTs (modules/link)
+segno>=1.6.0                 # the pairing QR code on the Devices page (pure Python)
+zeroconf>=0.130.0            # optional: your devices find each other by name (mDNS); IP:port works without it
+cryptography>=42.0.0         # optional: faster encryption for file transfers (SAINT has a pure-Python fallback)
+
+# Windows release / packaging
+PyInstaller>=6.0.0
 
 # Tests
 pytest>=8.0.0

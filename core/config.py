@@ -90,6 +90,11 @@ DEFAULT_CONFIG = {
         # energy of the audio it is playing, so its own voice through the
         # speakers is not mistaken for the user.
         "barge_in_enabled": True,
+        "barge_in_spotter": True,         # "stop" / "wait" / "shut up" heard while talking always interrupts
+        "barge_in_min_rms": 0.025,        # quieter than this never interrupts (rises with your normal level)
+        "barge_in_level_ratio": 0.4,
+        "learn_my_voice": True,           # voice profile from "Hey SAINT, ..." commands (numbers only)
+        "speaker_filter": False,          # ignore voices that aren't yours unless they say "SAINT"
         "barge_in_min_ms": 240,         # sustained speech needed to interrupt
         "barge_in_echo_margin": 2.0,    # how far above predicted echo the mic must be
 
@@ -99,16 +104,23 @@ DEFAULT_CONFIG = {
         "stt_device": "cuda",             # "cuda" | "cpu"
         "stt_compute_type": "float16",    # "float16" | "int8" | "float32"
         "stt_language": "en",
+        "stt_model_multilingual": "small",   # used when language.multilingual_stt is on
+        "stt_initial_prompt": "Hey SAINT. Hola SAINT. Play some música.",
         "stt_hotwords": "SAINT",          # biases Whisper toward spelling the wake word correctly
 
         # TTS
         "tts_backend": "kokoro",          # "kokoro" | "qwen" | "mock"
         "tts_model_dir": "data/tts",
         "tts_voice": "af_heart",          # kokoro voice name
+        "tts_voice_blend": "",            # a second Kokoro voice mixed in ("" = none)
+        "tts_voice_blend_pct": 50,
         "tts_device": "cuda",             # "cuda" | "cpu" | "auto"
         "tts_allow_cpu_fallback": True,
         "tts_require_cuda": False,
         "tts_speed": 1.0,
+        "volume": 100,                    # SAINT's own voice, 0-150 % (not Spotify / Windows)
+        "sapi_voice": "",                 # Windows voice used while Kokoro can't load ("zira", "david", ...)
+        "auto_download_models": True,     # fetch the Kokoro / Whisper models on first use
 
         # Qwen TTS specific
         "tts_qwen_model": "Qwen/Qwen3-TTS",
@@ -258,6 +270,7 @@ DEFAULT_CONFIG = {
         "allow_keyboard": True,
         "allow_mouse": True,
         "confirm_close_apps": True,
+        "focus_guard": True,              # never pull you out of a game / your editor unless you asked for a window
         # How long the window SAINT last worked in stays the default target
         # for "click X" / "scroll down" before the foreground window wins.
         "context_window_ttl_sec": 45.0,
@@ -296,7 +309,12 @@ DEFAULT_CONFIG = {
     # click/type into the game. Voice, Spotify and volume keep working.
     # ------------------------------------------------------------------
     "game_mode": {
-        "enabled": True,                  # detect games automatically
+        "enabled": True,                  # Auto Gaming Mode: turn Gaming Mode on when a game starts
+        "detect": True,                   # notice running games at all (safety rules + "what am I playing")
+        "protect_overlays": True,         # no see-through top-most windows over a running game (anti-cheat)
+        "features": {},                   # per-feature Gaming Mode settings (core/game_mode.FEATURE_DEFAULTS)
+        "saint_monitor": "auto",          # where SAINT goes while gaming: "auto" (not the game's) or a monitor number
+        "workspace_spotify": True,        # "set up my gaming workspace" also opens Spotify
         "processes": [],                  # extra game .exe names ("mygame.exe")
         "folders": [],                    # extra folders whose programs are games
         "ignore": [],                     # .exe names that are never games
@@ -316,6 +334,7 @@ DEFAULT_CONFIG = {
         "planner_timeout_sec": 25,
         "watch_and_learn": True,          # may watch the user show it how (announced, time-limited)
         "watch_after_failure": True,      # start watching by itself after "I don't know how yet"
+        "from_mistakes": True,            # unlearn on "that's wrong", learn rephrasings, keep a mistake journal
         "watch_max_sec": 120,
         "watch_idle_sec": 15,             # stop 15 s after the last thing the user did
     },
@@ -325,6 +344,7 @@ DEFAULT_CONFIG = {
     # ------------------------------------------------------------------
     "audio": {
         "bare_mute": "mic",               # "mute" / "unmute" alone: "mic" or "system"
+        "turn_it_means": "system",        # bare "turn it down": "system" (Voicemeeter/Windows) or "music"
         "voicemeeter": {
             "enabled": "auto",            # auto (when running) / on / off
             "mic_strip": -1,              # -1 = the input strip with a microphone on it
@@ -414,7 +434,10 @@ DEFAULT_CONFIG = {
         "poll_interval_sec": 15,          # background listening-history sync
         "track_history": True,            # remember what you listen to / skip
         "auto_device": True,              # wake an available device if none is active
-        "volume_step": 15,
+        "volume_step": 10,                # "turn Spotify up"; "a little" halves it, "a lot" doubles it
+        "learn_playlist_dislikes": True,  # a song you keep skipping in a playlist is noted as disliked there
+        "skip_disliked_in_playlists": True,
+        "learn_singing": True,            # singing along (a lyric in your voice) counts as liking the song
         "autoqueue": True,                # a song / mood / "more like this" keeps going: 5 similar songs at a time
     },
 
@@ -432,6 +455,49 @@ DEFAULT_CONFIG = {
         "store_conversations": False,     # do not blindly store every turn
         "retention_days": 30,             # Conversation history retention
         "max_conversation_turns": 100,
+    },
+
+    # ------------------------------------------------------------------
+    # SAINT Link (modules/link): connect your phone and other PCs, or a friend's
+    # SAINT, over IP:port. Nothing listens until "enabled" is on.
+    # ------------------------------------------------------------------
+    "link": {
+        "enabled": False,
+        "port": 8765,
+        "bind": "0.0.0.0",                # "127.0.0.1" = this PC only (for testing)
+        "device_name": "",                # blank = this PC's name
+        "discoverable": True,             # mDNS + a small UDP beacon so your phone finds this PC
+        "auto_connect": True,             # keep dialling paired devices
+        "sync_interval_sec": 60,
+        "share_context": True,            # tell your other devices what you just asked (memory only)
+        "announce": True,                 # speak "Gian sent you a file" and friends
+        "approval_timeout_sec": 60,       # how long a collaborator's request waits for your yes
+        "max_file_mb": 1024,
+        "manage_firewall": True,          # ask once to let SAINT Link's port through Windows Firewall
+        "max_prompt_chars": 2000,
+        "inbox_dir": "",                  # blank = data/link/inbox
+        "prompt_targets": {},             # extra apps for "send this prompt to ... on <app>"
+        "shared_scenes": [],              # scenes collaborators may run
+    },
+    "mcp": {
+        "enabled": True,                  # connect the MCP servers set up in Settings → MCP / data/mcp.json
+        "servers": {},                    # {"name": {"command": ..., "args": [...]} or {"url": ..., "headers": {...}}}
+        "connect_timeout_sec": 60,
+        "call_timeout_sec": 120,
+    },
+
+    # ------------------------------------------------------------------
+    # Languages (modules/lang): understand and answer in the user's language,
+    # including when two are mixed in one sentence.
+    # ------------------------------------------------------------------
+    "language": {
+        "auto_detect": True,              # work out the language of each request
+        "reply_in_user_language": True,   # answer in it (else always English)
+        "preferred": [],                  # e.g. ["es", "en"]: tie-breakers, and what the phone offers first
+        "mixed_mode": "mirror",           # "mirror" = answer in the mix you used, "dominant" = one language
+        "llm_translate": True,            # let the local model translate what the phrasebook can't
+        "sticky_minutes": 10,             # a one-word answer keeps the language of the conversation
+        "multilingual_stt": False,        # Whisper auto-detects the language (needs a multilingual model)
     },
 
     # ------------------------------------------------------------------

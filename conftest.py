@@ -26,13 +26,14 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
                     "notifications": False},
         "voice": {"stt_backend": "mock", "tts_backend": "mock", "auto_start": False,
                   "wake_word_enabled": False, "wake_word_chime": False},
-        "desktop": {"enabled": False},
+        "desktop": {"enabled": False, "focus_guard": False},   # never depend on the real foreground window
         "widgets": {"any_media": False},          # never read this PC's real media sessions
         "automation": {"speak_reminders": False},
         # Never call the real local model or watch the real mouse/keyboard.
-        "learning": {"planner": False, "watch_and_learn": False, "watch_after_failure": False},
+        "learning": {"planner": False, "watch_and_learn": False, "watch_after_failure": False,
+                     "from_mistakes": False},
         "audio": {"voicemeeter": {"enabled": "off"}},
-        "game_mode": {"enabled": False},          # never react to games running on this PC
+        "game_mode": {"enabled": False, "detect": False},   # never react to games running on this PC
         "spotify": {"client_id": ""},
         "logging": {"level": "Errors Only"},
     }, f)
@@ -71,6 +72,19 @@ except Exception:
     import types
     sys.modules["keyring"] = types.SimpleNamespace(**{k: getattr(_MemoryKeyring(), k) for k in
                                                       ("get_password", "set_password", "delete_password")})
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_lesson_left_open():
+    """A lesson one test started ("write an email" -> "where do I start?") must not
+    take the next test's first sentence as its next step."""
+    yield
+    lesson = sys.modules.get("modules.learning.lesson")
+    if lesson is not None:
+        lesson.lessons.stop()
 
 
 def pytest_sessionfinish(session, exitstatus):

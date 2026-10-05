@@ -11,7 +11,7 @@ import time
 from PySide6.QtCore import QRectF, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget,
-                               QListWidgetItem, QPushButton, QVBoxLayout, QWidget)
+                               QListWidgetItem, QPushButton, QSlider, QVBoxLayout, QWidget)
 
 from core.config import config
 from core.events import EventType
@@ -105,9 +105,22 @@ class NowPlaying(QWidget):
         self.next.clicked.connect(lambda: actions.transport("next", self._err) if self._any
                                   else actions.spotify("spotify.next", self._err))
         self.like.clicked.connect(self._like)
-        self.vol_down.clicked.connect(lambda: actions.spotify("spotify.volume_step", self._err, direction="down"))
-        self.vol_up.clicked.connect(lambda: actions.spotify("spotify.volume_step", self._err, direction="up"))
-        self._controls = [self.shuffle, self.prev, self.play, self.next, self.like, self.vol_down, self.vol_up]
+        # Spotify's own volume: a slider that shows exactly what Spotify reports,
+        # plus 5-point nudges (the old buttons jumped 25 points).
+        self.vol_down.clicked.connect(lambda: self._nudge_volume(-5))
+        self.vol_up.clicked.connect(lambda: self._nudge_volume(5))
+        self.vol = QSlider(Qt.Horizontal)
+        self.vol.setRange(0, 100)
+        self.vol.setFixedWidth(120 if big else 80)
+        self.vol.setToolTip("Spotify volume")
+        self.vol.sliderReleased.connect(lambda: self._set_volume(self.vol.value()))
+        self.vol.valueChanged.connect(lambda v: self.vol_label.setText(f"{v}%"))
+        self.vol_label = QLabel("—")
+        self.vol_label.setObjectName("Faint")
+        self.vol_label.setFixedWidth(34)
+        self._vol_hold = 0.0              # don't jump back while Spotify catches up
+        self._controls = [self.shuffle, self.prev, self.play, self.next, self.like, self.vol_down, self.vol_up,
+                          self.vol]
         if big:
             ctl.addWidget(self.shuffle)
         ctl.addWidget(self.prev)
@@ -122,9 +135,11 @@ class NowPlaying(QWidget):
         ctl.addWidget(self.hint, 0, Qt.AlignVCenter)
         if big:
             ctl.addWidget(self.vol_down)
+            ctl.addWidget(self.vol, 0, Qt.AlignVCenter)
             ctl.addWidget(self.vol_up)
+            ctl.addWidget(self.vol_label, 0, Qt.AlignVCenter)
         else:
-            for w in (self.shuffle, self.like, self.vol_down, self.vol_up):
+            for w in (self.shuffle, self.like, self.vol_down, self.vol_up, self.vol, self.vol_label):
                 w.hide()
         col.addLayout(ctl)
         self.status = QLabel("")
@@ -192,14 +207,39 @@ class NowPlaying(QWidget):
         playing = bool(st.get("is_playing"))
         self.play.set_icon("pause" if playing else "play")
         self.shuffle.setChecked(bool(st.get("shuffle")))
+        self._show_volume(st)
         set_chip(self.state_chip, ("Playing" if playing else "Paused")
                  + (f" on {st['device']}" if st.get("device") else ""), "accent" if playing else "")
         self.hint.setVisible(self._show_hint and playing and actions.hotwords_on())
         self._tick()
 
+    def _show_volume(self, st):
+        v = st.get("volume")
+        if v is None or self.vol.isSliderDown() or time.time() < self._vol_hold:
+            return
+        self.vol.blockSignals(True)
+        self.vol.setValue(int(v))
+        self.vol.blockSignals(False)
+        self.vol_label.setText(f"{int(v)}%")
+
+    def _set_volume(self, percent: int):
+        self._vol_hold = time.time() + 3
+        self.vol_label.setText(f"{int(percent)}%")
+        actions.spotify("spotify.volume", self._err, percent=int(percent))
+
+    def _nudge_volume(self, delta: int):
+        cur = ui_bus.spotify.get("volume")
+        base = self.vol.value() if cur is None or time.time() < self._vol_hold else int(cur)
+        new = max(0, min(100, base + delta))
+        self.vol.blockSignals(True)
+        self.vol.setValue(new)
+        self.vol.blockSignals(False)
+        self._set_volume(new)
+
     def render_any(self):
         """Any-media mode: the video / app / song Windows says is playing."""
         np = ui_bus.now_playing()
+        self._shown = (np.get("title", ""), bool(np.get("is_playing")))       # what _tick checks against
         if not np or (np["source"] == "spotify" and not self._sp_ok):
             np = ui_bus._from_media(ui_bus.media) if ui_bus.media.get("title") else {}
         self._source = np.get("source", "")
@@ -234,7 +274,18 @@ class NowPlaying(QWidget):
         self._tick()
 
     def _tick(self):
-        if self._any and self._source == "media":
+        if self._any and not getattr(self, "_healing", False):
+            # Self-healing: whatever the events did (a busy GUI thread during a game, an update
+            # that arrived while hidden), the card catches up with what's really playing.
+            np = ui_bus.now_playing()
+            if (np.get("title", ""), bool(np.get("is_playing"))) != getattr(self, "_shown", None):
+                self._healing = True
+                try:
+                    self.render_any()
+                finally:
+                    self._healing = False
+                return
+        if self._any and self._source in ("media", "spotify_media"):
             np = ui_bus.now_playing() or ui_bus._from_media(ui_bus.media)
             frac, dur = ui_bus.progress_of(np), np.get("duration_ms") or 0
         else:

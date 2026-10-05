@@ -31,6 +31,12 @@ _WRONG = re.compile(
     r"^(?:no+|nope|nah|wrong(?:\s+one)?|not\s+(?:that|this)(?:\s+one)?|that'?s\s+(?:wrong|not\s+(?:it|right|"
     r"what\s+i\s+(?:meant|asked(?:\s+for)?|wanted))))(?:[,.!:;]+\s*|\s+)(?:no+[,.!]*\s*)*"
     r"(?:(?:please|just|instead)\s+)?(?P<cmd>.+)$", re.I)
+# Naming the thing properly: "his name is Giancarlos Minyetti" after "click on
+# John Carlos Mignetti" failed (2026-09-30), "it's called FMHY".
+_NAMED = re.compile(
+    r"^(?:no+[,.!]*\s+)?(?:(?:his|her|their|its|the|that'?s)\s+(?:full\s+)?name\s+is|"
+    r"(?:it'?s|it is|that'?s|he'?s|she'?s|they'?re)\s+(?:called|spelled|spelt|named)|"
+    r"(?:it'?s|it is)\s+spelled\s+like)\s+(?P<cmd>.+)$", re.I)
 # What a correction's command may start with (so "no, it's fine" isn't one).
 _VERB = re.compile(
     r"^(?:open|close|quit|launch|start|run|play|pause|resume|skip|click|double|right|press|type|minimi[sz]e|"
@@ -90,7 +96,7 @@ class CorrectionTracker:
         from modules.agent.router import spell_out
         t = spell_out((text or "").strip().strip("\"'“”"))
         cmd = None
-        for m in (_MEANT.search(t), _WRONG.match(t)):
+        for m in (_MEANT.search(t), _WRONG.match(t), _NAMED.match(t)):
             if not m:
                 continue
             c = re.sub(r"^[\s,.;:!-]*(?:(?:for\s+)?you\s+to\s+|to\s+)?", "", m.group("cmd"), flags=re.I)
@@ -103,6 +109,12 @@ class CorrectionTracker:
                 break
             if _NOT_A_THING.match(c):
                 continue
+            lead = _LEAD.match(prev.text.strip()) if m.re is _NAMED else None
+            if lead:
+                # The whole name was wrong, not one word of it: "click on John
+                # Carlos Mignetti" + "his name is Giancarlos Minyetti".
+                cmd = f"{lead.group('v')} {c}"
+                break
             fixed = substitute(prev.text, c)
             if fixed:
                 cmd = fixed

@@ -161,7 +161,9 @@ SEARCH_URLS = {
 
 
 def site_url(name: str) -> Optional[str]:
-    n = (name or "").strip().lower().strip(".").removeprefix("the ")
+    # 'go to "https://mail.google.com/..."' (a scene step, quoted): the quotes aren't part of the address —
+    # with them it fell through to "switch to a window called https://..." (2026-10-05).
+    n = (name or "").strip().strip("\"'“”‘’").strip().lower().strip(".").removeprefix("the ")
     if n in SITES:
         return SITES[n]
     if re.fullmatch(r"(?:https?://)?(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|org|net|io|gg|tv|dev|co|app|ai|"

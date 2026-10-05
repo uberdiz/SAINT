@@ -137,6 +137,13 @@ class EventType:
     STOP_ALL="stop.all"
     # Game Mode on/off, or the overlays hidden for a fullscreen app (core/game_mode.py)
     GAME_MODE="game_mode"
+    # A subsystem started / failed / was retried (core/startup.py)
+    STARTUP_STATUS="startup.status"
+    # The active multi-step task changed (modules/agent/task_memory.py)
+    TASK_STATE="task.state"
+    # SAINT Link (modules/link): a device paired / connected / sent a file, an approval is waiting, ...
+    # The payload's "event" says which ("link.connected", "link.file", "link.approval", ...).
+    LINK="link"
     ERROR="error"; WARNING="warning"
 
 

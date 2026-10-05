@@ -55,6 +55,7 @@ class _FakePsutil:
 def mode(monkeypatch):
     from core.config import config
     config.set("game_mode.enabled", True, persist=False)     # conftest turns detection off
+    config.set("game_mode.detect", True, persist=False)
     monkeypatch.setattr(gm.GameMode, "start", lambda self: None)
     m = gm.GameMode()
     monkeypatch.setattr(m, "_game_dirs", lambda: [STEAM])
@@ -65,6 +66,8 @@ def mode(monkeypatch):
     yield m, events
     event_bus.unsubscribe(handler)
     config.set("game_mode.enabled", False, persist=False)
+    config.set("game_mode.detect", False, persist=False)
+    config.set("game_mode.features", {}, persist=False)
 
 
 def test_turns_on_while_the_game_runs_and_restores_after(mode):
@@ -125,7 +128,9 @@ def test_fullscreen_hides_overlays_without_full_game_mode(mode, monkeypatch):
 
 
 def test_input_is_refused_only_when_the_game_is_in_front(mode, monkeypatch):
+    from core.config import config
     m, _ = mode
+    config.set("game_mode.enabled", False, persist=False)     # a game, but Gaming Mode off
     ps = _FakePsutil()
     ps.table = {20: ("cs2.exe", "")}
     m._scan(ps)
@@ -151,10 +156,11 @@ def test_voice_game_mode_intent(monkeypatch):
     monkeypatch.setattr(gm.game_mode, "set_manual", lambda on: calls.append(on))
     intent = parse_saint_ui("turn on game mode")
     assert intent and intent.name == "ui.game_mode"
-    assert "Game Mode on" in intent.run().text and calls == [True]
-    assert parse_saint_ui("game mode off").run().text == "Game Mode off." and calls[-1] is False
+    assert "Gaming Mode on" in intent.run().text and calls == [True]
+    assert parse_saint_ui("game mode off").run().text == "Gaming Mode off." and calls[-1] is False
     monkeypatch.setattr(gm.game_mode, "active", False)
-    assert parse_saint_ui("is game mode on").run().text == "Game Mode is off."
+    monkeypatch.setattr(gm.game_mode, "running", False)
+    assert parse_saint_ui("is game mode on").run().text == "Gaming Mode is off."
 
 
 def test_detection_switched_off_suspends_nothing(mode):
@@ -162,6 +168,54 @@ def test_detection_switched_off_suspends_nothing(mode):
     m, _ = mode
     ps = _FakePsutil()
     ps.table = {20: ("cs2.exe", "")}
-    config.set("game_mode.enabled", False, persist=False)
+    config.set("game_mode.detect", False, persist=False)
     m._scan(ps)
-    assert not m.active and not m.overlays_blocked
+    assert not m.active and not m.running and not m.overlays_blocked
+
+
+def test_a_game_running_is_not_gaming_mode_without_auto(mode):
+    """Single-player game, Auto Gaming Mode off: only the anti-cheat safety rules apply."""
+    from core.config import config
+    m, events = mode
+    config.set("game_mode.enabled", False, persist=False)
+    ps = _FakePsutil()
+    ps.table = {20: ("cs2.exe", "")}
+    m._scan(ps)
+    assert m.running and not m.active and m.game == "cs2"
+    assert m.overlays_blocked                       # no see-through window over the game
+    assert m.refuse_capture() is None               # vision still works (Gaming Mode is off)
+    assert m.feature("wake_word") is True and m.feature("notifications") == "all"
+    assert events[-1]["running"] and not events[-1]["active"]
+    m.set_manual(True)                              # the user turns it on by hand
+    assert m.active and m.refuse_capture()
+
+
+def test_gaming_mode_feature_settings(mode):
+    from core.config import config
+    m, _ = mode
+    m.set_manual(True)
+    assert m.feature("vision") is False and m.feature("wake_word") is True
+    assert m.feature("notifications") == "minimal"
+    assert m.mini_player_allowed                    # mini player stays on by default
+    assert m.refuse_input()                         # screen automation off by default
+    config.set("game_mode.features", {"vision": True, "mini_player": False, "screen_automation": True,
+                                      "notifications": "off", "overlay": True}, persist=False)
+    assert m.refuse_capture() is None and not m.mini_player_allowed
+    assert m.refuse_input() is None and m.feature("notifications") == "off"
+    assert not m.overlays_blocked                   # no game running, overlay allowed in Gaming Mode
+    m.set_manual(False)
+    assert m.feature("vision") is True and m.feature("notifications") == "all"
+
+
+def test_wake_word_and_voice_follow_gaming_mode(mode):
+    from core.config import config
+    from modules.voice.output_policy import output_policy
+    g = gm.game_mode                                # the shared one the voice pipeline reads
+    g.set_manual(True)
+    try:
+        config.set("game_mode.features", {"voice": False}, persist=False)
+        assert not output_policy.should_speak("Done.", "reply")
+        assert output_policy.should_speak("Your timer is done.", "reminder")
+    finally:
+        g.set_manual(None)
+    assert output_policy.should_speak("Done.", "reply")

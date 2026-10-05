@@ -86,9 +86,14 @@ class ConfirmationManager:
 
     def set_aside(self) -> Optional[PendingAction]:
         """The question the user just talked past, if it's recent."""
+        # A zero/negative window is an explicit test/configuration meaning
+        # "do not keep the question around at all". Using <= against elapsed
+        # wall-clock time made a SET_ASIDE_SEC=0 test race with time.time().
+        if self.SET_ASIDE_SEC <= 0:
+            return None
         with self._lock:
             s = self._set_aside
-        if s and time.time() - s[1] <= self.SET_ASIDE_SEC \
+        if s and time.time() - s[1] < self.SET_ASIDE_SEC \
                 and time.time() - s[0].created <= float(config.get("agent.confirm_timeout_sec", 30)):
             return s[0]
         return None

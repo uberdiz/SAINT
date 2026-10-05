@@ -115,10 +115,21 @@ class SkillStore:
     @staticmethod
     def learnable(phrase: str, steps: List[str]) -> bool:
         p = norm(phrase)
-        if not p or _NEVER.match(p) or _DEICTIC.search(p) or len(p) < 4 or not steps:
+        # "that" in a song title ("play Fancy That") isn't pointing at anything.
+        pointing = _DEICTIC.search(p) and not p.startswith(("play ", "queue "))
+        if not p or _NEVER.match(p) or pointing or len(p) < 4 or not steps:
             return False
         # Learning "X means X" teaches nothing.
         return [norm(s) for s in steps] != [p]
+
+    @staticmethod
+    def pointing_word(phrase: str) -> str:
+        """The word that makes ``phrase`` mean something different each time ("that", "it"), or ""."""
+        p = norm(phrase)
+        if p.startswith(("play ", "queue ")):
+            return ""
+        m = _DEICTIC.search(p)
+        return m.group(0) if m else ""
 
     def learn(self, phrase: str, steps: List[str], how: str = "planned") -> Optional[Skill]:
         steps = [s.strip() for s in steps if s and s.strip()]
@@ -136,6 +147,15 @@ class SkillStore:
         self.last_learned, self.last_learned_at = skill, time.time()
         log.info("learning.learned how=%s phrase=%r steps=%r", how, key, steps)
         event_bus.emit_event(EventType.AUTOMATION_UPDATED, {"id": skill.id, "title": key, "skill": True})
+        return skill
+
+    def upsert(self, skill: Skill) -> Skill:
+        """Add or replace a skill by id, as it is (used when another device shares one; see modules/link)."""
+        with self._lock:
+            skills = [s for s in self._load() if s.id != skill.id]
+            skills.append(skill)
+            self._write(skills)
+        event_bus.emit_event(EventType.AUTOMATION_UPDATED, {"id": skill.id, "title": skill.phrase, "skill": True})
         return skill
 
     def match(self, text: str) -> Optional[Skill]:
@@ -237,4 +257,8 @@ def run_steps(steps: List[str]):
         intents.append(it)
     if len(intents) == 1:
         return intents[0].run()
-    return run_plan(intents)
+    from modules.agent.router import step_label
+    from modules.agent.task_memory import task_memory
+    task = task_memory.begin(", then ".join(steps), [{"text": s, "part": i, "label": step_label(it.name)}
+                                                    for i, (s, it) in enumerate(zip(steps, intents))], kind="skill")
+    return run_plan(intents, task=task)

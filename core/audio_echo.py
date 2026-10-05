@@ -77,6 +77,11 @@ class EchoGate:
         self.floor = floor
         self.idle_floor = 0.03
         self.coupling = initial_coupling
+        # Nothing quieter than this is the user talking over SAINT, whatever the
+        # echo estimate says: music and room noise at mic 0.008-0.027 cancelled
+        # replies on 2026-09-30, real talk-overs were 0.09+. Set from the user's
+        # own speaking level by the voice module.
+        self.speech_floor = 0.0
         self._score = 0.0
         self._smoothed = 0.0
 
@@ -97,7 +102,7 @@ class EchoGate:
         # quiet room noise or music from the speakers cancelled the turn —
         # logged 2026-09-28 at mic 0.011 / 0.005, while real talk-overs are 0.07+.
         floor = self.floor if playback_rms > 0 else max(self.floor, self.idle_floor)
-        predicted = self.coupling * playback_rms * self.margin + floor
+        predicted = max(self.coupling * playback_rms * self.margin + floor, self.speech_floor)
         if self._smoothed > predicted:
             self._score += 1.0
         else:

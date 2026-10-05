@@ -34,7 +34,7 @@ ACCENTS = ["#feaa34", "#f97316", "#2563eb", "#7c3aed", "#db2777", "#dc2626", "#e
 
 class SettingsUI(QWidget):
     CATEGORIES = ["General", "Voice", "AI", "Wake Word", "Spotify", "Memory", "Automation",
-                  "Desktop Control", "Appearance", "Advanced"]
+                  "Desktop Control", "Gaming Mode", "MCP", "Appearance", "Advanced"]
 
     def __init__(self, on_appearance_changed: Callable = None, on_theme_changed: Callable = None):
         super().__init__()
@@ -181,7 +181,8 @@ class SettingsUI(QWidget):
 
         for builder in (self._build_general, self._build_voice, self._build_ai, self._build_wake,
                         self._build_spotify, self._build_memory, self._build_automation,
-                        self._build_desktop, self._build_appearance, self._build_advanced):
+                        self._build_desktop, self._build_gaming, self._build_mcp, self._build_appearance,
+                        self._build_advanced):
             builder()
         self.nav.setCurrentRow(0)
 
@@ -249,9 +250,41 @@ class SettingsUI(QWidget):
                                "The microphone stays on while SAINT speaks. SAINT compares what the mic hears "
                                "with what it is playing, so its own voice doesn't interrupt it but yours does.")
         self._row(f, "Allow interrupting", self._check("voice.barge_in_enabled", "Enabled"))
+        self._row(f, "Stop words", self._check("voice.barge_in_spotter", "“Stop”, “wait”, “shut up” always cut me off"),
+                  "Works even on speakers, where your voice and mine are hard to tell apart by loudness.")
+        self._row(f, "Quietest interruption", self._spin("voice.barge_in_min_rms", 0.0, 0.2, 0.005, 3),
+                  "Mic level below this never interrupts (music and room noise). It also rises with how loud "
+                  "you normally talk.")
         self._row(f, "Speech needed to interrupt", self._spin("voice.barge_in_min_ms", 90, 1500, 30, 0, " ms"))
         self._row(f, "Echo margin", self._spin("voice.barge_in_echo_margin", 1.0, 8.0, 0.1, 1),
                   "Higher = harder to interrupt (use with loud speakers); lower = easier (headphones).")
+        lay.addWidget(box)
+
+        box, f = self._section("Knowing it's you")
+        # The old "Wake word off" switch here looked like the wake word itself but
+        # wasn't (2026-09-30). The wake word lives on the Wake Word page only.
+        note = QLabel("Without “Hey SAINT”, SAINT only answers commands, questions and answers to its own "
+                      "questions, and ignores quiet voices from videos, games and calls. Turn the wake word "
+                      "on or off on the Wake Word page.")
+        note.setObjectName("Muted")
+        note.setWordWrap(True)
+        self._row(f, "No wake word", note)
+        self._row(f, "Learn my voice", self._check("voice.learn_my_voice",
+                                                   "Build a voice profile from what I say to SAINT by name"))
+        self._row(f, "Only my voice", self._check("voice.speaker_filter",
+                                                  "Ignore voices that aren't mine unless they say “SAINT”"),
+                  "Uses the voice profile once it has enough samples. Nothing but numbers is stored.")
+        prof = QWidget()
+        pl = QHBoxLayout(prof)
+        pl.setContentsMargins(0, 0, 0, 0)
+        self.voice_profile_label = QLabel("")
+        self.voice_profile_label.setObjectName("Muted")
+        reset = QPushButton("Forget my voice")
+        reset.clicked.connect(self._reset_voice_profile)
+        pl.addWidget(self.voice_profile_label, 1)
+        pl.addWidget(reset)
+        self._row(f, "Voice profile", prof)
+        self._refresh_voice_profile()
         lay.addWidget(box)
 
         box, f = self._section("Speech recognition (STT)")
@@ -266,14 +299,84 @@ class SettingsUI(QWidget):
 
         box, f = self._section("Speech output (TTS)")
         self._row(f, "Engine", self._combo("voice.tts_backend", ["kokoro", "qwen", "mock"]))
-        self._row(f, "Voice", self._combo("voice.tts_voice", ["af_heart", "af_bella", "af_nicole", "af_sky",
-                                                              "am_adam", "am_michael", "bf_emma", "bm_george"],
-                                          editable=True))
+        from modules.voice.voices import KOKORO_VOICES
+        labels = [label for _id, label in KOKORO_VOICES]
+        ids = [vid for vid, _label in KOKORO_VOICES]
+        self._row(f, "Voice", self._combo("voice.tts_voice", labels, data=ids))
+        self._row(f, "Blend with", self._combo("voice.tts_voice_blend", ["Nothing (one voice)"] + labels,
+                                               data=[""] + ids),
+                  "Mix two Kokoro voices into a new one.")
+        self._row(f, "Blend amount", self._combo("voice.tts_voice_blend_pct", ["A touch (25%)", "Half (50%)",
+                                                                              "Mostly the blend (75%)"],
+                                                 data=[25, 50, 75]))
         self._row(f, "Device", self._combo("voice.tts_device", ["cuda", "cpu", "auto"]))
         self._row(f, "Speed", self._spin("voice.tts_speed", 0.5, 2.0, 0.05, 2))
+        from modules.voice.output_policy import VOLUME_MAX, set_voice_volume
+        self.voice_volume = QSlider(Qt.Horizontal)
+        self.voice_volume.setRange(0, VOLUME_MAX)
+        self.voice_volume_label = QLabel("")
+        self.voice_volume_label.setMinimumWidth(40)
+        self.voice_volume.valueChanged.connect(lambda v: self.voice_volume_label.setText(f"{v}%"))
+        # Live: the next thing SAINT says uses it (Save keeps it too).
+        self.voice_volume.sliderReleased.connect(lambda: set_voice_volume(self.voice_volume.value()))
+        vr = QHBoxLayout()
+        vr.setContentsMargins(0, 0, 0, 0)
+        vr.addWidget(self.voice_volume, 1)
+        vr.addWidget(self.voice_volume_label)
+        vw = QWidget()
+        vw.setLayout(vr)
+        self._bind("voice.volume", lambda: self.voice_volume.value(),
+                   lambda v: self.voice_volume.setValue(int(100 if v is None else v)))
+        self._row(f, "Volume", vw, "How loud SAINT's own voice is — Spotify and Windows aren't changed. Above "
+                                   "100% boosts a quiet voice. You can also say “talk louder” or “voice volume 60”.")
+        self.voice_preview = QPushButton("Hear it")
+        self.voice_preview.clicked.connect(self._preview_voice)
+        self._row(f, "", self.voice_preview, "Saves the voice settings above and says a line with them.")
         self._row(f, "CPU fallback", self._check("voice.tts_allow_cpu_fallback", "Use CPU if CUDA is unavailable"))
         lay.addWidget(box)
         self._add_page(w, lay)
+
+    def _refresh_voice_profile(self):
+        try:
+            from modules.voice.speaker import speaker_profile, MIN_SAMPLES
+            n = speaker_profile.samples
+            self.voice_profile_label.setText(
+                f"Ready ({n} samples)" if n >= MIN_SAMPLES else
+                f"Learning — {n} of {MIN_SAMPLES} samples (say “Hey SAINT, …” a few more times)")
+        except Exception as e:
+            self.voice_profile_label.setText(f"Unavailable ({e})")
+
+    def _reset_voice_profile(self):
+        from modules.voice.speaker import speaker_profile
+        speaker_profile.reset()
+        self._refresh_voice_profile()
+
+    def _preview_voice(self):
+        """Apply just the voice settings and have SAINT say something with them."""
+        keys = ("voice.tts_voice", "voice.tts_voice_blend", "voice.tts_voice_blend_pct", "voice.tts_speed",
+                "voice.tts_device", "voice.tts_backend")
+        for key, getter, _ in self._bindings:
+            if key in keys:
+                config.set(key, getter(), persist=False)
+        try:
+            config.save()
+            from core.runtime import runtime
+            runtime.apply_settings()
+            tts = runtime.tts
+        except Exception as e:
+            self.status.setText(f"Couldn't apply the voice: {e}")
+            return
+        self.status.setText("Loading the voice…")
+
+        def run():
+            import time
+            deadline = time.time() + 30
+            while tts is not None and not tts.is_ready and time.time() < deadline:
+                time.sleep(0.2)
+            if tts is not None:
+                tts.speak("Hi, I'm SAINT. This is how I'll sound from now on.")
+        import threading
+        threading.Thread(target=run, daemon=True, name="voice-preview").start()
 
     def _populate_mics(self):
         self.mic_combo.clear()
@@ -509,7 +612,9 @@ class SettingsUI(QWidget):
         self._row(f, "Spotify", self._check("modules.spotify", "Enable Spotify control"))
         self._row(f, "Client ID", self._line("spotify.client_id", "from developer.spotify.com/dashboard"))
         self._row(f, "Redirect URI", self._line("spotify.redirect_uri", "http://127.0.0.1:8888/callback"),
-                  "Add exactly this URI to your Spotify app's Redirect URIs.")
+                  "Add exactly this URI to your Spotify app's Redirect URIs. Using SAINT on your iPhone too? "
+                  "Add saint://spotify-callback to the same app as well (and use the same Client ID there) — "
+                  "otherwise Spotify says “redirect_uri: Not matching configuration”.")
         self.sp_status = QLabel("")
         self.sp_connect = QPushButton("Connect Spotify")
         self.sp_connect.setObjectName("Primary")
@@ -577,21 +682,33 @@ class SettingsUI(QWidget):
         self.sp_disconnect.setEnabled(sp.is_connected())
 
     def _spotify_connect(self):
+        sp = module_manager.get("spotify")
+        if getattr(self, "_sp_waiting", False):
+            # The button says "Cancel sign-in" while the browser is open: a wrong callback or a closed
+            # tab no longer locks Connect for three minutes.
+            if sp is not None:
+                sp.auth.cancel_login()
+            return
         config.set("spotify.client_id", self._value("spotify.client_id"), persist=True)
         config.set("spotify.redirect_uri", self._value("spotify.redirect_uri"), persist=True)
         module_manager.set_enabled("spotify", True)
         sp = module_manager.get("spotify")
-        self.sp_connect.setEnabled(False)
+        self._sp_waiting = True
+        self.sp_connect.setText("Cancel sign-in")
         self.sp_status.setText("Waiting for you to log in to Spotify in the browser…")
 
-        def done(_):
-            self.sp_connect.setEnabled(True)
+        def finish():
+            self._sp_waiting = False
+            self.sp_connect.setText("Connect Spotify")
             self._refresh_spotify_status()
 
+        def done(_):
+            finish()
+
         def fail(e):
-            self.sp_connect.setEnabled(True)
-            self._refresh_spotify_status()
-            QMessageBox.warning(self, "Spotify", e)
+            finish()
+            if "cancelled" not in str(e):
+                QMessageBox.warning(self, "Spotify", str(e))
         run_async(sp.connect, done, fail)
 
     def _spotify_disconnect(self):
@@ -859,16 +976,68 @@ class SettingsUI(QWidget):
                                                        "does something",
                               live="Action notifications {state}."))
         self._row(f, "Edge tab", self._check("overlay.edge_tab", "Reveal a SAINT tab at the top edge"))
-        self._row(f, "Game Mode",
-                  self._check("game_mode.enabled", "Hide the Halo and pop-ups while a game or fullscreen app runs",
-                              live="Game Mode detection {state}."),
+        self._row(f, "Over games",
+                  self._check("game_mode.protect_overlays", "Hide the Halo and pop-ups while a game runs",
+                              live="Overlays over games: {state}."),
                   "Anti-cheat treats see-through windows on top of a game as a cheat overlay, and they stop true "
-                  "fullscreen. While a game runs SAINT also won't capture the screen or click inside the game. "
-                  "Voice and music keep working. Say “game mode on / off” any time.")
+                  "fullscreen. This applies whether or not Gaming Mode is on (Settings > Gaming Mode).")
         self._row(f, "Overlay hotkey", self._line("overlay.hotkey", "alt+`"),
                   "Works from anywhere. Combine ctrl / alt / shift / win with a key, e.g. alt+` or ctrl+alt+s.")
         lay.addWidget(box)
         self._add_page(w, lay)
+
+    # ---- GAMING MODE ---------------------------------------------------
+    def _build_gaming(self):
+        from core.game_mode import FEATURE_DEFAULTS, FEATURE_LABELS, game_mode
+        w, lay = self._new_page("Gaming Mode")
+        box, f = self._section("Gaming Mode",
+                               "Gaming Mode is yours to switch: a game running doesn't turn it on unless Auto "
+                               "Gaming Mode is on. Say “gaming mode on / off”, use the tray menu, or the switch here.")
+        self.gaming_switch = Switch("Gaming Mode")
+        self.gaming_switch.setChecked(game_mode.active)
+        self.gaming_switch.toggled.connect(lambda on: None if self._loading else game_mode.set_manual(on))
+        self._row(f, "Now", self.gaming_switch, "Takes effect immediately.")
+        self._row(f, "Auto Gaming Mode",
+                  self._check("game_mode.enabled", "Turn Gaming Mode on when a game starts",
+                              live="Auto Gaming Mode {state}."))
+        self._row(f, "Game detection",
+                  self._check("game_mode.detect", "Notice running games (Steam libraries, your games folder, "
+                                                  "known games)"),
+                  "Needed for Auto Gaming Mode, for keeping overlays off games, and for “what am I playing?”.")
+        mons = ["auto"] + [str(i) for i in range(1, 5)]
+        self._row(f, "SAINT's monitor",
+                  self._combo("game_mode.saint_monitor",
+                              ["Automatic (any monitor without the game)"] + [f"Monitor {i}" for i in range(1, 5)],
+                              data=mons),
+                  "Where SAINT's window, overlay and mini player go while Gaming Mode is on.")
+        self._row(f, "Gaming workspace",
+                  self._check("game_mode.workspace_spotify", "“Set up my gaming workspace” also opens Spotify"))
+        lay.addWidget(box)
+
+        box, f = self._section("While Gaming Mode is on",
+                               "Each part of SAINT can stay on or switch off while you play.")
+        for key, default in FEATURE_DEFAULTS.items():
+            ck = f"game_mode.features.{key}"
+            if key == "notifications":
+                combo = QComboBox()
+                for label, value in (("All", "all"), ("Minimal — errors and reminders", "minimal"), ("Off", "off")):
+                    combo.addItem(label, value)
+                self._bind(ck, combo.currentData,
+                           lambda v, c=combo, d=default: c.setCurrentIndex(max(0, c.findData(v or d))))
+                self._row(f, FEATURE_LABELS[key], combo)
+                continue
+            sw = Switch(FEATURE_LABELS[key])
+            self._bind(ck, sw.isChecked, lambda v, s=sw, d=default: s.setChecked(d if v is None else bool(v)))
+            self._row(f, "", sw)
+        lay.addWidget(box)
+        self._add_page(w, lay)
+
+        def sync(ev):
+            if ev.type == EventType.GAME_MODE and self.gaming_switch.isChecked() != bool(ev.payload.get("active")):
+                self.gaming_switch.blockSignals(True)
+                self.gaming_switch.setChecked(bool(ev.payload.get("active")))
+                self.gaming_switch.blockSignals(False)
+        ui_bus.event.connect(sync)
 
     def _set_accent(self, color):
         c = QColor(color or "#feaa34")
@@ -883,6 +1052,65 @@ class SettingsUI(QWidget):
             self._set_accent(c.name())
 
     # ---- ADVANCED ------------------------------------------------------------------
+    # ---- MCP -----------------------------------------------------------------
+    def _build_mcp(self):
+        w, lay = self._new_page("MCP")
+        box, f = self._section("MCP servers", "Give SAINT the tools of any Model Context Protocol server — your "
+                               "notes, GitHub, a database, a smart-home hub. Paste the server's JSON the way its "
+                               "README shows it for Claude Desktop ({\"mcpServers\": {...}}). Its tools then work by "
+                               "voice like SAINT's own; anything that could change something asks you first unless "
+                               "you add \"trust\": \"allow\" to that server. Saved in data/mcp.json.")
+        self._row(f, "MCP", self._check("mcp.enabled", "Connect the MCP servers below when SAINT starts"))
+        self.mcp_json = QPlainTextEdit()
+        self.mcp_json.setMinimumHeight(220)
+        self.mcp_json.setPlaceholderText('{\n  "mcpServers": {\n    "filesystem": {\n      "command": "npx",\n'
+                                         '      "args": ["-y", "@modelcontextprotocol/server-filesystem", '
+                                         '"C:/Users/you/Documents"]\n    }\n  }\n}')
+        f.addRow(self.mcp_json)
+        row = QHBoxLayout()
+        save = QPushButton("Save && connect")
+        save.setObjectName("Primary")
+        save.clicked.connect(self._mcp_save)
+        row.addWidget(save)
+        self.mcp_status = QLabel("")
+        self.mcp_status.setObjectName("Muted")
+        self.mcp_status.setWordWrap(True)
+        row.addWidget(self.mcp_status, 1)
+        holder = QWidget()
+        holder.setLayout(row)
+        f.addRow(holder)
+        lay.addWidget(box)
+        self._add_page(w, lay)
+        self._mcp_load()
+
+    def _mcp_load(self):
+        from modules.mcp.manager import mcp_manager
+        try:
+            with open(mcp_manager.path, encoding="utf-8") as fh:
+                self.mcp_json.setPlainText(fh.read())
+        except OSError:
+            self.mcp_json.setPlainText("")
+        self.mcp_status.setText(mcp_manager.describe())
+
+    def _mcp_save(self):
+        import json as _json
+        from modules.mcp.manager import mcp_manager
+        text = self.mcp_json.toPlainText().strip() or '{"mcpServers": {}}'
+        try:
+            data = _json.loads(text)
+            servers = data.get("mcpServers", data) if isinstance(data, dict) else None
+            if not isinstance(servers, dict) or not all(isinstance(v, dict) for v in servers.values()):
+                raise ValueError("expected {\"mcpServers\": {\"name\": {...}}}")
+        except ValueError as e:
+            self.mcp_status.setText(f"That isn't valid MCP JSON: {e}")
+            return
+        os.makedirs(os.path.dirname(mcp_manager.path), exist_ok=True)
+        with open(mcp_manager.path, "w", encoding="utf-8") as fh:
+            _json.dump({"mcpServers": servers}, fh, indent=2)
+        self.mcp_status.setText("Connecting…")
+        run_async(lambda: (mcp_manager.reload(wait=True), mcp_manager.describe())[1],
+                  lambda d: self.mcp_status.setText(d), lambda e: self.mcp_status.setText(str(e)))
+
     def _build_advanced(self):
         w, lay = self._new_page("Advanced")
         box, f = self._section("Logging & diagnostics")

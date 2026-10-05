@@ -818,8 +818,16 @@ class DesktopController:
         try:
             launch(entry)
         except OSError as e:
+            if getattr(e, "winerror", None) == 1223:        # ERROR_CANCELLED — not something the user did
+                from modules.desktop.apps import broken_shortcut
+                why = ("its shortcut points to a program that isn't there any more" if broken_shortcut(entry.target)
+                       else "Windows asked for permission to run it and the prompt was closed")
+                app_catalog.refresh()
+                raise ToolError(f"{entry.name} didn't start — {why}.", "LAUNCH_FAILED")
             raise ToolError(f"Windows couldn't start {entry.name}: {e.strerror or e}", "LAUNCH_FAILED")
         result = {"app": entry.name, "source": entry.source, "launched": True, "window": None}
+        from modules.desktop.vocabulary import vocabulary
+        vocabulary.note_used(entry.name)              # breaks ties between sound-alike names later
         if wait and HAS_WIN32:
             hint = (entry.process_hint or entry.name.split(" ")[0]).lower()
             deadline = time.time() + 8

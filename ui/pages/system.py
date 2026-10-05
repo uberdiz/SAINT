@@ -8,7 +8,8 @@ subsystem is up, voice-pipeline latency against its goal, and module status.
 import platform
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout,
+                               QWidget)
 
 from core.analytics import analytics
 from core.config import config
@@ -65,6 +66,14 @@ class SystemPage(Page):
             grid.addWidget(self.t[n], i // 4, i % 4)
         body.addLayout(grid)
 
+
+        # What started and what didn't (core/startup.py), with Retry for failures.
+        boot = Card("Startup")
+        self.boot_rows = QVBoxLayout()
+        self.boot_rows.setSpacing(8)
+        boot.body.addLayout(self.boot_rows)
+        body.addWidget(boot)
+        self._boot_sig = None
 
         lat = Card("Voice pipeline latency")
         lg = QGridLayout()
@@ -158,3 +167,49 @@ class SystemPage(Page):
 
         for key, (m, c) in self._chips.items():
             set_chip(c, "On" if m.enabled else "Off", "ok" if m.enabled else "")
+        self._render_startup()
+
+    def _render_startup(self):
+        from core.startup import startup
+        steps = startup.steps()
+        sig = tuple((s["key"], s["status"], s["detail"]) for s in steps)
+        if sig == self._boot_sig:
+            return
+        self._boot_sig = sig
+        while self.boot_rows.count():
+            item = self.boot_rows.takeAt(0)
+            lay = item.layout()
+            while lay is not None and lay.count():
+                w = lay.takeAt(0).widget()
+                if w is not None:
+                    w.deleteLater()
+        if not steps:
+            self.boot_rows.addLayout(self._boot_row("SAINT is still starting…", "", "", None))
+        for s in steps:
+            self.boot_rows.addLayout(self._boot_row(s["label"], s["status"], s["detail"],
+                                                    s["key"] if s["retryable"] else None))
+
+    def _boot_row(self, label, status, detail, retry_key):
+        row = QHBoxLayout()
+        name = QLabel(label)
+        name.setStyleSheet("font-weight: 600;")
+        name.setFixedWidth(230)
+        desc = ElidedLabel(detail)
+        desc.setObjectName("Muted")
+        c = chip("")
+        set_chip(c, {"ok": "Running", "failed": "Failed", "off": "Off"}.get(status, "…"),
+                 {"ok": "ok", "failed": "err"}.get(status, ""))
+        row.addWidget(name)
+        row.addWidget(desc, 1)
+        if retry_key:
+            b = QPushButton("Retry")
+            b.setToolTip(f"Start {label} again")
+
+            def again(_=False, key=retry_key):
+                from core.startup import startup
+                b.setEnabled(False)
+                run_async(lambda: startup.retry(key), lambda _ok: self.refresh(), lambda _e: self.refresh())
+            b.clicked.connect(again)
+            row.addWidget(b)
+        row.addWidget(c)
+        return row

@@ -80,7 +80,9 @@ class SpotifyMemory:
         # Older databases lack listening.artist_id / skips.source
         for sql in ("ALTER TABLE listening ADD COLUMN artist_id TEXT",
                     # voice = "skip" said to SAINT, ui = mini player button, app = in Spotify itself
-                    "ALTER TABLE skips ADD COLUMN source TEXT NOT NULL DEFAULT 'app'"):
+                    "ALTER TABLE skips ADD COLUMN source TEXT NOT NULL DEFAULT 'app'",
+                    # the playlist/album it was skipped in: "skips it in my gym playlist"
+                    "ALTER TABLE skips ADD COLUMN context_uri TEXT"):
             try:
                 self._exec(sql)
             except sqlite3.OperationalError:
@@ -174,14 +176,51 @@ class SpotifyMemory:
     def recent_requests(self, limit: int = 20) -> List[Dict[str, Any]]:
         return self._query("SELECT * FROM requests ORDER BY created_at DESC LIMIT ?", (limit,))
 
-    def record_skip(self, track: Dict[str, Any], progress_ms: int = 0, source: str = "app"):
+    def record_skip(self, track: Dict[str, Any], progress_ms: int = 0, source: str = "app",
+                    context_uri: str = ""):
         item = track or {}
         artists = item.get("artists") or []
-        self._exec("""INSERT INTO skips(created_at,track_id,track_name,artist,progress_ms,duration_ms,source)
-                      VALUES(?,?,?,?,?,?,?)""",
+        self._exec("""INSERT INTO skips(created_at,track_id,track_name,artist,progress_ms,duration_ms,source,
+                                        context_uri) VALUES(?,?,?,?,?,?,?,?)""",
                    (time.time(), item.get("id"), item.get("name"),
                     artists[0].get("name", "") if artists else "", int(progress_ms or 0),
-                    int(item.get("duration_ms") or 0), source or "app"))
+                    int(item.get("duration_ms") or 0), source or "app", context_uri or ""))
+
+    def context_skip_stats(self, track_id: str, context_uri: str, days: int = 90) -> Dict[str, Any]:
+        """How often a song was played and skipped *in this playlist*, and how
+        far in the skips came (median seconds)."""
+        since = time.time() - days * 86400
+        skips = [int(r["progress_ms"] or 0) for r in self._query(
+            "SELECT progress_ms FROM skips WHERE track_id=? AND context_uri=? AND created_at>=?",
+            (track_id, context_uri, since))]
+        plays = self._query("SELECT COUNT(*) AS n FROM listening WHERE track_id=? AND context_uri=? AND played_at>=?",
+                            (track_id, context_uri, since))[0]["n"]
+        skips.sort()
+        return {"skips": len(skips), "plays": max(int(plays), len(skips)),
+                "median_skip_s": round(skips[len(skips) // 2] / 1000) if skips else None}
+
+    def playlist_dislikes(self, context_uri: str) -> set:
+        return {p["key"].rsplit(":", 1)[-1] for p in self.get_preferences(f"playlist_dislike:{context_uri}:")
+                if p.get("value")}
+
+    def mark_playlist_dislike(self, context_uri: str, track: Dict[str, Any], stats: Dict[str, Any]):
+        artists = (track or {}).get("artists") or []
+        self.set_preference(f"playlist_dislike:{context_uri}:{track.get('id')}",
+                            {"track": track.get("name"), "artist": artists[0].get("name", "") if artists else "",
+                             **stats}, kind="inferred", confidence=min(1.0, 0.3 * stats.get("skips", 0)))
+
+    def mark_mood_mismatch(self, mood: str, track: Dict[str, Any]):
+        """The user said this song doesn't fit ``mood`` ("that's not a chill song")."""
+        artists = (track or {}).get("artists") or []
+        self.set_preference(f"mood_mismatch:{mood}:{track.get('id')}",
+                            {"track": track.get("name"), "artist": artists[0].get("name", "") if artists else ""},
+                            kind="explicit")
+
+    def mood_mismatches(self, mood: str) -> set:
+        return {p["key"].rsplit(":", 1)[-1] for p in self.get_preferences(f"mood_mismatch:{mood}:")}
+
+    def clear_playlist_dislike(self, context_uri: str, track_id: str):
+        self._exec("DELETE FROM preferences WHERE key=?", (f"playlist_dislike:{context_uri}:{track_id}",))
 
     def skip_sources(self, days: int = 30) -> Dict[str, int]:
         rows = self._query("SELECT source, COUNT(*) AS n FROM skips WHERE created_at>=? GROUP BY source",

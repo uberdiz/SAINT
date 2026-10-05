@@ -11,6 +11,7 @@ from the UI, or on a schedule (a scheduler "command" automation that says
 scene can do anything a command can. Stored in data/scenes.json.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -44,6 +45,7 @@ class Scene:
     automation_id: str = ""           # scheduler entry backing ``schedule``
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     last_run: float = 0.0
+    explained: str = ""               # the steps whose plan notes were last read out (a hash)
 
 
 class SceneStore:
@@ -152,7 +154,8 @@ class SceneStore:
                 continue
             if key not in existing:
                 try:
-                    self.save(Scene(d.name, list(d.steps), phrase=d.phrase))
+                    self.save(Scene(d.name, list(d.steps), phrase=d.phrase,
+                                    id=hashlib.md5(key.encode()).hexdigest()[:8]))   # same id on every device
                 except ValueError:
                     continue
             added.append(key)
@@ -170,11 +173,60 @@ class SceneStore:
         if not t:
             return None
         bare = _SUFFIX.sub("", _VERB.sub("", t))
+        from modules.learning.lesson import canon, _MESSAGE_TASK
+        said = canon(text)
         for s in self.all():
             names = {_norm(s.name), _SUFFIX.sub("", _norm(s.name)), _norm(s.phrase)} - {""}
             if t in names or bare in names:
                 return s
+            # "write me an email to Mr Norton about the meeting" runs the "write me an email" scene
+            # with those answers filled in.
+            mine = canon(s.name)
+            if mine and _MESSAGE_TASK.match(mine) and said.startswith(mine + " ") and \
+                    re.match(r"^(?:to|about|saying|regarding)\b", said[len(mine) + 1:]):
+                return s
         return None
+
+    def plan(self, scene: Scene):
+        """The scene's steps as SAINT will run them (modules/automation/scene_plan.py)."""
+        from modules.automation.scene_plan import plan
+        return plan(scene.name, scene.steps)
+
+    @staticmethod
+    def steps_hash(scene: Scene) -> str:
+        return hashlib.md5("\n".join(scene.steps).encode("utf-8")).hexdigest()[:10]
+
+    def mark_explained(self, scene: Scene):
+        with self._lock:
+            scenes = self._load()
+            for s in scenes:
+                if s.id == scene.id:
+                    s.explained = self.steps_hash(scene)
+            self._write(scenes)
+
+    def note_run(self, scene: Scene):
+        """Remember when it last ran (an interactive scene finishes through the lesson runner)."""
+        scene.last_run = time.time()
+        with self._lock:
+            scenes = self._load()
+            for s in scenes:
+                if s.id == scene.id:
+                    s.last_run = scene.last_run
+            self._write(scenes)
+
+    def set_steps(self, scene: Scene, steps: List[str]):
+        """A step was repaired while the scene ran ("how should I do it now?")."""
+        scene.steps = list(steps)
+        with self._lock:
+            scenes = self._load()
+            for s in scenes:
+                if s.id == scene.id:
+                    s.steps = list(steps)
+            self._write(scenes)
+        event_bus.emit_event(EventType.AUTOMATION_UPDATED, {"id": scene.id, "title": scene.name, "scene": True})
+
+    def interactive_run(self, scene: Scene, lines: List[str]) -> "SceneRun":
+        return SceneRun(scene, lines, self)
 
     def run(self, scene: Scene, run_command: Callable[[str], str]) -> List[str]:
         log.info("scene.run name=%r steps=%d", scene.name, len(scene.steps))
@@ -220,6 +272,31 @@ class SceneStore:
             if on_done:
                 on_done(res)
         threading.Thread(target=go, daemon=True, name=f"{_RUNNER_PREFIX}{scene.id}").start()
+
+
+@dataclass
+class SceneRun:
+    """A scene that asks things, as the lesson runner (modules/learning/lesson.py) runs it:
+    it waits for each answer, so nothing happens on screen before SAINT knows what to do."""
+    scene: Scene
+    steps: List[str]
+    store: SceneStore
+
+    @property
+    def phrase(self) -> str:
+        return self.scene.name
+
+    @property
+    def id(self) -> str:
+        return self.scene.id
+
+    def save_steps(self, lines: List[str]):
+        self.store.set_steps(self.scene, lines)
+
+    def on_done(self):
+        self.store.note_run(self.scene)
+        event_bus.emit_event(EventType.AUTOMATION_TRIGGERED, {"id": self.scene.id, "title": self.scene.name,
+                                                              "kind": "scene", "result": "Done."})
 
 
 scenes = SceneStore()

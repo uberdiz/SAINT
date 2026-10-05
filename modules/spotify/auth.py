@@ -16,6 +16,7 @@ from typing import Optional
 import requests
 
 from core.config import config
+from core.paths import keyring_service
 
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -45,6 +46,16 @@ class SpotifyAuth:
     def __init__(self):
         self._token: Optional[SpotifyToken] = None
         self._lock = threading.Lock()
+        self._pending: Optional[threading.Event] = None      # set to abandon the sign-in that's waiting
+
+    def cancel_login(self) -> bool:
+        """Give up on a sign-in still waiting for the browser (wrong redirect, closed tab), so
+        "Connect" can start a fresh one at once instead of after the 3-minute timeout."""
+        pending, self._pending = self._pending, None
+        if pending is not None:
+            pending.set()
+            return True
+        return False
 
     @property
     def client_id(self):
@@ -60,7 +71,7 @@ class SpotifyAuth:
     def _load_saved(self):
         try:
             import keyring
-            raw = keyring.get_password("SAINT", "spotify")
+            raw = keyring.get_password(keyring_service(), "spotify")
             if raw:
                 data = json.loads(raw)
                 self._token = SpotifyToken(**data)
@@ -72,7 +83,7 @@ class SpotifyAuth:
             return
         try:
             import keyring
-            keyring.set_password("SAINT", "spotify", json.dumps(self._token.__dict__))
+            keyring.set_password(keyring_service(), "spotify", json.dumps(self._token.__dict__))
         except Exception:
             log.warning("spotify.token.save_failed", exc_info=True)
 
@@ -80,7 +91,7 @@ class SpotifyAuth:
         self._token = None
         try:
             import keyring
-            keyring.delete_password("SAINT", "spotify")
+            keyring.delete_password(keyring_service(), "spotify")
         except Exception:
             pass
 
@@ -148,8 +159,11 @@ class SpotifyAuth:
         if parsed.hostname not in {"127.0.0.1", "localhost"}:
             raise RuntimeError("Desktop PKCE requires a loopback redirect URI.")
 
+        self.cancel_login()                         # a second "Connect" replaces a stuck first one
         result = {}
         done = threading.Event()
+        cancelled = threading.Event()
+        self._pending = cancelled
 
         class CallbackHandler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
@@ -164,7 +178,16 @@ class SpotifyAuth:
             def log_message(self, *_args):
                 return
 
-        server = http.server.ThreadingHTTPServer((parsed.hostname, parsed.port or 80), CallbackHandler)
+        server = None
+        for _ in range(10):                         # the abandoned attempt may still be letting go of the port
+            try:
+                server = http.server.ThreadingHTTPServer((parsed.hostname, parsed.port or 80), CallbackHandler)
+                break
+            except OSError:
+                time.sleep(0.3)
+        if server is None:
+            raise RuntimeError(f"Port {parsed.port} is busy, so Spotify can't send you back to SAINT. Close whatever "
+                               f"is using it, or change the Redirect URI (and add the new one in your Spotify app).")
         server.timeout = 1
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -177,13 +200,17 @@ class SpotifyAuth:
                 "code_challenge_method": "S256",
                 "code_challenge": challenge,
                 "state": state,
+                "show_dialog": "true",              # always show Spotify's page, so a wrong attempt can be redone
             })
             webbrowser.open(f"{AUTH_URL}?{query}")
             deadline = time.time() + 180
             while time.time() < deadline and not done.wait(0.5):
-                pass
+                if cancelled.is_set():
+                    raise RuntimeError("Spotify sign-in cancelled.")
             if not result:
-                raise RuntimeError("Spotify authentication timed out or was canceled.")
+                raise RuntimeError("Spotify sign-in timed out. If Spotify showed an error (like “Invalid redirect "
+                                   "URI”), add the Redirect URI from Settings to your Spotify app exactly, then "
+                                   "press Connect again.")
             if result.get("state") != state:
                 raise RuntimeError("Spotify authentication state validation failed.")
             if result.get("error"):
@@ -212,5 +239,7 @@ class SpotifyAuth:
             self._save()
             return True
         finally:
+            if self._pending is cancelled:
+                self._pending = None
             server.shutdown()
             server.server_close()

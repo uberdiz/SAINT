@@ -9,6 +9,8 @@ go to the LLM:
     what are you doing?                              → describe current work
     silent mode (for 30 minutes) / be quiet for 1 h  → act, but don't talk
     you can talk again / normal mode                 → end silent mode
+    talk louder / your voice is too quiet            → SAINT's own voice volume (not Spotify / Windows)
+    voice volume 60 / set your voice to 60%
 
 ``match_meta`` only matches the *whole* utterance (with fillers like "okay",
 "saint", "please"), so "stop the music" and "I'm done gaming" are untouched.
@@ -40,13 +42,22 @@ _SILENT_OFF = re.compile(
     rf"(?:turn\s+off|stop|end|disable|exit|leave)\s+(?:the\s+)?(?:silent|quiet)\s+mode|unmute\s+yourself)"
     rf"[\s,.!]*$", re.I)
 
+_VOICE_VOLUME = re.compile(
+    rf"^{_FILL}(?:(?:talk|speak)\s+(?P<a>louder|up|quieter|softer|lower|more\s+quietly|more\s+softly)"
+    rf"|(?:turn|make)\s+(?:your\s+voice|yourself)\s+(?P<b>up|down|louder|quieter|softer)"
+    rf"|your\s+voice\s+is\s+too\s+(?P<c>quiet|loud|soft|low)"
+    rf"|(?:set\s+|change\s+|put\s+)?(?:your\s+)?voice\s+(?:volume\s+)?(?:to\s+|at\s+)?(?P<n>\d{{1,3}})\s*(?:%|percent)?)"
+    rf"[\s,.!]*{_FILL}$", re.I)
+VOICE_STEP = 20
+
 _NUM = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "half an": 0.5}
 
 
 @dataclass
 class Meta:
-    kind: str                 # stop | stop_all | status | silent_on | silent_off
+    kind: str                 # stop | stop_all | status | silent_on | silent_off | voice_set | voice_step
     minutes: float = 0.0
+    value: float = 0.0        # voice_set: percent; voice_step: +/- percent
 
 
 def match_meta(text: str) -> Optional[Meta]:
@@ -71,6 +82,13 @@ def match_meta(text: str) -> Optional[Meta]:
         return Meta("stop")
     if _STATUS.match(t):
         return Meta("status")
+    m = _VOICE_VOLUME.match(t)
+    if m:
+        if m.group("n"):
+            return Meta("voice_set", value=float(m.group("n")))
+        word = (m.group("a") or m.group("b") or m.group("c") or "").lower()
+        louder = word in ("louder", "up", "quiet", "soft", "low")    # "too quiet" -> louder
+        return Meta("voice_step", value=VOICE_STEP if louder else -VOICE_STEP)
     return None
 
 
@@ -85,6 +103,9 @@ def run_meta(meta: Meta) -> str:
         cancel.trip("all" if meta.kind == "stop_all" else "current")
         confirmations.clear("dismissed")
         choices.clear()
+        from modules.learning.lesson import lessons
+        if lessons.stop() and meta.kind == "stop":
+            return "Okay, I stopped."
         if meta.kind == "stop_all":
             return "Stopped everything."
         return "Okay."
@@ -100,4 +121,12 @@ def run_meta(meta: Meta) -> str:
         was = output_policy.silent
         output_policy.clear_silent()
         return "I'm back." if was else "I wasn't in silent mode."
+    if meta.kind in ("voice_set", "voice_step"):
+        from modules.voice.output_policy import VOLUME_MAX, set_voice_volume, voice_volume
+        before = int(round(voice_volume() * 100))
+        new = set_voice_volume(meta.value if meta.kind == "voice_set" else before + meta.value)
+        if new == before:
+            return f"My voice is already at {new}%" + (" — that's as loud as it goes." if new >= VOLUME_MAX
+                                                        else ".")
+        return f"My voice is at {new}% now." if new else "My voice is muted — say “voice volume 80” to hear me."
     return ""

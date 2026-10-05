@@ -41,11 +41,14 @@ class DictationSession:
 
 
 class DictationManager:
-    """Single-user, single-session capture. Not thread-safe across processes."""
+    """Single-user, single-session capture. Not thread-safe across processes.
+
+    "Write an email" is not dictation: an email gets sent somewhere, so it's a
+    task SAINT is walked through once and then does (modules/learning/lesson.py)."""
 
     START_RE = re.compile(
         r"^(?:help me\s+)?(?:write|draft|compose|make|create)\s+(?:me\s+)?(?:a\s+|an\s+|the\s+)?"
-        r"(?:prompt|message|email|note|paragraph|description|summary|idea|essay|post|readme|"
+        r"(?:prompt|message|note|paragraph|description|summary|idea|essay|post|readme|"
         r"pitch|brief|spec|outline|plan)"
         r"(?:\s+(?:about|for|on|regarding)\s+(.+))?"
         r"[.!?]?$", re.IGNORECASE)

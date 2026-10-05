@@ -3,6 +3,8 @@ action phrases are never mistaken for song titles."""
 
 import pytest
 
+from core.config import config
+
 from modules.agent.context import desktop_context
 from modules.agent.router import route, spotify_intent
 
@@ -88,9 +90,15 @@ def test_queue_removal_is_honest():
 
 
 # ---------------------------------------------------------------- context
-def test_volume_follows_context():
+def test_volume_follows_context(monkeypatch):
+    # 2026-09-30: a bare "turn it down" is the whole PC (Voicemeeter) even while music
+    # plays; "turn Spotify down" is Spotify. audio.turn_it_means="music" brings back
+    # the old follow-the-music behaviour.
     assert route("Turn the volume down.").name == "desktop.volume"          # no music context
     desktop_context.note_domain("spotify")
+    assert route("Turn the volume down.").name == "desktop.volume"
+    assert route("Turn Spotify down.").name == "spotify.volume_down"
+    monkeypatch.setitem(config._data.setdefault("audio", {}), "turn_it_means", "music")
     assert route("Turn the volume down.").name == "spotify.volume_down"     # after a music command
     desktop_context.note_domain("browser")
     assert route("Turn the volume down.").name == "desktop.volume"          # after a video

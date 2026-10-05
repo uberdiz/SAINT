@@ -23,6 +23,18 @@ if sys.stdout is None:
 if sys.stderr is None:
     sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
+# Packaged SAINT.exe keeps large model files in the user's writable data folder.
+# The installer itself stays small; first-run setup downloads voice models from
+# the public SAINT GitHub Release.
+if getattr(sys, "frozen", False):
+    _models = os.path.join(
+        os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\\AppData\\Local"),
+        "SAINT", "models", "hf", "hub",
+    )
+    os.makedirs(_models, exist_ok=True)
+    if not os.environ.get("HF_HUB_CACHE"):
+        os.environ["HF_HUB_CACHE"] = _models
+
 # Qt 6 owns per-monitor DPI awareness; only the rounding policy is set here
 # (it must be configured before the QApplication exists).
 try:
@@ -31,6 +43,23 @@ try:
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
 except Exception:
     pass
+
+
+def _profile_from_args() -> str:
+    """`--profile demo` / `--profile=clean`: test on a separate data folder (core/profiles.py).
+    Read before anything loads the config, so the whole app uses that folder."""
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == "--profile" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
+    return ""
+
+
+if _profile_from_args() and not os.environ.get("SAINT_DATA_DIR"):
+    os.environ["SAINT_PROFILE"] = _profile_from_args()
+    from core import profiles as _profiles
+    _profiles.ensure(_profile_from_args())
 
 from core.config import config
 from core.logger import init_logger
@@ -63,6 +92,8 @@ def show_setup_dialog():
 def main():
     parser = argparse.ArgumentParser(description="SAINT local AI assistant")
     parser.add_argument("--background", action="store_true", help="start hidden in the system tray")
+    parser.add_argument("--profile", default="", help="test on a separate data folder: clean, demo, or a "
+                                                      "snapshot made with tools/profiles.py (your data is untouched)")
     args = parser.parse_args()
 
     from PySide6.QtCore import QLockFile, QTimer
@@ -81,10 +112,13 @@ def main():
     app.setApplicationDisplayName("SAINT")
     app.setQuitOnLastWindowClosed(False)   # the tray keeps SAINT alive
 
-    lock = QLockFile(str(data_path("saint.lock")))
+    # One SAINT at a time, whichever data it uses: two would both answer the microphone.
+    from core.paths import base_data_dir, profile_name
+    lock = QLockFile(str(base_data_dir() / "saint.lock"))
     lock.setStaleLockTime(0)
     if not lock.tryLock(100):
-        QMessageBox.information(None, "SAINT", "SAINT is already running (check the system tray).")
+        extra = f" Quit it first to start the “{profile_name()}” test profile." if profile_name() else ""
+        QMessageBox.information(None, "SAINT", "SAINT is already running (check the system tray)." + extra)
         return 0
 
     setup_result = run_first_run_setup()
@@ -100,8 +134,10 @@ def main():
     runtime.start()
 
     import threading
-    from core import autostart
-    threading.Thread(target=autostart.sync, daemon=True, name="autostart-sync").start()
+    # Run from source: keep .venv\SAINT\SAINT.exe built (core/app_exe.py) so SAINT
+    # is "SAINT" in Task Manager, and point the shortcuts at it.
+    from core import app_exe
+    threading.Thread(target=app_exe.ensure, daemon=True, name="app-exe").start()
 
     from ui.main_window import MainWindow
     window = MainWindow(app, runtime)

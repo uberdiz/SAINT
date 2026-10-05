@@ -6,6 +6,8 @@ window — tray icon, the Halo, the overlay, the floating mini player, the
 global hotkey, the command palette, toasts and demo mode.
 """
 
+import logging
+
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
@@ -18,9 +20,11 @@ from ui.reactive import ui_bus
 from ui.theme import build_stylesheet, current_palette, qt_palette, state_color
 from ui.widgets import ElidedLabel, IconButton, Orb
 
+log = logging.getLogger("saint.ui")
+
 PAGES = [("Home", "home"), ("Music", "music"), ("Automations", "zap"), ("History", "history"),
          ("Memory", "memory"), ("Activity", "activity"), ("Storage", "drive"), ("System", "cpu"),
-         ("Settings", "settings")]
+         ("Devices", "smartphone"), ("Settings", "settings")]
 
 LOGO_PATH = "SAINT.png"       # the SAINT logo shipped in the repository root
 
@@ -185,7 +189,11 @@ class MainWindow(QMainWindow):
         actions.runtime = runtime
         self._quitting = False
         self._last_notice = ("", 0.0)
-        self.setWindowTitle("SAINT")
+        self._widget_in_game = False          # the user asked for the mini player during a game
+        from core.paths import profile_name
+        # A test profile is never mistaken for the real thing (core/profiles.py).
+        self._profile = profile_name()
+        self.setWindowTitle(f"SAINT — {self._profile} profile (test data)" if self._profile else "SAINT")
         self.resize(1360, 860)
         self.setMinimumSize(1040, 680)
 
@@ -227,9 +235,10 @@ class MainWindow(QMainWindow):
         self.home = HomePage(self)
         self.music = MusicPage(self)
         self.settings_ui = SettingsUI(on_appearance_changed=self.apply_appearance)
+        from ui.pages.devices import DevicesPage
         from ui.pages.storage import StoragePage
         self.pages = [self.home, self.music, AutomationsPage(), HistoryPage(), MemoryPage(), ActivityPage(),
-                      StoragePage(), SystemPage(), self.settings_ui]
+                      StoragePage(), SystemPage(), DevicesPage(), self.settings_ui]
         for page in self.pages:
             self.stack.addWidget(page)
 
@@ -252,7 +261,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.palette.open)
         QShortcut(QKeySequence("Ctrl+,"), self, activated=lambda: self.navigate("Settings"))
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._escape)
-        for i, (name, _icon) in enumerate(PAGES):
+        for i, (name, _icon) in enumerate(PAGES[:9]):              # Ctrl+1 ... Ctrl+9
             QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda n=name: self.navigate(n))
 
         self._build_tray()
@@ -291,7 +300,7 @@ class MainWindow(QMainWindow):
     def _commands(self):
         from ui.palette import Command
         from modules.automation.scenes import scenes
-        cmds = [Command(f"Go to {n}", f"Page · Ctrl+{i + 1}", ic, lambda n=n: self.navigate(n))
+        cmds = [Command(f"Go to {n}", f"Page · Ctrl+{i + 1}" if i < 9 else "Page", ic, lambda n=n: self.navigate(n))
                 for i, (n, ic) in enumerate(PAGES)]
         hk = config.get("overlay.hotkey", "")
         halo = config.get("overlay.halo", "minimized")
@@ -338,14 +347,20 @@ class MainWindow(QMainWindow):
         if not self.overlay.isVisible():
             self.overlay.open_overlay()
 
-    def set_widget(self, on: bool):
+    def set_widget(self, on: bool, explicit: bool = True):
+        """``explicit``: the user asked (voice, a button, a menu), so it shows even
+        in Game Mode — "turn on the mini player" during Roblox said "on" and
+        showed nothing (2026-09-30). Restoring it at startup still respects Game Mode."""
         on = bool(on)
         if bool(config.get("widgets.spotify", False)) != on:
             config.set("widgets.spotify", on)
         from core.game_mode import game_mode
-        if on and not self.widget.isVisible() and not game_mode.overlays_blocked:
+        if on and explicit and not game_mode.mini_player_allowed:
+            self._widget_in_game = True
+        if on and not self.widget.isVisible() and (game_mode.mini_player_allowed or self._widget_in_game):
             self.widget.appear()
         elif not on:
+            self._widget_in_game = False
             self.widget.hide()
         self.music.apply_theme()
         self._tray_sync()
@@ -434,7 +449,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon)
         QApplication.instance().setWindowIcon(icon)
         self.hotkey.register(config.get("overlay.hotkey", "alt+`"))
-        self.set_widget(bool(config.get("widgets.spotify", False)))
+        self.set_widget(bool(config.get("widgets.spotify", False)), explicit=False)
         self.halo.refresh()
         self._update_halo()
         self._render_state(ui_bus.state)
@@ -449,8 +464,10 @@ class MainWindow(QMainWindow):
         if getattr(self, "tray", None):
             from core.game_mode import game_mode
             self.tray.setIcon(QIcon(logo_pixmap(64, color)))
-            game = f" · Game Mode ({game_mode.game})" if game_mode.active else ""
-            self.tray.setToolTip(f"SAINT — {s.get('label', '')}{game}")
+            playing = f" ({game_mode.game})" if game_mode.game else ""
+            game = f" · Gaming Mode{playing}" if game_mode.active else ""
+            prof = f" [{self._profile} profile]" if self._profile else ""
+            self.tray.setToolTip(f"SAINT{prof} — {s.get('label', '')}{game}")
 
     def _sync_mic(self):
         on = actions.listening()
@@ -471,22 +488,72 @@ class MainWindow(QMainWindow):
         self.halo.set_visible(self.halo.previewing or mode == "always" or (mode == "minimized" and away))
 
     def _on_game_mode(self, p: dict):
-        """Game Mode changed (core/game_mode.py): hide / restore the overlays."""
+        """A game started / stopped, or Gaming Mode changed (core/game_mode.py):
+        hide / restore the overlays, show the mini player if Gaming Mode keeps
+        it, and move SAINT off the game's monitor."""
+        from core.game_mode import game_mode
         blocked = bool(p.get("overlays_blocked"))
         self._update_halo()
+        if not p.get("running"):
+            # Only when the game is gone: "gaming mode off" with the game still running kept
+            # hiding the mini player the user had just turned on (2026-10-05).
+            self._widget_in_game = False
         if blocked:
             self.action_notice.hide()
-            if self.widget.isVisible():
-                self.widget.hide()
-        elif config.get("widgets.spotify", False) and not self.widget.isVisible():
+        want = bool(config.get("widgets.spotify", False)) or (game_mode.active and game_mode.feature("mini_player"))
+        if self.widget.isVisible() and (not want or not (game_mode.mini_player_allowed or self._widget_in_game)):
+            self.widget.hide()
+        elif want and not self.widget.isVisible() and game_mode.mini_player_allowed:
             self.widget.appear()
+        if p.get("changed"):
+            if self.widget.isVisible():
+                self.widget.place()                  # its Gaming Mode / normal position
+            if p.get("active") and game_mode.feature("reposition_ui"):
+                self.move_off_game()
         self._render_state(ui_bus.state)
+        self._tray_sync()
         if p.get("changed") and config.get("game_mode.announce", True):
             if p.get("active"):
-                self._notice("Game Mode", f"{p.get('game') or 'A game'} is running. The Halo and pop-ups are off; "
-                             "voice and music still work.", "info", "zap")
+                what = f"{p.get('game')} is running. " if p.get("game") else ""
+                self._notice("Gaming Mode on", what + "SAINT follows your Gaming Mode settings; "
+                             "say “gaming mode off” any time.", "info", "zap")
             else:
-                self._notice("Game Mode off", "The Halo and pop-ups are back.", "ok", "zap")
+                self._notice("Gaming Mode off", "Everything is back to normal.", "ok", "zap")
+
+    def move_off_game(self) -> str:
+        """Put SAINT's windows on the monitor it uses while gaming. Returns where, or ""."""
+        from core.game_mode import game_mode
+        from ui import placement
+        target = placement.gaming_screen(game_mode.game_rect())
+        if target is None:
+            return ""
+        moved = []
+        if self.isVisible() and not self.isMinimized() and placement.move_to_screen(self, target):
+            moved.append("SAINT")
+        if self.overlay.isVisible() and placement.move_to_screen(self.overlay, target):
+            moved.append("the overlay")
+        corner = "" if config.get("widgets.spotify_pos_game") else "bottom-right"
+        if self.widget.isVisible() and placement.move_to_screen(self.widget, target, corner):
+            moved.append("the mini player")
+        if moved:
+            log.info("ui.moved_off_game %s -> screen %d", moved, placement.screen_number(target))
+        return f"monitor {placement.screen_number(target)}" if moved else ""
+
+    def place_window(self, what: str, monitor) -> str:
+        """"Move the mini player to my second monitor" (voice / menus)."""
+        from ui import placement
+        target = placement.screen_for(monitor)
+        if target is None:
+            raise ValueError(f"I can't find monitor {monitor}.")
+        widget = {"mini_player": self.widget, "overlay": self.overlay}.get(what, self)
+        if widget is self.widget and not self.widget.isVisible():
+            self.set_widget(True)
+        if widget is self and (not self.isVisible() or self.isMinimized()):
+            self.show_normal()
+        placement.move_to_screen(widget, target, "bottom-right" if widget is self.widget else "")
+        if widget is self.widget:
+            self.widget.remember_position()
+        return f"monitor {placement.screen_number(target)}"
 
     def _build_tray(self):
         self.tray = None
@@ -502,6 +569,8 @@ class MainWindow(QMainWindow):
             act = QAction(e[0], self)
             act.triggered.connect(e[1])
             menu.addAction(act)
+        self._gaming_action = QAction("Gaming Mode", self, checkable=True)
+        self._gaming_action.triggered.connect(self.set_gaming_mode)
         self._widget_action = QAction("Mini player", self, checkable=True)
         self._widget_action.triggered.connect(self.set_widget)
         self._halo_action = QAction("Halo", self, checkable=True)
@@ -512,7 +581,7 @@ class MainWindow(QMainWindow):
         demo.triggered.connect(self.start_demo)
         quit_ = QAction("Quit SAINT", self)
         quit_.triggered.connect(self.quit)
-        for act in (self._widget_action, self._halo_action, self._listen_action, demo):
+        for act in (self._gaming_action, self._widget_action, self._halo_action, self._listen_action, demo):
             menu.addAction(act)
         menu.addSeparator()
         menu.addAction(quit_)
@@ -521,14 +590,24 @@ class MainWindow(QMainWindow):
                                     if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick) else None)
         self.tray.show()
 
+    def set_gaming_mode(self, on: bool):
+        from core.game_mode import game_mode
+        game_mode.set_manual(bool(on))
+
     def _tray_sync(self):
         if getattr(self, "tray", None):
+            from core.game_mode import game_mode
+            self._gaming_action.setChecked(game_mode.active)
             self._widget_action.setChecked(bool(config.get("widgets.spotify", False)))
             self._halo_action.setChecked(config.get("overlay.halo", "minimized") != "off")
 
     def _notice(self, title, message, kind="info", icon=None):
         """Toast when the window is in front, tray balloon otherwise."""
         import time
+        from core.game_mode import game_mode
+        level = game_mode.feature("notifications")          # Gaming Mode: all / minimal / off
+        if level == "off" or (level == "minimal" and kind != "error" and icon != "bell"):
+            return
         key = f"{title}|{message}"
         if self._last_notice[0] == key and time.time() - self._last_notice[1] < 30:
             return
@@ -547,6 +626,9 @@ class MainWindow(QMainWindow):
             self._render_state(p)
         elif t == EventType.GAME_MODE:
             self._on_game_mode(p)
+        elif t == EventType.STARTUP_STATUS and p.get("status") == "failed":
+            self._notice(f"{p.get('label', 'Something')} didn't start",
+                         f"{p.get('detail', '')}. SAINT keeps running — retry it on the System page.", "error")
         elif t in (EventType.VOICE_LISTENING_START, EventType.VOICE_LISTENING_STOP):
             self._sync_mic()
         elif t == EventType.NOTIFY:
@@ -602,6 +684,10 @@ class MainWindow(QMainWindow):
                         dark = str(config.get("appearance.theme", "Dark")).lower() != "light"
                         value = "light" if dark else "dark"
                     self._set_theme(value.capitalize())
+            elif cmd == "place":
+                message = self.place_window(args.get("what", "saint"), args.get("monitor", "other"))
+            elif cmd == "gaming_workspace":
+                message = self.move_off_game()
             elif cmd == "window":
                 action = args.get("action")
                 if action == "show":

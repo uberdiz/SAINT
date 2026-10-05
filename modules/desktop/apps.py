@@ -97,6 +97,39 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", s.lower())).strip()
 
 
+class _ShortcutReader:
+    """Reads where a .lnk points (WScript.Shell, one COM object per thread)."""
+
+    def __init__(self):
+        self._local = threading.local()
+
+    def target(self, path: str) -> str:
+        if os.name != "nt" or not path.lower().endswith(".lnk"):
+            return ""
+        shell = getattr(self._local, "shell", None)
+        try:
+            if shell is None:
+                import pythoncom
+                import win32com.client
+                pythoncom.CoInitialize()
+                shell = self._local.shell = win32com.client.Dispatch("WScript.Shell")
+            return str(shell.CreateShortcut(path).TargetPath or "")
+        except Exception:
+            return ""
+
+
+_shortcuts = _ShortcutReader()
+
+
+def broken_shortcut(path: str) -> bool:
+    """A shortcut to a program that's gone ("Antigravity.lnk" left behind when the app
+    reinstalled as "Antigravity IDE"). Windows answers launching one with ERROR_CANCELLED,
+    which SAINT used to read out as "the operation was canceled by the user".
+    Installer-advertised shortcuts (no plain target) and URLs count as fine."""
+    target = _shortcuts.target(path)
+    return bool(re.match(r"^[a-z]:\\", target, re.I)) and not os.path.exists(target)
+
+
 class AppCatalog:
     def __init__(self):
         self._lock = threading.Lock()
@@ -135,8 +168,12 @@ class AppCatalog:
                     name = os.path.splitext(f)[0]
                     if _IGNORED_SHORTCUTS.search(name):
                         continue
+                    path = os.path.join(root, f)
+                    if broken_shortcut(path):
+                        log.info("desktop.apps.broken_shortcut %s", path)
+                        continue
                     key = _norm(name)
-                    entries.setdefault(key, AppEntry(name, "path", os.path.join(root, f), "start_menu",
+                    entries.setdefault(key, AppEntry(name, "path", path, "start_menu",
                                                      process_hint=key.split(" ")[0]))
         for base in _EXTRA_SHORTCUT_DIRS:
             try:
@@ -147,7 +184,7 @@ class AppCatalog:
                 if not f.lower().endswith((".lnk", ".url")):
                     continue
                 name = os.path.splitext(f)[0]
-                if _IGNORED_SHORTCUTS.search(name):
+                if _IGNORED_SHORTCUTS.search(name) or broken_shortcut(os.path.join(base, f)):
                     continue
                 key = _norm(name)
                 entries.setdefault(key, AppEntry(name, "path", os.path.join(base, f), "shortcut",
@@ -181,15 +218,22 @@ class AppCatalog:
     def resolve(self, name: str) -> Optional[AppEntry]:
         from core.config import config
 
+        # A real path ("C:\Users\me\Downloads\Bloxstrap.exe", quoted or not):
+        # start exactly that file, never something that sounds like it.
+        raw = (name or "").strip().strip("\"'“”")
+        if re.match(r"^[a-z]:[\\/]", raw, re.I) and os.path.exists(raw):
+            stem = os.path.splitext(os.path.basename(raw))[0]
+            return AppEntry(stem, "path", raw, "path", process_hint=stem.lower())
+
         query = _norm(name)
-        query = re.sub(r"^(the|my)\s+", "", query)
+        query = re.sub(r"^(the|my|an?)\s+(?=\S)", "", query)        # "open a rocket leak"
         query = re.sub(r"\s+(app|application|program)$", "", query)
         if not query:
             return None
 
         custom = {(_norm(k)): v for k, v in (config.get("desktop.apps", {}) or {}).items()}
         if query in custom:
-            target = str(custom[query])
+            target = str(custom[query]).strip().strip("\"'")     # '"C:\...\x.exe"' copied from Explorer
             # "steam://open/games" and "ms-settings:display" are URIs; "C:\..." (a
             # one-letter scheme) is a path.
             kind = "uri" if re.match(r"^[a-z][\w+.-]+:", target, re.I) else "path"
@@ -218,6 +262,15 @@ class AppCatalog:
             hits = [k for k in entries if k.startswith(cand + " ") or k.endswith(" " + cand) or k == cand]
             if hits:
                 return entries[min(hits, key=len)]
+        # Misheard names, by sound and spelling together: "clad" / "clawed" -> Claude, "rocket leak" ->
+        # Rocket League (modules/desktop/vocabulary.py). Two that fit equally ("cloud": Claude or
+        # iCloud) are asked about instead of guessed.
+        from modules.desktop.vocabulary import vocabulary
+        meant = vocabulary.resolve(query, list(entries))
+        if meant:
+            return entries[meant]
+        if vocabulary.ambiguous(query, list(entries)):
+            return None
         close = difflib.get_close_matches(query, list(entries), n=1, cutoff=0.82)
         if not close and " " in query:
             # "block strap" -> Bloxstrap: speech-to-text split one word in two.
@@ -259,9 +312,13 @@ class AppCatalog:
         return None
 
     def suggestions(self, name: str, n: int = 3) -> List[str]:
+        """Installed apps the user may have meant, the ones that *sound* like it first."""
+        from modules.desktop.vocabulary import vocabulary
         entries = self.entries()
-        close = difflib.get_close_matches(_norm(name), list(entries), n=n, cutoff=0.5)
-        return [entries[c].name for c in close]
+        query = re.sub(r"^(the|my|an?)\s+(?=\S)", "", _norm(name))
+        sounds = [m.name for m in vocabulary.rank(query, list(entries), limit=n)]
+        close = difflib.get_close_matches(query, list(entries), n=n, cutoff=0.5)
+        return [entries[c].name for c in list(dict.fromkeys(sounds + close))[:n]]
 
 
 # Executable names for apps whose process isn't their display name.

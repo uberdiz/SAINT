@@ -442,6 +442,13 @@ _QUEUE_SIMILAR = re.compile(
     r"^(?:add|queue|cue)\s+(?:some\s+)?(?:similar|more)\s+(?:songs?|tracks?|music)(?:\s+(?:to|in)\s+(?:the |my )?queue)?$")
 _COUNT_WORDS = {"a few": 5, "a couple": 3, "a couple of": 3, "some": 5, "some more": 5, "three": 3, "four": 4,
                 "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+# "skip 3 songs" / "skip the next two" / "skip ahead four tracks" (never "skip ahead 30 seconds").
+_SKIP_COUNTS = {"one": 1, "two": 2, "a couple": 2, "a couple of": 2, "a few": 3, "three": 3, "four": 4, "five": 5,
+                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_SKIP_N = re.compile(
+    r"^(?:skip|next|go\s+forward|jump\s+ahead)\s+(?:ahead\s+|forward\s+|past\s+)?(?:the\s+next\s+)?"
+    r"(?P<n>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a couple(?: of)?|a few)"
+    r"(?:\s+(?:more\s+)?(?:songs?|tracks?|tunes?|ones?))?(?:\s+(?:on spotify|in the queue))?$")
 
 # Mood -> a queue built from scratch out of the user's own listening (spotify.play_recommended).
 _MOOD_SYNONYMS = {
@@ -570,6 +577,12 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     watching = desktop_context.domain() == "browser"
 
     # --- change the track (a request, never a title) ------------------------
+    m = _SKIP_N.match(lower)
+    if m:
+        n = int(m.group("n")) if m.group("n").isdigit() else _SKIP_COUNTS.get(m.group("n"), 1)
+        n = max(1, min(10, n))
+        return SpotifyIntent("next", "spotify.next", {}) if n == 1 else \
+            SpotifyIntent("skip_n", "spotify.skip", {"count": n})
     if _REJECT_TRACK.search(lower):
         return SpotifyIntent("next_reject", "spotify.next", {})
     if _CHANGE_TRACK.match(lower):
@@ -642,9 +655,30 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     if m:
         return SpotifyIntent("search", "spotify.search", {"query": m.group(1).strip(), "types": "track,artist,album,playlist"})
 
+    # --- "remove this song from the playlist" (the one it's playing from) ----------------
+    if has(r"^(?:remove|delete|take|get rid of|drop)\s+(?:this|that|the|it)?\s*(?:song|track|one)?\s*"
+           r"(?:from|off|out of)\s+(?:the|this|that|my)\s+playlist$"):
+        return SpotifyIntent("playlist_remove", "spotify.remove_current_from_playlist", {})
+
+    # --- "that's not a chill song": the song doesn't fit the mood -----------------------
+    # Right after the queue was read out it's about the next song ("Up next: 2K
+    # FREESTYLE" ... "that's not a chill song" got "I haven't done anything yet",
+    # 2026-09-30); otherwise the one playing.
+    m = _NOT_MOOD.match(lower)
+    if m and (m.group("mood") or desktop_context.music_is_context()):
+        mood = _NOT_MOOD_WORDS.get((m.group("mood") or "").lower(), "")
+        which = "next" if _last_was_queue_list() else "current"
+        return SpotifyIntent("not_mood", "spotify.not_mood", {"mood": mood, "which": which})
+
     # --- queue removal isn't possible through Spotify's API -------------------------------
     if has(r"^(?:remove|delete|take)\b.*\b(?:from|off|out of) (?:the |my )?queue$|^clear (?:the |my )?queue$"):
         return SpotifyIntent("queue_remove", "", {})
+
+    # --- what's queued (read from the API, nothing on screen changes) -------------
+    if has(r"^(?:list|show|read|tell me|say|give me|go through)\b.*\b(?:queue|up next|coming up)\b|"
+           r"^what(?:'?s| is| are| songs? (?:are|is))\b.*\b(?:(?:in|on) (?:the |my )?queue|queued|up next|coming up)\b|"
+           r"^what(?:'?s| is) (?:up )?next\b|^(?:my|the) queue$"):
+        return SpotifyIntent("queue_list", "spotify.queue_list", {"limit": 10})
 
     # --- what's playing (before "play") ---------------------------------
     if has(r"what(?:'?s| is| am i)\b.*\b(playing|listening to|song|track)\b") and not has(r"\b(today|lately|yesterday|this week|been)\b") \
@@ -708,12 +742,20 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         or re.search(r"^(?:turn|put|bring) (?:it )?(?:up|down|back) to (\d{1,3})", vl)
     if vol:
         return SpotifyIntent("volume_set", "spotify.volume", {"percent": max(0, min(100, int(vol.group(1))))})
-    musical = has(r"\b(music|song|spotify|track|tune)\b") or desktop_context.music_is_context()
-    # "Turn this up!", "lower volume." went to the planner (an LLM call) on 2026-09-29.
-    if musical and has(r"\b(volume up|louder|turn (it|this|the music|spotify|the volume|the song) up|turn up (the |my )?(music|volume|song|spotify)|crank it|(raise|increase) (the )?volume)\b"):
-        return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up"})
-    if musical and has(r"\b(volume down|quieter|softer|turn (it|this|the music|spotify|the volume|the song) down|turn down (the |my )?(music|volume|song|spotify)|(lower|decrease|reduce) (the )?volume)\b"):
-        return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down"})
+    # "Turn Spotify down" / "turn the music up a little" is Spotify; a bare "turn it
+    # down" is the whole PC (Voicemeeter) unless audio.turn_it_means is "music".
+    # "Turn it back up" after "turn Spotify down" is Spotify again.
+    last_target, last_points = desktop_context.volume_target()
+    musical = has(r"\b(music|song|spotify|track|tune)\b") or last_target == "spotify" or (
+        config.get("audio.turn_it_means", "system") == "music" and desktop_context.music_is_context())
+    from modules.agent.desktop_intents import volume_step_points
+    step = volume_step_points(lower, int(config.get("spotify.volume_step", 10)))
+    if has(r"\bback\b") and last_target == "spotify" and last_points:
+        step = last_points
+    if musical and has(r"\b(volume up|louder|turn (it|this|the music|spotify|the volume|the song) (back )?(a (little )?bit )?up|turn up (the |my )?(music|volume|song|spotify)|crank it|(raise|increase) (the )?volume)\b"):
+        return SpotifyIntent("volume_up", "spotify.volume_step", {"direction": "up", "step": step})
+    if musical and has(r"\b(volume down|quieter|softer|turn (it|this|the music|spotify|the volume|the song) (back )?(a (little )?bit )?down|turn down (the |my )?(music|volume|song|spotify)|(lower|decrease|reduce) (the )?volume)\b"):
+        return SpotifyIntent("volume_down", "spotify.volume_step", {"direction": "down", "step": step})
 
     # --- shuffle / repeat -------------------------------------------------------
     if has(r"\bshuffle\b"):
@@ -791,8 +833,49 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
                                                         "kind": "auto"})
 
 
+_NOT_MOOD_WORDS = {"chill": "chill", "relaxing": "chill", "calm": "chill", "mellow": "chill", "laid back": "chill",
+               "sad": "sad", "happy": "happy", "upbeat": "happy", "hype": "energetic", "energetic": "energetic",
+               "workout": "energetic", "gym": "energetic", "dark": "darker", "party": "party", "focus": "focus",
+               "study": "focus", "romantic": "romantic", "angry": "angry"}
+_NOT_MOOD = re.compile(
+    r"^(?:no+[,.!]*\s+|nah[,.!]*\s+)?(?:(?:that'?s|thats|that is|this is|this'?s|it'?s|its|that one'?s)\s+"
+    r"(?:not|not,? that'?s not)|(?:that|this|it|that one)\s+(?:isn'?t|ain'?t))\s+"
+    r"(?:a\s+|really\s+|very\s+|exactly\s+|that\s+)?"
+    r"(?:(?P<mood>chill|relaxing|calm|mellow|laid back|sad|happy|upbeat|hype|energetic|workout|gym|dark|party|"
+    r"focus|study|romantic|angry)(?:\s+(?:song|track|one|music|vibe|enough))?|the\s+vibe|my\s+vibe|the\s+mood|"
+    r"what i'?m feeling)[.!?]*$")
+
+
+def _last_was_queue_list() -> bool:
+    try:
+        from modules.learning.feedback import feedback
+        turns = feedback.recent_turns(90.0)
+    except Exception:
+        return False
+    return bool(turns) and turns[-1]["intent"] == "spotify.queue_list"
+
+
 def _spotify_reply(si: SpotifyIntent, r) -> str:
     k = si.kind
+    if k == "not_mood":
+        what = f"{r.get('track') or 'That one'}" + (f" by {r['artist']}" if r.get("artist") else "")
+        mood = r.get("mood")
+        fits = f"isn't {mood}" if mood else "doesn't fit"
+        if r.get("which") == "next":
+            return f"Got it — {what} {fits}. I'll skip it when it comes up" + \
+                (f" and keep it out of {mood} mixes." if mood else ".")
+        return f"Got it — {what} {fits}. Skipped" + (f", and I'll keep it out of {mood} mixes." if mood else ".")
+    if k == "playlist_remove":
+        return f"Took {r.get('track') or 'it'} out of {r.get('playlist') or 'the playlist'} and skipped it."
+    if k == "queue_list":
+        q = r.get("queue") or []
+        if not q:
+            return "Your queue is empty." if r.get("current") else "Nothing is playing, so there's no queue."
+        songs = [f"{t['name']} by {t['artist']}" if t.get("artist") else t["name"] for t in q[:5]]
+        text = "Up next: " + (", ".join(songs[:-1]) + ", then " + songs[-1] if len(songs) > 1 else songs[0]) + "."
+        if len(q) > 5:
+            text += f" And {len(q) - 5} more after that."
+        return text
     if k == "current":
         if not r.get("track"):
             return "Spotify isn't playing anything right now."
@@ -804,6 +887,9 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
         return "Resuming."
     if k == "next":
         return "Skipped." if not r.get("track") else f"Skipped. Now playing {r['track']}."
+    if k == "skip_n":
+        n = r.get("count") or 0
+        return f"Skipped {n} songs." + (f" Now playing {r['track']}." if r.get("track") else "")
     if k == "next_reject":
         return "Got it, skipping that one — I'll play less like it."
     if k == "current_artist":
@@ -957,13 +1043,13 @@ def parse_spotify(text: str) -> Optional[Intent]:
         if si.kind == "next_reject":
             call("spotify.feedback", signal=-0.7, reason="user rejected the track")
         res = call(si.tool, **si.kwargs)
-        if not res.success and si.kind in ("next", "next_reject") and res.error_code in (
+        if not res.success and si.kind in ("next", "next_reject", "skip_n") and res.error_code in (
                 "NO_PLAYBACK", "NO_ACTIVE_DEVICE", "NO_DEVICE"):
             # Nothing to skip: "play something different" means play something.
             res = call("spotify.play_recommended")
             if res.success:
                 return Reply(f"Nothing was playing, so I put on {res.result['name']} by {res.result['artist']}.")
-        if si.kind in ("next", "next_reject") and res.success:
+        if si.kind in ("next", "next_reject", "skip_n") and res.success:
             time.sleep(0.8)                    # verify: what's playing now?
             cur = call("spotify.current")
             if cur.success and cur.result.get("track"):
@@ -1095,6 +1181,14 @@ def parse_desktop(text: str) -> Optional[Intent]:
                 return f"Opened {r['app']}."
             return f"Launched {r['app']}; its window hasn't appeared yet."
 
+        def open_meant(other):
+            """The user picked what they meant ("clad" -> Claude): open it, and know it next time."""
+            r = run_tool("desktop.open_app", f"open {other}", ok, name=other)
+            if r.ok:
+                from modules.desktop.vocabulary import vocabulary
+                vocabulary.learn(name, other)
+            return r.text
+
         def run_open():
             reply = run_tool("desktop.open_app", f"open {name}", ok, name=name)
             many = re.search(r"Did you mean (.+,.+)\?$", reply.text) if not reply.ok else None
@@ -1102,18 +1196,15 @@ def parse_desktop(text: str) -> Optional[Intent]:
                 # "Did you mean Disk Cleanup, Windows Backup, Windows Security?" — "the first one" opens it.
                 from modules.agent.confirm import ChoiceOption, PendingChoice, choices
                 names = [n.strip() for n in re.split(r",\s*|\s+or\s+", many.group(1)) if n.strip()]
-                choices.ask(PendingChoice(reply.text, [ChoiceOption(n, n, n) for n in names],
-                                          lambda other: run_tool("desktop.open_app", f"open {other}", ok,
-                                                                 name=other).text))
+                choices.ask(PendingChoice(reply.text, [ChoiceOption(n, n, n) for n in names], open_meant))
                 reply.expects_reply = True
                 return reply
             guess = re.search(r"Did you mean ([^,?]+)\?$", reply.text) if not reply.ok else None
             if guess:
                 # "Did you mean Opera Browser?" is a question: "yes" opens it.
                 other = guess.group(1).strip()
-                confirmations.ask(PendingAction(
-                    f"open {other}", lambda: run_tool("desktop.open_app", f"open {other}", ok, name=other).text,
-                    tool="desktop.open_app"))
+                confirmations.ask(PendingAction(f"open {other}", lambda: open_meant(other),
+                                                tool="desktop.open_app"))
                 reply.expects_reply = True
             return reply
         return Intent("desktop.open_app", run_open, "desktop")
@@ -1221,10 +1312,25 @@ def parse_desktop(text: str) -> Optional[Intent]:
             return Reply(res.error or f"I couldn't switch to {name}.", ok=False)
         return Intent("desktop.focus_window", run_focus, "desktop")
 
+    # type out / write a *description* of text ("a summary of what SAINT is"): write it, then type it.
+    # It used to type the words "a summary of what SAINT is" (2026-10-02).
+    m = re.match(r"^(?:type|write|enter|put|draft|compose)\s+(?:out\s+|up\s+|down\s+)?(?P<what>.+?)"
+                 r"(?:\s+(?:in|into|in the|into the)\s+(?:the\s+)?(?P<box>[\w ]{1,30}?\s+(?:box|field|bar)))?"
+                 r"(?P<enter>\s+and (?:press|hit) enter)?$", raw, re.I)
+    if m and t.split()[0] in ("type", "write", "enter", "put", "draft", "compose"):
+        from modules.agent.compose import describes_text
+        from modules.learning.lesson import canon, _MESSAGE_TASK
+        what = m.group("what").strip().strip('"“”').rstrip(".!")
+        if describes_text(what) and not _MESSAGE_TASK.match(canon(f"write {what}")):
+            box = (m.group("box") or "").strip()
+            press = bool(m.group("enter"))
+            return Intent("desktop.compose_type", lambda: _compose_and_type(what, box, press), "desktop")
+
     # type
     m = re.match(r"^(?:type|write|enter)\s+(?:out\s+)?(.+?)(?:\s+(?:in|into|in the|into the|on)\s+(?:the\s+)?(.+?))?"
                  r"(?:\s+and (?:press|hit) enter)?$", raw, re.I)
-    if m and t.split()[0] in ("type", "write", "enter"):
+    if m and t.split()[0] in ("type", "write", "enter") and not (
+            t.startswith("write ") and _WRITE_A_THING.match(m.group(1).strip())):
         text_to_type = m.group(1).strip().strip('"“”')
         target = m.group(2)
         enter = bool(re.search(r"and (press|hit) enter$", t))
@@ -1588,13 +1694,53 @@ def parse_winctl(text: str) -> Optional[Intent]:
     return parse(text)
 
 
+def parse_social(text: str) -> Optional[Intent]:
+    from modules.agent.social_intents import parse_social as parse
+    return parse(text)
+
+
+def parse_taskmgr(text: str) -> Optional[Intent]:
+    from modules.agent.taskmgr_intents import parse_taskmgr as parse
+    return parse(text)
+
+
 def parse_extras(text: str) -> Optional[Intent]:
     from modules.agent.extras_intents import parse_extras as parse
     return parse(text)
 
 
-_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_winctl,
-                   parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_taskmgr,
+                   parse_winctl, parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
+
+
+_OPEN_PATH = re.compile(r"^(?:(?:hey\s+)?saint[,.!\s]+)?(?:open|launch|start|run)\s+(?:(?P<label>.+?)\s+"
+                        r"(?:at|from|in|with)\s+)?[\"'“]?(?P<path>[a-z]:[\\/][^\"'”]+?)[\"'”]?[.!]?$", re.I)
+
+
+def parse_open_path(text: str) -> Optional[Intent]:
+    """'Open Bloxstrap at "C:\\Users\\me\\Downloads\\Bloxstrap.exe"' starts that
+    exact file (a scene step typed by the user, 2026-09-30) — it used to fail
+    and get "worked out" into a Steam search."""
+    m = _OPEN_PATH.match((text or "").strip())
+    if not m:
+        return None
+    import os
+    path = m.group("path").strip()
+    label = (m.group("label") or "").strip() or os.path.basename(path)
+
+    def run():
+        if not os.path.exists(path):
+            return Reply(f"I can't find {path} — has it been moved or deleted?", ok=False)
+
+        def ok(r):
+            return f"Opened {label}." if r.get("window") else f"Started {label}."
+        return run_tool("desktop.open_app", f"open {label}", ok, name=path)
+    return Intent("desktop.open_path", run, "desktop")
+
+
+def parse_link(text: str) -> Optional[Intent]:
+    from modules.agent.link_intents import parse_link as parse
+    return parse(text)
 
 
 def route_single(text: str) -> Optional[Intent]:
@@ -1618,7 +1764,13 @@ def route(text: str) -> Optional[Intent]:
     # made or found (modules/agent/recent.py) — before memory, so "delete the
     # junk" never means "forget a memory".
     from modules.agent.refer_intents import parse_refer
-    for parser in (parse_web, parse_files_task, parse_refer, parse_automation, parse_memory):
+    # parse_link first: "send this prompt to Gian's PC on Claude: open the door and lock it" is one
+    # request, whatever words the prompt itself contains.
+    # parse_task: "continue what we were doing", "do the same for Discord", "set up my gaming workspace".
+    from modules.agent.task_intents import parse_task
+    from modules.mcp.intents import parse_mcp
+    for parser in (parse_link, parse_task, parse_mcp, parse_open_path, parse_social, parse_web, parse_files_task,
+                   parse_refer, parse_automation, parse_taskmgr, parse_memory):
         try:
             intent = parser(text)
         except Exception:
@@ -1662,7 +1814,8 @@ def _observe(label: str) -> str:
     return obs
 
 
-def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]] = None) -> Reply:
+def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]] = None,
+             task: Optional[str] = None) -> Reply:
     """Execute a multi-step plan: OBSERVE -> ACT -> VERIFY -> (retry) -> next.
 
     Each step's tool verifies its own effect (window focused/moved, page
@@ -1671,6 +1824,9 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
     (pages loading, windows appearing); a second failure stops the plan and
     says exactly where. If a step needs the user to choose (e.g. which
     browser window), the rest of the plan continues after the answer.
+
+    ``task``: the task_memory id recording each step, so "continue what we
+    were doing" can pick up a plan that stopped (modules/agent/task_memory.py).
     """
     from modules.agent.confirm import choices
     from core.activity import activity
@@ -1679,7 +1835,7 @@ def run_plan(intents: List[Intent], start: int = 0, replies: Optional[List[str]]
     tok = cancel.token()
     activity.begin("a multi-step request", [step_label(it.name) for it in intents])
     try:
-        return _run_plan_steps(intents, start, replies, tok, choices, activity)
+        return _run_plan_steps(intents, start, replies, tok, choices, activity, task)
     finally:
         activity.end()
 
@@ -1705,13 +1861,16 @@ def step_label(intent_name: str) -> str:
     return "working on " + " ".join(words)
 
 
-def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
+def _run_plan_steps(intents, start, replies, tok, choices, activity, task=None) -> Reply:
+    from modules.agent.task_memory import task_memory, RUNNING, DONE, FAILED
     for i in range(start, len(intents)):
         it = intents[i]
         if tok.cancelled:
             log.info("agent.plan.cancelled before step %d/%d", i + 1, len(intents))
+            task_memory.finish(task, "stopped", "you said stop")
             return Reply(" ".join(replies + ["Stopped."]).strip(), ok=False)
         activity.step(i)
+        task_memory.step(task, i, RUNNING)
         before = _observe(f"before {it.name}") if it.domain in ("desktop", "browser") else ""
         t0 = time.perf_counter()
         r = it.run()
@@ -1721,6 +1880,7 @@ def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
             # Reassess instead of blindly repeating: wait for the UI, look again, retry once.
             time.sleep(1.2)
             if tok.cancelled:
+                task_memory.finish(task, "stopped", "you said stop")
                 return Reply(" ".join(replies + ["Stopped."]).strip(), ok=False)
             after = _observe(f"retry {it.name}")
             log.info("agent.retry %s (screen %s)", it.name, "changed" if after != before else "unchanged")
@@ -1732,9 +1892,11 @@ def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
 
             def resume(value, original=original, nxt=i + 1):
                 first = original(value)
-                rest = run_plan(intents, nxt, [])
+                task_memory.step(task, nxt - 1, DONE)
+                rest = run_plan(intents, nxt, [], task=task)
                 return (first + " " + rest.text).strip()
             pending.run = resume
+            task_memory.finish(task, "waiting", r.text)
             return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
         if r.expects_reply and confirmations.pending is not None and i < len(intents) - 1:
             # Same for a yes/no question ("You don't have a browser open. Should I open Opera?").
@@ -1743,21 +1905,28 @@ def _run_plan_steps(intents, start, replies, tok, choices, activity) -> Reply:
 
             def resume_yes(original_run=original_run, nxt=i + 1):
                 first = original_run()
-                rest = run_plan(intents, nxt, [])
+                task_memory.step(task, nxt - 1, DONE)
+                rest = run_plan(intents, nxt, [], task=task)
                 return (first + " " + rest.text).strip()
             action.run = resume_yes
+            task_memory.finish(task, "waiting", r.text)
             return Reply(" ".join(replies + [r.text]), ok=True, expects_reply=True)
         if it.name == "screen.locate" and i + 1 < len(intents) and intents[i + 1].name == "desktop.click_last":
             r.text = re.sub(r'\s*Say "click it" if you want me to\.$', "", r.text)
         replies.append(r.text)
         if not r.ok:
+            task_memory.step(task, i, FAILED, r.text)
+            task_memory.finish(task, "failed", r.text)
             if i < len(intents) - 1:
                 replies.append("I stopped there.")
             return Reply(" ".join(replies), ok=False)
+        task_memory.step(task, i, DONE)
         if r.expects_reply:
+            task_memory.finish(task, "waiting", r.text)
             return Reply(" ".join(replies), ok=True, expects_reply=True)
         if it.domain in ("desktop", "browser") and i < len(intents) - 1:
             time.sleep(0.4)          # let the UI settle before observing again
+    task_memory.finish(task, "done")
     return Reply(" ".join(replies))
 
 
@@ -1784,20 +1953,49 @@ def _route_composite(text: str) -> Optional[Intent]:
     from modules.agent.context import desktop_context
     saved = desktop_context.domain()
     intents: List[Intent] = []
-    for p in parts:
+    sources: List[dict] = []                 # the words each step came from (task memory)
+    for n, p in enumerate(parts):
         steps = _route_steps(p)
         if steps is None:
             desktop_context.note_domain(saved)
             return None
         for it in steps:
             intents.append(it)
+            sources.append({"text": p, "part": n})
             if it.domain in ("browser", "spotify", "steam"):
                 desktop_context.note_domain(it.domain)
     desktop_context.note_domain(saved)
     if len(intents) < 2:
         return None
     log.info("agent.plan %s", [i.name for i in intents])
-    return Intent("composite:" + "+".join(i.name for i in intents), lambda: run_plan(intents), "composite")
+
+    def run():
+        from modules.agent.task_memory import task_memory
+        task = task_memory.begin(text, [dict(src, label=step_label(it.name)) for it, src in zip(intents, sources)])
+        return run_plan(intents, task=task)
+    return Intent("composite:" + "+".join(i.name for i in intents), run, "composite")
+
+
+def _compose_and_type(description: str, box: str = "", press_enter: bool = False) -> "Reply":
+    from modules.agent.compose import write
+    desc = re.sub(r"^(?:out|up|down)\s+", "", description, flags=re.I)
+    text = write(desc)
+    if not text:
+        return Reply(f"I couldn't write {desc} — the language model didn't answer, so I didn't type anything.",
+                     ok=False)
+    kwargs = {"text": text, "press_enter": press_enter, **({"target": box} if box else {})}
+    where = f" into the {box}" if box else ""
+    short = desc if len(desc) <= 60 else desc[:57] + "…"
+    return run_tool("desktop.type_text", f"type {short}{where}", lambda _r: f"Wrote {short} and typed it{where}.",
+                    **kwargs)
+
+
+# "Write an email to Sam" / "write a reply" is a job to do, not the words "an email"
+# to type into whatever has focus (2026-10-01): it goes to modules/learning/lesson.py.
+_WRITE_A_THING = re.compile(r"^(?:me\s+)?(?:a|an|the|my|another|a new)\s+(?:new\s+|short\s+|quick\s+)?"
+                            r"(?:e-?mail|message|reply|letter|post|tweet|title|subject(?: line)?|essay|paragraph|"
+                            r"summary|text|draft|response|comment|review|bio|caption|description|cover letter)\b",
+                            re.I)
 
 
 # A new command starting mid-sentence: "open my browser search YouTube for X"

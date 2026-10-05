@@ -280,6 +280,14 @@ class ToolRegistry:
             event_bus.emit_event(EventType.TOOL_PERMISSION_DENIED, {"tool": name, "reason": "policy"})
             return ToolResult(False, error=f"I'm not allowed to use {name} (blocked in Settings > Permissions).",
                               error_code="DENIED", tool=name, args=args)
+        from core.focus_guard import focus_guard
+        busy = focus_guard.refuse(name)
+        if busy:
+            # A game / the editor the user is typing in stays in front unless
+            # they asked for a window (core/focus_guard.py).
+            log.info("tool.focus_guard tool=%s %s", name, busy)
+            event_bus.emit_event(EventType.TOOL_FAILED, {"tool": name, "error": busy})
+            return ToolResult(False, error=busy, error_code="FOCUS_GUARD", tool=name, args=args)
         if policy == permission_manager.CONFIRM and not _confirmed:
             event_bus.emit_event(EventType.TOOL_PERMISSION_REQUIRED, {"tool": name,
                                                                       "args": _summarize_args(args)})
@@ -448,6 +456,7 @@ def _register_default_tools(registry: ToolRegistry):
                     ("modules.steam.tools", "register_steam_tools"),
                     ("modules.files.tools", "register_file_tools"),
                     ("modules.desktop.system_controls", "register_system_tools"),
+                    ("modules.desktop.taskmgr", "register_taskmgr_tools"),
                     ("modules.desktop.clipboard", "register_clipboard_tools"),
                     ("modules.workspace.tools", "register_workspace_tools"),
                     ("modules.dev.tools", "register_dev_tools"),

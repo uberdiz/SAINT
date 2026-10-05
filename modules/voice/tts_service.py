@@ -377,10 +377,8 @@ class TTSService:
                 from modules.voice.tts import QwenTTS
                 self._engine = QwenTTS(**kwargs)
                 self._engine_type = "qwen"
-            elif backend == "kokoro":
-                from modules.voice.tts import KokoroTTS
-                self._engine = KokoroTTS(**kwargs)
-                self._engine_type = "kokoro"
+            elif backend in ("kokoro", "kokoro_onnx"):
+                self._engine, self._engine_type = self._kokoro_engine(backend, kwargs)
             else:
                 from modules.voice.tts import MockTTS
                 self._engine = MockTTS()
@@ -434,6 +432,68 @@ class TTSService:
                 "phase": "initialization",
             })
             return False
+
+    def _kokoro_engine(self, backend: str, kwargs: Dict[str, Any]):
+        """Kokoro on onnxruntime, else on PyTorch, else Windows' own voice — a
+        missing model or a broken PyTorch install must never leave SAINT mute
+        (it was, for days: "TTS service in error state" on every reply)."""
+        from modules.voice import tts as _tts
+        reasons: List[str] = []
+        order = ("onnx", "torch") if backend == "kokoro_onnx" or not _tts._torch_available() else ("torch", "onnx")
+        for kind in order:
+            engine = None
+            try:
+                if kind == "onnx":
+                    from modules.voice import kokoro_onnx
+                    if not kokoro_onnx.available():
+                        reasons.append("the Kokoro voice isn't downloaded yet")
+                        self._fetch_kokoro_later()
+                        continue
+                    engine = kokoro_onnx.KokoroOnnxTTS(**kwargs)
+                else:
+                    if not _tts._torch_available():
+                        continue
+                    engine = _tts.KokoroTTS(**kwargs)
+                engine._load()
+                return engine, "kokoro"
+            except Exception as e:
+                reasons.append(str(e))
+                logger.warning("tts.kokoro_%s_unavailable: %s", kind, e)
+                if engine is not None:
+                    engine.close()
+        from modules.voice.sapi import SapiTTS, available
+        reason = "; ".join(reasons)[:300] or "Kokoro isn't available"
+        if not available():
+            raise RuntimeError(reason)
+        engine = SapiTTS(speed=kwargs.get("speed", 1.0), reason=reason)
+        engine._load()
+        logger.warning("TTS using the Windows voice until Kokoro works: %s", reason)
+        fetching = getattr(self, "_kokoro_fetch_started", False)
+        event_bus.emit_event(EventType.NOTIFY, {
+            "title": "Speaking with the Windows voice",
+            "message": ("SAINT's own voice is downloading and switches on by itself when it's ready." if fetching
+                        else "SAINT's own voice (Kokoro) couldn't load — see the System page. Replies are still "
+                             "spoken.")})
+        return engine, "windows"
+
+    def _fetch_kokoro_later(self):
+        """Download the Kokoro voice in the background (once) and switch to it when it lands."""
+        if getattr(self, "_kokoro_fetch_started", False) or not config.get("voice.auto_download_models", True):
+            return
+        import importlib.util
+        if importlib.util.find_spec("kokoro_onnx") is None:
+            return                          # nothing could use the model (a source run without kokoro-onnx)
+        self._kokoro_fetch_started = True
+
+        def fetch():
+            try:
+                from core.model_assets import ensure_kokoro
+                if ensure_kokoro():
+                    logger.info("tts.kokoro_downloaded — switching to the Kokoro voice")
+                    self.reinitialize()
+            except Exception as e:
+                logger.warning("tts.kokoro_download_failed: %s", e)
+        threading.Thread(target=fetch, daemon=True, name="tts-kokoro-fetch").start()
 
     def _do_warmup(self):
         """Perform warmup synthesis to preload kernels."""
@@ -601,7 +661,8 @@ class TTSService:
                 logger.error("TTS engine is None")
                 return False
 
-            self._engine.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
+            from modules.voice.speech_text import for_speech      # "NO ME QUIERO" isn't N-O-M-E
+            self._engine.speak(for_speech(text), turn_id=turn_id, on_chunk_start=on_chunk_start)
 
             synthesis_time = time.perf_counter() - synthesis_start
 
@@ -734,7 +795,9 @@ class TTSService:
             self.interrupt()
         except Exception:
             pass
-        self._engine = None
+        old, self._engine = self._engine, None
+        if old is not None and hasattr(old, "close"):
+            old.close()                  # its playback thread and audio stream
 
         # 2. reset tracking
         self._load_error = None

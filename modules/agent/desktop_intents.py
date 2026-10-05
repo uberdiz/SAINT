@@ -26,6 +26,7 @@ from typing import Callable, Optional
 
 from modules.agent.confirm import choices, PendingChoice, ChoiceOption
 from modules.agent.context import desktop_context
+from core.config import config
 from modules.agent.router import Intent, Reply, call, run_tool, _clean
 
 log = logging.getLogger("saint.agent")
@@ -306,17 +307,37 @@ def _locate(what: str) -> Reply:
 # ---------------------------------------------------------------------- #
 # Volume: Spotify vs. the computer, from context
 # ---------------------------------------------------------------------- #
-def _system_volume(direction: str, steps: int = 5) -> Reply:
-    key = {"up": "volumeup", "down": "volumedown", "mute": "volumemute"}[direction]
-    import pyautogui
-    from modules.desktop.controller import _require
-    try:
-        _require("allow_keyboard", "Keyboard control")
-    except Exception as e:
-        return Reply(str(e), ok=False)
-    pyautogui.press(key, presses=1 if direction == "mute" else steps, interval=0.02)
-    return Reply({"up": "Turned the volume up.", "down": "Turned the volume down.",
-                  "mute": "Toggled mute."}[direction])
+# "a little bit" / "a tad" / "slightly" vs "a lot" / "way": how far to move.
+_AMOUNT = (r"(?:a\s+(?:little|tiny|wee)(?:\s+bit)?|a\s+(?:bit|tad|touch|smidge|notch|lot|bunch)|little\s+bit|slightly|"
+           r"just\s+a\s+(?:bit|little|touch|hair)(?:\s+bit)?|a\s+hair|way|much|more|some\s*more|please)")
+VOLUME_AMOUNT = re.compile(rf"(?:\s+{_AMOUNT})*")
+_A_LITTLE = re.compile(r"\b(?:a\s+(?:little|tiny|wee)|a\s+(?:bit|tad|touch|smidge|notch|hair)|little\s+bit|slightly)\b")
+_A_LOT = re.compile(r"\b(?:a\s+lot|way|much|a\s+bunch|loads|heaps|really)\b")
+
+
+def volume_step_points(text: str, normal: int = 10) -> int:
+    """How many points (of 100) a spoken nudge means."""
+    t = (text or "").lower()
+    if _A_LITTLE.search(t):
+        return max(2, normal // 2)
+    if _A_LOT.search(t):
+        return normal * 2
+    return normal
+
+
+def _system_volume(direction: str, points: int = 10) -> Reply:
+    if direction == "mute":
+        return run_tool("audio.system_volume", "mute the sound",
+                        lambda r: "Muted." if r.get("muted") else "Sound on.", mute="toggle")
+
+    desktop_context.note_volume("system", points)
+
+    def ok(r):
+        if r.get("via") == "Voicemeeter":
+            return f"System audio {'up' if direction == 'up' else 'down'} to {r['db']:+.1f} dB on Voicemeeter."
+        return f"Volume {r['percent']}%."
+    return run_tool("audio.system_volume", f"turn the volume {direction}", ok,
+                    step=points if direction == "up" else -points)
 
 
 # ---------------------------------------------------------------------- #
@@ -548,20 +569,27 @@ def parse(text: str) -> Optional[Intent]:
         return Intent("desktop.media", run_media, "browser")
 
     # ---- volume: the computer (Spotify handles music volume when that's the context) --------
-    m = re.match(r"^(?:turn|put|bring)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?(?:volume|sound|audio)\s+"
-                 r"(up|down)(?:\s+(?:a (?:lot|bit|little)))?$|^(?:turn|put)\s+(?:it|the video)\s+(up|down)$|"
-                 r"^(?:turn|bring)\s+(up|down)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?"
-                 r"(?:volume|sound|audio)(?:\s+(?:a (?:lot|bit|little)))?$|"
-                 r"^(lower|raise|reduce|increase)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?"
-                 r"(?:volume|sound|audio)(?:\s+(?:a (?:lot|bit|little)))?$|"
-                 r"^(?:volume|sound)\s+(up|down)$|^(?:make\s+(?:it|this|that|the\s+(?:sound|volume|audio|video))\s+)?(louder|quieter|softer)"
-                 r"(?:\s+(?:a (?:lot|bit|little)|please))?$|^(mute|unmute)(?: (?:the )?(?:sound|audio|video|computer))?$", t)
-    if m and not desktop_context.music_is_context() and not re.search(r"\b(music|song|spotify|track)\b", t):
+    # "Turn it down" is the whole PC (Voicemeeter's Windows-audio strip when it's
+    # running); "turn Spotify down" / "turn the music down" is Spotify (2026-09-30).
+    amt = VOLUME_AMOUNT.pattern
+    m = re.match(rf"^(?:turn|put|bring)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?(?:volume|sound|audio)\s+"
+                 rf"(up|down){amt}$|^(?:turn|put|bring)\s+(?:it|this|that|everything|the video)\s+(?:back\s+)?(?:way\s+|a\s+(?:little\s+)?bit\s+)?(?:back\s+)?(up|down){amt}$|"
+                 rf"^(?:turn|bring)\s+(up|down)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?"
+                 rf"(?:volume|sound|audio|it|this|everything){amt}$|"
+                 rf"^(lower|raise|reduce|increase)\s+(?:the\s+)?(?:(?:system|computer|pc|video|youtube)\s+)?"
+                 rf"(?:volume|sound|audio){amt}$|"
+                 rf"^(?:volume|sound)\s+(up|down){amt}$|^(?:make\s+(?:it|this|that|everything|the\s+(?:sound|volume|audio|"
+                 rf"video))\s+)?(?:{_AMOUNT}\s+)*(louder|quieter|softer){amt}$|"
+                 r"^(mute|unmute)(?: (?:the )?(?:sound|audio|video|computer))?$", t)
+    last_target, last_points = desktop_context.volume_target()
+    if m and not re.search(r"\b(music|song|spotify|track)\b", t) and last_target != "spotify" and (
+            config.get("audio.turn_it_means", "system") == "system" or not desktop_context.music_is_context()):
         word = next(g for g in m.groups() if g)
         direction = {"louder": "up", "quieter": "down", "softer": "down", "mute": "mute", "unmute": "mute",
                      "lower": "down", "reduce": "down", "raise": "up", "increase": "up"}.get(word, word)
-        steps = 10 if "a lot" in t else (2 if re.search(r"a (bit|little)", t) else 5)
-        return Intent("desktop.volume", lambda: _system_volume(direction, steps), "desktop")
+        # "Turn it back up": undo the last change by the same amount.
+        points = last_points if re.search(r"\bback\b", t) and last_points else volume_step_points(t)
+        return Intent("desktop.volume", lambda: _system_volume(direction, points), "desktop")
 
     # ---- window size / placement ----------------------------------------------------------
     m = re.match(r"^make (?:the )?(.+?) (bigger|larger|smaller|wider|narrower|huge|tiny)$", t)

@@ -6,6 +6,8 @@ modules/learning — SAINT learning how to do things it couldn't do before.
                       commands it does know, run them, keep what worked
     corrections.py    "no, I meant ..." teaches the previous request
     demonstration.py  watch the user do it once, then do it for them next time
+    lesson.py         be walked through a long task step by step (asking what it
+                      needs), then run it — asking the same questions — next time
     catalog.py        the command shapes the planner may use
     intents.py        "what have you learned", "forget that", "watch me", "done"
 """

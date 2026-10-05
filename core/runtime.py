@@ -22,6 +22,7 @@ from typing import Optional
 from core.assistant_state import assistant_state, AssistantState
 from core.config import config
 from core.events import event_bus, EventType
+from modules.voice.voices import kokoro_voice
 
 log = logging.getLogger("saint.runtime")
 
@@ -32,10 +33,11 @@ _VOICE_RESTART_KEYS = ("voice.mic_device", "voice.mode", "voice.silence_duration
                        "voice.barge_in_echo_margin", "voice.wake_word_debug_scores")
 _WAKE_KEYS = ("voice.wake_word_enabled", "voice.wake_word_model_path", "voice.wake_word_feature_dir",
               "voice.wake_word_threshold", "voice.wake_word_trigger_frames", "voice.wake_word_refractory_sec")
-_TTS_KEYS = ("voice.tts_backend", "voice.tts_voice", "voice.tts_device", "voice.tts_speed",
+_TTS_KEYS = ("voice.tts_backend", "voice.tts_voice", "voice.tts_voice_blend", "voice.tts_voice_blend_pct",
+             "voice.tts_device", "voice.tts_speed",
              "voice.tts_qwen_model", "voice.tts_qwen_speaker", "voice.tts_qwen_type")
 _STT_KEYS = ("voice.stt_backend", "voice.stt_model", "voice.stt_device", "voice.stt_compute_type",
-             "voice.stt_language")
+             "voice.stt_language", "language.multilingual_stt")
 
 
 def tts_settings() -> dict:
@@ -59,7 +61,8 @@ def tts_settings() -> dict:
         }
     if backend == "kokoro":
         return {
-            "voice": config.get("voice.tts_voice", "af_heart"),
+            "voice": kokoro_voice(config.get("voice.tts_voice", "af_heart"), config.get("voice.tts_voice_blend", ""),
+                                  config.get("voice.tts_voice_blend_pct", 50)),
             "device": config.get("voice.tts_device", "cuda"),
             "speed": config.get("voice.tts_speed", 1.0),
             "allow_cpu_fallback": config.get("voice.tts_allow_cpu_fallback", True),
@@ -92,13 +95,18 @@ class SaintRuntime:
 
         # TTS loads in the background; the controller works immediately (the
         # TTS queue waits for the engine).
+        from core.startup import startup
+        startup.run("config", "Settings", lambda: None)
         self.tts = get_tts_service()
-        try:
-            self.tts.initialize(backend=config.get("voice.tts_backend", "kokoro"), blocking=False,
-                                **tts_settings())
-        except Exception as e:
-            log.exception("runtime.tts_init_failed")
-            event_bus.emit_event(EventType.TTS_ERROR, {"error": f"Text-to-speech failed to start: {e}"})
+
+        def start_tts():
+            try:
+                self.tts.initialize(backend=config.get("voice.tts_backend", "kokoro"), blocking=False,
+                                    **tts_settings())
+            except Exception as e:
+                event_bus.emit_event(EventType.TTS_ERROR, {"error": f"Text-to-speech failed to start: {e}"})
+                raise
+        startup.run("tts", "Speech output", start_tts)
         self.controller = init_controller(ai_module=ai, voice_module=voice, tts_engine=self.tts)
 
         # Scheduler: reminders are spoken through the controller, scheduled
@@ -107,45 +115,95 @@ class SaintRuntime:
         from modules.agent.agent import agent
         scheduler.announce = self.controller.announce
         scheduler.run_command = agent.run_command
-        try:
+        def load_memory():
             from modules.automation.scenes import scenes
             scenes.ensure_defaults()           # Gaming mode / Done gaming / Dev environment (once)
-        except Exception:
-            log.exception("runtime.default_scenes_failed")
-        if config.get("modules.automation", True) and config.get("automation.enabled", True):
-            try:
-                scheduler.start()
-            except Exception:
-                log.exception("runtime.scheduler_failed")
+            from modules.agent.task_memory import task_memory
+            task_memory.load()                 # "continue what we were doing" after a restart
+        startup.run("memory", "Memory and tasks", load_memory)
+        startup.run("automation", "Reminders and automations", scheduler.start,
+                    enabled=bool(config.get("modules.automation", True) and config.get("automation.enabled", True)))
 
         # Voice: always-on wake-word listening.
         if config.get("modules.voice", True):
             module_manager.set_enabled("voice", True)
             if config.get("voice.auto_start", True):
-                self.start_listening()
+                def listen():
+                    if not self.start_listening():
+                        raise RuntimeError("the microphone didn't start — check Settings > Voice > Microphone")
+                startup.run("voice", "Voice and wake word", listen)
         else:
             assistant_state.set_resting(AssistantState.OFFLINE, detail="Voice module disabled")
 
         # What's playing in any app (Windows media controls). Started here, not
         # only by the UI, so the Spotify agent notices track changes / skips
         # made in the Spotify app instantly even with no window open.
-        try:
+        def start_media():
             from modules.desktop.media import media
             media.start()
-        except Exception:
-            log.debug("runtime.media_watcher_unavailable", exc_info=True)
+        startup.run("media", "Now playing (Spotify and media)", start_media)
+
+        # SAINT Link: listen for / dial your phone, other PCs and paired friends (off until turned on).
+        def start_link():
+            from modules.link.service import get_link
+            get_link().start()
+        startup.run("link", "SAINT Link (phone and other PCs)", start_link,
+                    enabled=bool(config.get("link.enabled", False)))
+
+        # MCP servers (Settings → MCP / data/mcp.json): their tools become SAINT tools. Connected in the
+        # background — an npx server can take a while to download the first time.
+        def start_mcp():
+            from modules.mcp.manager import mcp_manager
+            mcp_manager.start(wait=False)
+        startup.run("mcp", "MCP servers", start_mcp, enabled=bool(config.get("mcp.enabled", True)))
 
         # Game Mode: hide overlays and stop screen capture while a game runs.
-        try:
+        def start_game_mode():
             from core.game_mode import game_mode
             game_mode.start()
-        except Exception:
-            log.exception("runtime.game_mode_failed")
+        startup.run("game_mode", "Game detection and Gaming Mode", start_game_mode)
 
+        def detect_monitors():
+            from modules.desktop.controller import desktop
+            mons = desktop.monitors()
+            log.info("runtime.monitors %s", [(m.index, m.width, m.height, m.primary) for m in mons])
+        startup.run("monitors", "Monitors", detect_monitors)
+
+        threading.Thread(target=self._check_services, daemon=True, name="startup-checks").start()
         event_bus.subscribe(self._on_event)
         log.info("runtime.started voice=%s wake=%s automation=%s",
                  config.get("modules.voice", True), config.get("voice.wake_word_enabled", True),
                  config.get("automation.enabled", True))
+
+    @staticmethod
+    def _check_services():
+        """The AI model and Spotify are network services: check them off the startup path."""
+        from core.startup import startup
+        from core.module_manager import module_manager
+
+        def check_ai():
+            provider = config.get("ai.provider", "ollama")
+            if provider != "ollama":
+                return
+            import requests
+            base = config.get("ai.base_url", "http://localhost:11434").rstrip("/")
+            try:
+                ok = requests.get(base + "/api/version", timeout=3).ok
+            except Exception:
+                ok = False
+            if not ok:
+                raise RuntimeError(f"Ollama isn't answering at {base} — start Ollama, then Retry")
+        startup.run("ai", "AI model (Ollama)", check_ai)
+
+        def check_spotify():
+            sp = module_manager.get("spotify")
+            if sp is None or not sp.enabled:
+                return
+            ok, why = sp.availability()
+            if not ok:
+                raise RuntimeError(why)
+            sp.start_poller()
+        startup.run("spotify", "Spotify", check_spotify, enabled=bool(config.get("modules.spotify", True)))
 
     def start_listening(self) -> bool:
         from core.module_manager import module_manager
@@ -183,13 +241,23 @@ class SaintRuntime:
             pass
         # Background watchers are daemon threads, but stop them explicitly so
         # nothing keeps polling or capturing while the process winds down.
-        for stop in (self._stop_game_mode, self._stop_watch, self._stop_focus_history):
+        for stop in (self._stop_link, self._stop_game_mode, self._stop_watch, self._stop_focus_history):
             try:
                 stop()
             except Exception:
                 pass
         if self.controller:
             self.controller.shutdown()
+
+    @staticmethod
+    def _stop_link():
+        from modules.link.service import get_link
+        get_link().stop()
+        try:
+            from modules.mcp.manager import mcp_manager
+            mcp_manager.stop()                  # MCP server processes end with SAINT
+        except Exception:
+            pass
 
     @staticmethod
     def _stop_game_mode():
@@ -227,6 +295,15 @@ class SaintRuntime:
                 event_bus.emit_event(EventType.NOTIFY, {"title": "SAINT", "message": summary})
                 if self.controller:
                     self.controller.announce(summary, source="task")
+            return
+        if ev.type == EventType.TTS_ERROR and (ev.payload or {}).get("phase") == "initialization":
+            # Speech output loads in the background: a failure shows up here, after startup said "started".
+            from core.startup import startup
+
+            def retry():
+                self.tts.initialize(backend=config.get("voice.tts_backend", "kokoro"), blocking=False,
+                                    **tts_settings())
+            startup.report("tts", "Speech output", False, str((ev.payload or {}).get("error", ""))[:200], retry=retry)
             return
         if ev.type != EventType.SETTINGS_CHANGED:
             return

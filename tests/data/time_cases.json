@@ -1,0 +1,704 @@
+{
+ "now": {
+  "year": 2026,
+  "month": 9,
+  "day": 30,
+  "hour": 12,
+  "minute": 0
+ },
+ "cases": [
+  {
+   "text": "remind me at 5 PM to work on AIDE",
+   "reminder": {
+    "message": "Work on AIDE",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 17,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me in 30 minutes",
+   "reminder": {
+    "message": "Reminder",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 30
+    }
+   }
+  },
+  {
+   "text": "remind me to call mom at 5",
+   "reminder": {
+    "message": "Call mom",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 17,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me at 5:30pm to stretch",
+   "reminder": {
+    "message": "Stretch",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 17,
+     "minute": 30
+    }
+   }
+  },
+  {
+   "text": "remind me tomorrow at 9 to send the report",
+   "reminder": {
+    "message": "Send the report",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 9,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me tomorrow morning to water the plants",
+   "reminder": {
+    "message": "Water the plants",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 8,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me tonight to lock up",
+   "reminder": {
+    "message": "Lock up",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 20,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me on friday at 3pm to call the dentist",
+   "reminder": {
+    "message": "Call the dentist",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 2,
+     "hour": 15,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me on monday to pay rent",
+   "reminder": {
+    "message": "Pay rent",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 5,
+     "hour": 8,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me next monday at 10 to file taxes",
+   "reminder": {
+    "message": "File taxes",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 5,
+     "hour": 10,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me every morning to check my schedule",
+   "reminder": {
+    "message": "Check your schedule",
+    "timer": false,
+    "schedule": {
+     "type": "daily",
+     "time": "08:00",
+     "days": null
+    }
+   }
+  },
+  {
+   "text": "remind me every weekday at 8:30 to stand up",
+   "reminder": {
+    "message": "Stand up",
+    "timer": false,
+    "schedule": {
+     "type": "daily",
+     "time": "08:30",
+     "days": [
+      0,
+      1,
+      2,
+      3,
+      4
+     ]
+    }
+   }
+  },
+  {
+   "text": "remind me every monday and thursday at 7 pm to go to the gym",
+   "reminder": {
+    "message": "Go to the gym",
+    "timer": false,
+    "schedule": {
+     "type": "daily",
+     "time": "19:00",
+     "days": [
+      0,
+      3
+     ]
+    }
+   }
+  },
+  {
+   "text": "remind me every 2 hours to drink water",
+   "reminder": {
+    "message": "Drink water",
+    "timer": false,
+    "schedule": {
+     "type": "interval",
+     "every_sec": 7200
+    }
+   }
+  },
+  {
+   "text": "remind me every day at 7 to take vitamins",
+   "reminder": {
+    "message": "Take vitamins",
+    "timer": false,
+    "schedule": {
+     "type": "daily",
+     "time": "19:00",
+     "days": null
+    }
+   }
+  },
+  {
+   "text": "every weekend at 10 remind me to clean",
+   "reminder": {
+    "message": "Clean",
+    "timer": false,
+    "schedule": {
+     "type": "daily",
+     "time": "10:00",
+     "days": [
+      5,
+      6
+     ]
+    }
+   }
+  },
+  {
+   "text": "remind me in an hour and a half to check the oven",
+   "reminder": {
+    "message": "Check the oven",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 13,
+     "minute": 30
+    }
+   }
+  },
+  {
+   "text": "remind me in half an hour to call back",
+   "reminder": {
+    "message": "Call back",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 30
+    }
+   }
+  },
+  {
+   "text": "remind me in 2 hours and 15 minutes to leave",
+   "reminder": {
+    "message": "Leave",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 14,
+     "minute": 15
+    }
+   }
+  },
+  {
+   "text": "remind me at noon to eat",
+   "reminder": {
+    "message": "Eat",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 12,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me at midnight to sleep",
+   "reminder": {
+    "message": "Sleep",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 0,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me at 17:30 to leave work",
+   "reminder": {
+    "message": "Leave work",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 17,
+     "minute": 30
+    }
+   }
+  },
+  {
+   "text": "remind me at 5 am to catch the train",
+   "reminder": {
+    "message": "Catch the train",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 5,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me to buy milk",
+   "reminder": {
+    "message": "Buy milk",
+    "timer": false,
+    "schedule": null
+   }
+  },
+  {
+   "text": "remind me please to take out the trash tomorrow at 7 am",
+   "reminder": {
+    "message": "Please to take out the trash",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 7,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "can you remind me about the meeting at 3",
+   "reminder": {
+    "message": "The meeting",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 15,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "set a timer for 10 minutes",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 10
+    }
+   }
+  },
+  {
+   "text": "set a 5 minute timer",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 5
+    }
+   }
+  },
+  {
+   "text": "timer for 90 seconds",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 1
+    }
+   }
+  },
+  {
+   "text": "set an alarm for 7",
+   "reminder": {
+    "message": "Alarm",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 19,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "set an alarm at 6:45 am",
+   "reminder": {
+    "message": "Alarm",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 6,
+     "minute": 45
+    }
+   }
+  },
+  {
+   "text": "wake me up tomorrow at 6",
+   "reminder": {
+    "message": "Reminder",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 18,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "set a timer for an hour",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 13,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "set a timer for 2 hours and 30 minutes",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 14,
+     "minute": 30
+    }
+   }
+  },
+  {
+   "text": "remind me 20 minutes from now to move the car",
+   "reminder": {
+    "message": "Move the car",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 20
+    }
+   }
+  },
+  {
+   "text": "remind me today at 9 to call",
+   "reminder": {
+    "message": "Today at 9 to call",
+    "timer": false,
+    "schedule": null
+   }
+  },
+  {
+   "text": "remind me at 9 to call",
+   "reminder": {
+    "message": "Call",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 9,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me every evening to read",
+   "reminder": {
+    "message": "Read",
+    "timer": false,
+    "schedule": {
+     "type": "daily",
+     "time": "18:00",
+     "days": null
+    }
+   }
+  },
+  {
+   "text": "remind me this evening to call mom",
+   "reminder": {
+    "message": "Call mom",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 18,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me to stretch every 30 minutes",
+   "reminder": {
+    "message": "Stretch",
+    "timer": false,
+    "schedule": {
+     "type": "interval",
+     "every_sec": 1800
+    }
+   }
+  },
+  {
+   "text": "remind me on saturday morning to go running",
+   "reminder": {
+    "message": "Go running",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 3,
+     "hour": 8,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me on sunday at 11 to call grandma",
+   "reminder": {
+    "message": "Call grandma",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 4,
+     "hour": 11,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "what reminders do I have",
+   "reminder": null
+  },
+  {
+   "text": "cancel my reminder",
+   "reminder": null
+  },
+  {
+   "text": "remind me",
+   "reminder": {
+    "message": "Reminder",
+    "timer": false,
+    "schedule": null
+   }
+  },
+  {
+   "text": "remind me later",
+   "reminder": {
+    "message": "Later",
+    "timer": false,
+    "schedule": null
+   }
+  },
+  {
+   "text": "remind me at 25 to do something",
+   "reminder": {
+    "error": true
+   }
+  },
+  {
+   "text": "remind me to call my mom in 10 minutes",
+   "reminder": {
+    "message": "Call your mom",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 12,
+     "minute": 10
+    }
+   }
+  },
+  {
+   "text": "timer",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": null
+   }
+  },
+  {
+   "text": "set a timer",
+   "reminder": {
+    "message": "Timer finished",
+    "timer": true,
+    "schedule": null
+   }
+  },
+  {
+   "text": "alarm for 8 am",
+   "reminder": {
+    "message": "Alarm",
+    "timer": true,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 10,
+     "day": 1,
+     "hour": 8,
+     "minute": 0
+    }
+   }
+  },
+  {
+   "text": "remind me at 5 to call mom and dad",
+   "reminder": {
+    "message": "Call mom and dad",
+    "timer": false,
+    "schedule": {
+     "type": "once",
+     "year": 2026,
+     "month": 9,
+     "day": 30,
+     "hour": 17,
+     "minute": 0
+    }
+   }
+  }
+ ]
+}

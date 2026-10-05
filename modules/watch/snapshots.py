@@ -63,7 +63,7 @@ def take() -> Snapshot:
     from core.game_mode import game_mode
     # No screen capture while a game runs: it stutters the game and some
     # anti-cheats flag programs that grab the screen.
-    if config.get("watch.screen_hash", True) and not game_mode.active:
+    if config.get("watch.screen_hash", True) and not game_mode.busy:
         try:
             from PIL import ImageGrab
             for m in desktop.monitors():

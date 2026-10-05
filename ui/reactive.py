@@ -82,6 +82,11 @@ class UIBus(QObject):
             m = {}
         if m.get("title") and m.get("is_playing") and not m.get("is_spotify"):
             return self._from_media(m)
+        if m.get("is_spotify") and m.get("title") and sp.get("track") and \
+                m["title"].strip().lower() != str(sp["track"]).strip().lower():
+            # Windows already reports the next song while the Spotify API poll (every ~15 s, slower when
+            # it's busy — during a game) still has the last one: show what's really playing now.
+            return dict(self._from_media(m), source="spotify_media")
         if sp.get("track"):
             return {"source": "spotify", "title": sp["track"], "artist": sp.get("artists", ""),
                     "album": sp.get("album", "") or "", "cover": sp.get("image_large") or sp.get("image") or "",

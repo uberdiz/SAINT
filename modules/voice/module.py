@@ -97,6 +97,7 @@ class VoiceModule(BaseModule):
     description = "Wake word, voice input, speech recognition and interruption handling."
 
     def __init__(self):
+        self._last_stt_language = ""      # the language Whisper heard (modules/lang uses it as a hint)
         super().__init__()
         self.subtasks = {
             "Wake Word Detection": False,
@@ -163,6 +164,16 @@ class VoiceModule(BaseModule):
             initial_coupling=0.3,
         )
         self._barge_in_count = 0
+        # "Stop" spotter while SAINT talks (see _stop_spotter).
+        self._spot_frames = collections.deque(maxlen=int(1500 / CHUNK_MS))
+        self._spot_voiced = collections.deque(maxlen=int(1500 / CHUNK_MS))
+        self._spot_busy = False
+        self._spot_hit = False
+        self._spot_at = 0.0
+        self._spotted_text = ""
+        self._tts_text = ""
+        self._floor_cache = 0.025
+        self._floor_at = 0.0
 
         event_bus.subscribe(self._on_bus_event)
 
@@ -234,13 +245,22 @@ class VoiceModule(BaseModule):
             stt_device = config.get("voice.stt_device", "cuda")
             stt_compute = config.get("voice.stt_compute_type", "float16")
             stt_model = config.get("voice.stt_model", "base.en")
+            stt_language = config.get("voice.stt_language", "en")
+            initial_prompt = ""
+            if config.get("language.multilingual_stt", False):
+                # Whisper picks the language for each utterance (and copes with a second one in the
+                # same sentence); the ".en" models can't, so use the multilingual one.
+                stt_model = config.get("voice.stt_model_multilingual", "small")
+                stt_language = "auto"
+                initial_prompt = config.get("voice.stt_initial_prompt", "Hey SAINT. Hola SAINT. Play some música.")
             self._stt = make_stt(
                 "faster_whisper",
                 model_name=stt_model,
                 device=stt_device,
                 compute_type=stt_compute,
-                language=config.get("voice.stt_language", "en"),
+                language=stt_language,
                 hotwords=config.get("voice.stt_hotwords", "SAINT"),
+                initial_prompt=initial_prompt,
             )
             self._stt_device_info = f"{stt_device}/{stt_compute}/{stt_model}"
             threading.Thread(target=self._warmup_stt, daemon=True, name="voice-warmup").start()
@@ -349,6 +369,7 @@ class VoiceModule(BaseModule):
                 log.debug("voice.tts.playback %s", "start" if active else "stop")
         if not active:
             self._echo_gate.reset_run()
+            self._reset_spotter()
 
     def is_tts_playback_active(self) -> bool:
         with self._tts_playback_lock:
@@ -357,10 +378,108 @@ class VoiceModule(BaseModule):
     def _saint_is_talking(self) -> bool:
         return self._speaking or self.is_tts_playback_active()
 
+    # ------------------------------------------------------------------ #
+    # Talking over SAINT
+    # ------------------------------------------------------------------ #
+    # What people say to make SAINT stop talking.
+    _STOP_PHRASE = re.compile(r"\b(?:stop|shut up|be quiet|quiet|enough|hold on|hang on|wait|cancel|never ?mind|"
+                              r"okay okay|ok ok|no no|pause|saint|shush|shh+)\b", re.IGNORECASE)
+
+    @staticmethod
+    def _background_floor() -> float:
+        """Speech quieter than this, not said to SAINT by name, is the room or the
+        speakers (a video, a game, a call), not the user talking to SAINT."""
+        floor = float(config.get("voice.background_rms", 0.012))
+        try:
+            from modules.voice.output_policy import output_policy
+            normal = output_policy.normal_level()
+        except Exception:
+            normal = 0.0
+        if normal > 0:
+            floor = max(floor, min(0.03, normal * float(config.get("voice.background_ratio", 0.25))))
+        return floor
+
+    def _barge_floor(self) -> float:
+        """The quietest mic level that can be the user talking over SAINT:
+        a fixed minimum, raised to a share of how loud they normally talk."""
+        now = time.monotonic()
+        if now - self._floor_at > 2.0:
+            from modules.voice.output_policy import output_policy
+            base = float(config.get("voice.barge_in_min_rms", 0.025))
+            ratio = float(config.get("voice.barge_in_level_ratio", 0.4))
+            self._floor_cache = max(base, output_policy.normal_level() * ratio)
+            self._floor_at = now
+        return self._floor_cache
+
+    def _reset_spotter(self):
+        self._spot_frames.clear()
+        self._spot_voiced.clear()
+        self._spot_hit = False
+
+    def _stop_spotter(self, chunk16, raw_voice: bool, mic_rms: float) -> bool:
+        """While SAINT talks, short bursts of speech are transcribed on the side:
+        "stop" / "shut up" / "wait" interrupts even when the echo gate can't
+        tell the user from SAINT's own voice (speakers, loud music). Words SAINT
+        is saying itself don't count."""
+        if not config.get("voice.barge_in_spotter", True) or self._stt is None:
+            return False
+        if self._spot_hit:
+            self._spot_hit = False
+            return True
+        self._spot_frames.append(chunk16)
+        self._spot_voiced.append(bool(raw_voice and mic_rms >= 0.6 * self._floor_cache))
+        voiced = sum(self._spot_voiced)
+        now = time.monotonic()
+        # Check once a burst of speech (>= 240 ms) has ended — or every second while the
+        # sound never stops (music on, a loud room): the burst then never "ends", and
+        # "stop" said over it went unheard (2026-10-01).
+        ended = not self._spot_voiced[-1]
+        if self._spot_busy or voiced < 8 or now - self._spot_at < (0.6 if ended else 1.0):
+            return False
+        self._spot_busy = True
+        self._spot_at = now
+        audio = np.concatenate(list(self._spot_frames))
+
+        def run():
+            try:
+                res = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
+                heard = (getattr(res, "text", "") or "").strip()
+                m = self._STOP_PHRASE.search(heard) if heard else None
+                if m and self._music_playing:
+                    from modules.spotify.lyrics import lyrics_service
+                    if lyrics_service.matches_current(heard):
+                        m = None                  # the song singing "wait" / "stop", not the user
+                if m and (not self._saint_said(m.group(0)) or not self._is_own_echo(heard)):
+                    # A stop word SAINT isn't saying can't be its echo, even when the rest of
+                    # the transcript is SAINT's sentence ("…what I found about stop").
+                    self._spotted_text = heard
+                    self._spot_hit = True
+            except Exception:
+                log.debug("voice.spotter_failed", exc_info=True)
+            finally:
+                self._spot_busy = False
+        threading.Thread(target=run, daemon=True, name="voice-stop-spotter").start()
+        return False
+
+    def _saint_said(self, words: str) -> bool:
+        """Is ``words`` in the sentence SAINT is speaking?"""
+        return bool(re.search(rf"\b{re.escape(words.lower())}\b", (self._tts_text or "").lower()))
+
+    def _is_own_echo(self, heard: str) -> bool:
+        """Is ``heard`` just SAINT's own sentence picked up by the mic?"""
+        said = set(re.findall(r"[a-z']+", (self._tts_text or "").lower()))
+        words = re.findall(r"[a-z']+", heard.lower())
+        if not words or not said:
+            return False
+        return sum(w in said for w in words) >= 0.6 * len(words)
+
     _music_playing = False              # updated from spotify.playback.changed events
     _music_loaded = False               # a track is loaded (playing or paused)
 
     def _on_bus_event(self, ev):
+        if ev.type == EventType.TTS_SPEAK_START:
+            self._tts_text = str((ev.payload or {}).get("text") or "")
+            return
         if ev.type == EventType.SPOTIFY_PLAYBACK_CHANGED:
             self._music_playing = bool((ev.payload or {}).get("is_playing"))
             self._music_loaded = bool((ev.payload or {}).get("track"))
@@ -470,6 +589,10 @@ class VoiceModule(BaseModule):
             assistant_state.return_to_rest()
 
     def _on_wake_word(self, score: float, source: str = "model"):
+        from core.game_mode import game_mode
+        if not game_mode.feature("wake_word"):            # Gaming Mode setting: wake word off
+            log.info("voice.wake_word.ignored gaming_mode score=%.3f", score)
+            return
         self._last_wake_time = time.monotonic()
         log.info("voice.wake_word.detected score=%.3f source=%s", score, source)
         event_bus.emit_event(EventType.VOICE_WAKE_WORD, {
@@ -554,7 +677,12 @@ class VoiceModule(BaseModule):
 
             # ---- SAINT is speaking: only barge-in detection runs ------------
             if self._saint_is_talking() and not barge_capture:
-                if barge_enabled and raw_voice and self._echo_gate.update(mic_rms, ref):
+                self._echo_gate.speech_floor = self._barge_floor()
+                gate_fired = barge_enabled and raw_voice and self._echo_gate.update(mic_rms, ref)
+                spotted = barge_enabled and self._stop_spotter(chunk16, raw_voice, mic_rms)
+                if gate_fired or spotted:
+                    if spotted:
+                        log.info("voice.barge_in.spotted %r", self._spotted_text)
                     self._barge_in_count += 1
                     log.info("voice.barge_in mic_rms=%.4f playback_rms=%.4f coupling=%.3f",
                              mic_rms, ref, self._echo_gate.coupling)
@@ -570,7 +698,9 @@ class VoiceModule(BaseModule):
                     with self._speech_id_lock:
                         self._speech_session_id += 1
                         sid = self._speech_session_id
-                    seg = list(preroll)[-(self._echo_gate.min_frames + 10):]
+                    # A spotted "stop" was already said: keep it in the utterance.
+                    seg = list(self._spot_frames) if spotted else list(preroll)[-(self._echo_gate.min_frames + 10):]
+                    self._reset_spotter()
                     seg_reason = "interruption"         # not whatever the previous segment was
                     self._enter_command(8.0, reason="interruption")
                 elif not raw_voice:
@@ -882,6 +1012,7 @@ class VoiceModule(BaseModule):
             hint = _REPLY_HINT if wake_initiated and dialog.expects_short_answer() else ""
             try:
                 result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE, hint=hint)
+                self._last_stt_language = getattr(result, "language", "") or ""
             except TypeError:                     # an STT backend without hints
                 result = self._stt.transcribe(audio, sample_rate=SAMPLE_RATE)
         except Exception as e:
@@ -914,6 +1045,11 @@ class VoiceModule(BaseModule):
             # word counts — or, while music plays, a bare playback hot-word
             # ("skip", "pause"). Nothing else from passive listening is kept or shown.
             hot = not self._starts_with_wake(raw_text) and self._is_music_hotword(raw_text, confidence)
+            if hot and 0 < rms < self._background_floor():
+                # "Next" / "skip it" sung by the song itself, coming back through the
+                # speakers: far quieter than the user saying it (2026-10-01).
+                log.info("voice.hotword.too_quiet rms=%.4f text=%r", rms, raw_text)
+                return ""
             if hot:
                 text = raw_text.strip()
                 log.info("voice.hotword session=%s conf=%.2f text=%r", session_id, confidence, text)
@@ -964,7 +1100,12 @@ class VoiceModule(BaseModule):
 
         ok, reason = self._passes_activation_gate(text, confidence,
                                                   wake_initiated=wake_initiated and not follow_up,
-                                                  follow_up=follow_up)
+                                                  follow_up=follow_up, audio=audio, rms=rms)
+        if ok and wake_initiated and not follow_up and not hot and not self._music_playing \
+                and self._command_reason in _ADDRESSED and config.get("voice.learn_my_voice", True):
+            # Said to SAINT by name (or answering it): the user's voice. Builds the
+            # profile that tells them apart from songs, videos and other people.
+            threading.Thread(target=self._learn_voice, args=(audio,), daemon=True, name="voice-profile").start()
         if not ok:
             log.info("voice.activation.rejected session=%s reason=%s conf=%.2f text=%r",
                      session_id, reason, confidence, text)
@@ -982,6 +1123,7 @@ class VoiceModule(BaseModule):
             "inference_ms": round(inference_ms, 1),
             "session_id": session_id,
             "wake": wake_initiated,
+            "language": self._last_stt_language,
             **({"source": "hotword"} if hot else {}),
             "diagnostics": {
                 "audio_duration_ms": audio_duration_ms,
@@ -999,13 +1141,14 @@ class VoiceModule(BaseModule):
     # Transcript helpers
     # ------------------------------------------------------------------ #
     _WAKE_PREFIX = re.compile(
-        r"^\s*(?:(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+)?(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
+        r"^\s*(?:(?:hey|hay|they|hi|ok(?:ay)?|oye|hola|ey|eh|salut|hallo|ciao|ol[aá]|oi|ehi)[\s,.!]+)?"
+        r"(?:saint(?:s|e|'s)?|sant|sane)\b[\s,.:;!?-]*",
         re.IGNORECASE)
 
     # Whisper sometimes renders "Hey SAINT" as "Hey, St." — only strip that
     # form after a greeting, so "St. Louis weather" is left alone.
     _WAKE_PREFIX_ALT = re.compile(
-        r"^\s*(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
+        r"^\s*(?:hey|hay|they|hi|ok(?:ay)?|oye|hola|ey|eh|salut|hallo|ciao|ol[aá]|oi|ehi)[\s,.!]+(?:st\.?|saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)[\s,.:;!?-]*",
         re.IGNORECASE)
 
     def _strip_wake_prefix(self, text: str) -> str:
@@ -1025,7 +1168,7 @@ class VoiceModule(BaseModule):
         return stripped.strip()
 
     _WAKE_START = re.compile(
-        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh)[\s,.!]+)?(?:(?:hey|hay|they|hi|ok(?:ay)?|yo)[\s,.!]+)?"
+        r"^\s*(?:(?:um+|uh+|so|okay|ok|oh|pues|bueno|euh)[\s,.!]+)?(?:(?:hey|hay|they|hi|ok(?:ay)?|oye|hola|ey|eh|salut|hallo|ciao|ol[aá]|oi|ehi|yo)[\s,.!]+)?"
         r"(?:saint(?:s|e|'s)?|sant|sane)(?=[\s,.!?]|$)", re.IGNORECASE)
     _WAKE_START_ALT = re.compile(r"^\s*(?:hey|hay|they|hi|ok(?:ay)?)[\s,.!]+st\.?(?=[\s,.!?]|$)", re.IGNORECASE)
 
@@ -1053,7 +1196,7 @@ class VoiceModule(BaseModule):
     _MUSIC_FOLLOWUP_OK = re.compile(
         r"^(?:skip(?:\s+it|\s+this(?:\s+song)?)?|next(?:\s+song|\s+track)?|previous|back|"
         r"pause(?:\s+it|\s+the\s+music)?|resume|play|stop|"
-        r"louder|quieter|volume\s+(?:up|down|to\s+\d+)|turn\s+(?:it\s+)?(?:up|down)|"
+        r"louder|quieter|volume\s+(?:up|down|to\s+\d+)|turn\s+(?:it\s+)?(?:back\s+)?(?:up|down)(?:\s+a\s+(?:little|bit))?|"
         r"shuffle|smart\s+shuffle|repeat|"
         r"what(?:'s| is)\s+(?:this|playing|the\s+song)|who(?:'s| is)\s+(?:this|singing)|"
         r"like\s+this|love\s+this|i\s+like\s+this|i\s+love\s+this|"
@@ -1065,11 +1208,23 @@ class VoiceModule(BaseModule):
     # whole utterance must be one of these, so lyrics and chatter don't count.
     _MUSIC_HOTWORD = re.compile(
         r"^(?:skip(?:\s+(?:it|this|that|song|track|(?:this|that|the)\s+(?:song|track|one)))?|next(?:\s+(?:song|track))?|"
+        r"skip\s+(?:the\s+next\s+)?(?:\d{1,2}|two|three|four|five|a\s+couple(?:\s+of)?|a\s+few)\s+(?:songs?|tracks?)|"
         r"go\s+back|previous\s+(?:song|track)|last\s+song|"
         r"pause(?:\s+(?:it|music|the\s+music|spotify))?|resume(?:\s+(?:the\s+)?music)?|unpause|"
         r"(?:play|keep\s+playing)\s+(?:the\s+)?music|"
         r"louder|quieter|volume\s+(?:up|down)|turn\s+(?:it|the\s+music)\s+(?:up|down)|"
         r"(?:i\s+)?(?:like|love)\s+this(?:\s+song)?)$", re.IGNORECASE)
+
+    # One-word (or two-word) answers and reactions right after SAINT speaks or
+    # while talking over it: "Yup.", "No.", "Wait.", "Shut up." Whisper scores
+    # them near 0, so they used to be dropped as noise (2026-09-30).
+    _SHORT_REPLY = re.compile(
+        r"^(?:yes|yeah|yep|yup|ya|yea|sure|okay|ok|alright|all right|correct|exactly|perfect|please|"
+        r"no|nope|nah|not that|wrong|never ?mind|forget it|cancel|stop|stop it|stop talking|wait|hold on|"
+        r"hang on|shut up|be quiet|quiet|enough|thanks|thank you|cool|nice|great|good|do it|go ahead|"
+        r"that one|the first one|the second one|the last one|again|repeat that|what|huh|louder|quieter)"
+        r"(?:[\s,.!?]+(?:saint|please|thanks|then))*[\s.!?]*$", re.IGNORECASE)
+    _NAMED = re.compile(r"\bsaint\b", re.IGNORECASE)
 
     _FRAGMENT = re.compile(r"^(?:and|and then|then|so|um+|uh+|but|or|also|like|okay so)[\s.,!?…-]*$", re.IGNORECASE)
 
@@ -1164,8 +1319,50 @@ class VoiceModule(BaseModule):
             return False
         return True
 
+    def _learn_voice(self, audio):
+        try:
+            from modules.voice.speaker import speaker_profile
+            if speaker_profile.learn(audio):
+                log.debug("voice.profile.learned samples=%d", speaker_profile.samples)
+        except Exception:
+            log.debug("voice.profile.learn_failed", exc_info=True)
+
+    @staticmethod
+    def _voice_is_user(audio) -> Optional[bool]:
+        """True/False from the user's voice profile; None when it can't tell."""
+        if audio is None:
+            return None
+        try:
+            from modules.voice.speaker import speaker_profile
+            return speaker_profile.is_user(audio)
+        except Exception:
+            log.debug("voice.profile.score_failed", exc_info=True)
+            return None
+
+    def _note_singing(self, audio, rms: float, text: str):
+        """The user singing along to the song that's playing (a lyric heard in
+        *their* voice, not the speakers'): a strong "likes this song" signal."""
+        is_user = self._voice_is_user(audio)
+        if is_user is False:
+            return
+        if is_user is None:
+            # No voice profile yet: only speech at their normal talking level counts
+            # (song vocals leaking from speakers are much quieter on the mic).
+            from modules.voice.output_policy import output_policy
+            normal = output_policy.normal_level()
+            if not normal or rms < 0.6 * normal:
+                return
+        try:
+            from core.module_manager import module_manager
+            sp = module_manager.get("spotify")
+            tools = getattr(sp, "tools", None)
+            if tools is not None and tools.note_sang_along(text):
+                log.info("voice.sang_along words=%d", len(text.split()))
+        except Exception:
+            log.debug("voice.sang_along_failed", exc_info=True)
+
     def _passes_activation_gate(self, text: str, confidence: float, wake_initiated: bool = False,
-                                follow_up: bool = False):
+                                follow_up: bool = False, audio=None, rms: float = 0.0):
         """Transcript-level gate for speech that SAINT was not addressed with.
 
         Returns (ok, reason). Wake-initiated commands always pass: the user
@@ -1178,6 +1375,13 @@ class VoiceModule(BaseModule):
         stripped = (text or "").strip()
         lower = stripped.lower()
         words = stripped.split()
+        # Wake word off: every sound in the room reaches here unaddressed. It has
+        # to be something SAINT would act on, a question, or an answer — the same
+        # bar as a follow-up — or lyrics and room talk become requests ("INTRO
+        # MUSIC", "this is tough.", "wow" all got replies on 2026-09-30).
+        wake = getattr(self, "_wake", None)
+        open_mic = not follow_up and not (wake is not None and wake.ready)
+        interrupting = getattr(self, "_command_reason", "") == "interruption"
 
         if re.search(r"\b(alexa|hey google|ok(ay)? google|siri|hey siri|cortana)\b", lower):
             return False, "foreign_wake_word"
@@ -1188,12 +1392,36 @@ class VoiceModule(BaseModule):
             try:
                 from modules.spotify.lyrics import lyrics_service
                 if lyrics_service.matches_current(stripped):
+                    if config.get("spotify.learn_singing", True):
+                        self._note_singing(audio, rms, stripped)
                     return False, "song_lyrics"
             except Exception as e:
                 log.debug("voice.lyrics_check_failed %s", e)
+        # Not the user's voice (a video, a song, someone else) and not said to
+        # SAINT by name: ignored when "Only respond to my voice" is on.
+        if (follow_up or open_mic) and config.get("voice.speaker_filter", False) \
+                and self._voice_is_user(audio) is False:
+            return False, "not_your_voice"
         # An answer to SAINT's own question ("Yeah." after "Close Disk Cleanup?")
         # is never a hallucination, however short or low-scored.
         answering = self._ai_expects_reply() or self._question_pending() or self._answers_set_aside(stripped)
+        # Too quiet to be the user talking to SAINT: a video, the game, a call or
+        # the TV coming through the speakers. Background speech that became
+        # requests on 2026-09-30 ("So we'll have next." skipped a song) was at
+        # 0.005-0.016 RMS; the user's own commands at 0.04-0.16.
+        if rms > 0 and not answering and rms < self._background_floor():
+            return False, "too_quiet_background"
+        # Said SAINT's name somewhere ("SHUT UP SAINT SHUT UP" while it talked):
+        # addressed, even though it didn't start with the wake word.
+        if len(words) <= 10 and self._NAMED.search(stripped) and confidence >= 0.2:
+            return True, "named"
+        short_reply = bool(self._SHORT_REPLY.match(stripped))
+        # A plain follow-up also needs the user's loudness: Whisper makes "Yeah."
+        # out of noise, and noise is quiet.
+        if short_reply and (interrupting or answering or (follow_up and not self._music_playing and rms > 0)):
+            # Talking over SAINT or answering right after it spoke: a one-word
+            # answer is the most likely thing to say, never noise to drop.
+            return True, "short_reply"
         hallucinations = {"you", "thank you", "thanks for watching", "bye", "okay", "ok",
                           "yeah", "so", "uh", "um", "hmm", "the"}
         if lower.strip(".!?, ") in hallucinations and confidence < short_conf and not answering:
@@ -1211,17 +1439,17 @@ class VoiceModule(BaseModule):
         # transcribed lyrics. Keep what SAINT would act on (a command it
         # recognises, an answer to its question) or a short direct question;
         # drop chatter and lyrics. "Hey SAINT, <anything>" always bypasses.
-        if follow_up and self._music_playing and config.get("voice.music_strict_followup", True):
-            if not (command or self._DIRECT_QUESTION.match(stripped) and len(words) <= 14):
+        if (follow_up or open_mic) and self._music_playing and config.get("voice.music_strict_followup", True):
+            if not (command or answering or self._DIRECT_QUESTION.match(stripped) and len(words) <= 14):
                 return False, "music_playing_needs_wake_word"
         # Talking to someone else: without the wake word, only something SAINT
         # would act on, a direct question, or an answer SAINT asked for counts.
-        if follow_up and config.get("voice.followup_requires_intent", True):
+        if (follow_up and config.get("voice.followup_requires_intent", True)) or open_mic:
             if self._CHATTER.match(stripped) and not command:
-                return False, "followup_chatter"
+                return False, ("followup" if follow_up else "open_mic") + "_chatter"
             request = bool(self._REQUEST.match(stripped)) and len(words) <= 14
             if not (command or request or self._DIRECT_QUESTION.match(stripped) or self._ai_expects_reply()):
-                return False, "followup_no_intent"
+                return False, ("followup" if follow_up else "open_mic") + "_no_intent"
         if follow_up:
             min_conf = min(min_conf, float(config.get("voice.followup_min_confidence", 0.25)))
         if command:

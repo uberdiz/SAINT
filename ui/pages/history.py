@@ -25,8 +25,9 @@ from ui.widgets import (Bars, Card, ElidedLabel, Heatmap, IconButton, Page, Segm
                         run_async)
 
 SOURCES = {"voice": ("mic", "Voice"), "typed": ("keyboard", "Typed"), "hotword": ("radio", "Hot-word"),
-           "scene": ("zap", "Scene"), "automation": ("clock", "Scheduled")}
-FILTERS = [None, {"voice"}, {"typed"}, {"hotword"}, {"scene", "automation"}]
+           "scene": ("zap", "Scene"), "automation": ("clock", "Scheduled"), "iphone": ("smartphone", "iPhone"),
+           "remote": ("cpu", "Other PC")}
+FILTERS = [None, {"voice"}, {"typed"}, {"hotword"}, {"scene", "automation"}, {"iphone", "remote"}]
 PAGE_SIZE = 120
 
 
@@ -174,7 +175,7 @@ class HistoryPage(Page):
         body.addLayout(lower)
 
         frow = QHBoxLayout()
-        self.filter = Segmented(["All", "Voice", "Typed", "Hot-words", "Scenes & schedules"])
+        self.filter = Segmented(["All", "Voice", "Typed", "Hot-words", "Scenes & schedules", "Other devices"])
         self.filter.changed.connect(lambda _i: self._render_list(reset=True))
         frow.addWidget(self.filter)
         frow.addStretch()
@@ -280,9 +281,10 @@ class HistoryPage(Page):
         p = current_palette()
         from ui.theme import _mix
         colors = {"voice": p.accent, "hotword": _mix(p.info, p.danger, 0.55), "typed": p.info,
-                  "scene": p.success, "automation": p.muted}
+                  "scene": p.success, "automation": p.muted, "iphone": _mix(p.accent, p.success, 0.5),
+                  "remote": _mix(p.accent, p.muted, 0.5)}
         names = {"voice": "Voice", "hotword": "Hot-words", "typed": "Typed", "scene": "Scenes",
-                 "automation": "Scheduled"}
+                 "automation": "Scheduled", "iphone": "iPhone", "remote": "Other PC"}
         parts = [(names[s], tot["by_source"][s], colors[s]) for s in names]
         self.source_bar.set_data(parts)
         clear_layout(self.source_list)

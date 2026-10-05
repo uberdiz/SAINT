@@ -124,7 +124,7 @@ def test_skip_is_remembered(tools):
 
 
 def test_volume_step(tools):
-    assert tools.volume_step("up")["percent"] == 55
+    assert tools.volume_step("up")["percent"] == 50          # default step is 10 (2026-09-30: 15-25 was too much)
     assert tools.volume_step("down", step=10)["percent"] == 30
 
 

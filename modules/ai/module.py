@@ -59,6 +59,7 @@ class AIModule(BaseModule):
         self._active_stream_id: str = ""
         self._stream_id_lock = threading.Lock()
         self.expects_reply = False   # last answer asked the user a question
+        self.last_language = "en"    # the language of the last turn (modules/lang)
         self._rebuild_context()
 
     # ------------------------------------------------------------------ #
@@ -199,8 +200,17 @@ class AIModule(BaseModule):
             if self._cancel_flag.is_set() or info.get("expects_reply") or \
                     any(c.get("success") for c in info.get("tool_calls", [])) or not planner.worth_planning(prompt):
                 return ""
-            if not config.get("learning.watch_after_failure", True) or not demonstration.offer(prompt):
+            if not config.get("learning.watch_after_failure", True):
                 return ""
+            if not demonstration.offer(prompt):
+                from modules.learning.skills import skills
+                word = skills.pointing_word(prompt) if demonstration.can_watch() else ""
+                if not word:
+                    return ""
+                extra = (f" I don't know how to do that yet. Say it with the real name instead of “{word}” and I "
+                         f"can learn it.")
+                on_token(extra)
+                return extra
         except Exception:
             logging.getLogger("saint.ai").exception("ai.offer_to_learn_failed")
             return ""
@@ -239,6 +249,8 @@ class AIModule(BaseModule):
         interrupted_text: str = "",
         turn_id: int = 0,
         request_id: str = "",
+        language: str = "",
+        source: str = "",
     ) -> None:
         """Handle one user turn. Called from a worker thread.
 
@@ -255,6 +267,7 @@ class AIModule(BaseModule):
         self._turn_id = turn_id
         self._active_turn_id = turn_id
         self.expects_reply = False
+        self.model_failed = ""          # why the language model couldn't answer this turn ("" when it could)
         if not request_id:
             request_id = uuid.uuid4().hex[:12]
         stream_id = f"stream_{turn_id}_{uuid.uuid4().hex[:8]}"
@@ -279,10 +292,25 @@ class AIModule(BaseModule):
         })
         start = time.perf_counter()
 
+        # ---- 0. Language: what was said, and which language to answer in ----
+        # (modules/lang). Spanish / French / ... commands become the English
+        # command the router knows; the reply is translated back. Plain English
+        # passes through untouched.
+        turn = None
+        try:
+            from modules import lang as _lang
+            turn = _lang.analyze(prompt, hint=language)
+            self.last_language = turn.language
+        except Exception:
+            _ai_log.exception("lang.analyze_failed")
+        routed = turn.routed_text if turn is not None else prompt
+        if turn is not None and turn.translated:
+            _ai_log.info("lang.translated %s -> %r", turn.language, routed[:80])
+
         # ---- 1. Agent: deterministic intents executed through real tools ----
         from modules.agent.agent import agent
         try:
-            result = agent.handle(prompt)
+            result = agent.handle(routed)
         except Exception:
             _ai_log.exception("agent.handle_failed")
             result = None
@@ -293,7 +321,12 @@ class AIModule(BaseModule):
                 return
             self.expects_reply = result.expects_reply
             from modules.agent.output import clean_reply
-            result.text = clean_reply(result.text, prompt) or result.text
+            result.text = clean_reply(result.text, routed) or result.text
+            if turn is not None and turn.language not in ("", "en", "und"):
+                try:
+                    result.text = turn.localize(result.text)
+                except Exception:
+                    _ai_log.exception("lang.localize_failed")
             on_token(result.text)
             event_bus.emit_event(EventType.AI_STREAM_TOKEN, {
                 "token": result.text, "turn_id": turn_id, "stream_id": stream_id, "request_id": request_id})
@@ -352,7 +385,18 @@ class AIModule(BaseModule):
             )})
         except Exception:
             pass
+        if turn is not None and turn.directive():
+            grounding.append({"role": "system", "content": turn.directive()})
         grounding += self._memory_messages(prompt)
+        try:
+            from modules.link.context_feed import context_feed
+            elsewhere = context_feed.describe()
+            if elsewhere:
+                grounding.append({"role": "system", "content": (
+                    "What the user just did on their other devices (real, recent; mention it only when it's "
+                    "relevant):\n" + elsewhere)})
+        except Exception:
+            pass
         try:
             # Short-term memory: what SAINT really did or found a moment ago, so
             # "what did you find?" / "delete it" aren't answered with invented paths.
@@ -442,6 +486,8 @@ class AIModule(BaseModule):
                 "error": str(e), "turn_id": turn_id, "request_id": request_id,
                 "provider": provider_name, "model": model})
             from modules.ai.providers import ModelNotFoundError, ConnectionError as _ConnErr
+            self.model_failed = "not_installed" if isinstance(e, ModelNotFoundError) else \
+                "unreachable" if isinstance(e, _ConnErr) else "error"
             if isinstance(e, ModelNotFoundError):
                 spoken = (f"I can't answer right now — the language model \"{model}\" isn't installed. "
                           f"Please pull it or pick another model in settings.")

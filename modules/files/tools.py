@@ -341,10 +341,16 @@ def _walk(root: str, max_depth: int, cancel):
 
 
 def make_folder(name: str, parent: str = ""):
-    where = _folder(parent) if parent else known_folder("desktop")
+    where = (parent if os.path.isdir(parent or "") else _folder(parent)) if parent else known_folder("desktop")
     res = ops.make_folder(where, name)
     verb = "There's already a folder called" if res["existed"] else "Made a new folder called"
     return dict(res, summary=f"{verb} {os.path.basename(res['path'])} in {where}.")
+
+
+def make_file(name: str = "", parent: str = "", kind: str = "text", text: str = ""):
+    where = (parent if os.path.isdir(parent or "") else _folder(parent)) if parent else known_folder("desktop")
+    res = ops.make_file(where, name, kind, text)
+    return dict(res, summary=f"Made {os.path.basename(res['path'])} in {where}.")
 
 
 def rename(path: str, new_name: str):
@@ -425,6 +431,14 @@ def register_file_tools(registry):
              parameters={"name": P("string", "the new folder's name"),
                          "parent": P("string", "where: games, downloads, documents, D drive, or a path",
                                      required=False)},
+             category="files", llm_exposed=True),
+        Tool("files.make_file", "Make a new (empty) text or other plain file in a folder", {"name": "string"},
+             PermissionLevel.MEDIUM, make_file,
+             parameters={"name": P("string", "the file's name (blank for New Text Document)", required=False, default=""),
+                         "parent": P("string", "where: downloads, documents, desktop, a drive, or a path",
+                                     required=False, default=""),
+                         "kind": P("string", "text, markdown, python, json, csv, html", required=False, default="text"),
+                         "text": P("string", "what to put in it", required=False, default="")},
              category="files", llm_exposed=True),
         Tool("files.open_path", "Open a file with its usual app", {"path": "string"}, PermissionLevel.MEDIUM,
              open_path, parameters={"path": P("string")}, category="files", llm_exposed=False),

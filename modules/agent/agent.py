@@ -6,8 +6,12 @@ The agent entry point used by the AI module for every user turn:
     user text
       → pending confirmation?        (yes / no)
       → "no, I meant X"              run X, and learn it for the last request
+      → a lesson in progress         being walked through a task, or running one
+                                     that was taught that way (modules/learning/lesson.py)
       → learned skills               requests SAINT was taught (modules/learning)
       → deterministic intent router  (Spotify, memory, reminders, desktop, ...)
+      → a task it was never taught   ("write an email"): it asks to be walked through
+                                     it instead of guessing
       → didn't work / not known      the planner tries harder with commands SAINT
                                      knows; if that works it's learned, if not
                                      SAINT offers to watch the user do it once
@@ -51,11 +55,22 @@ class Agent:
     def __init__(self):
         self._lock = threading.Lock()
         self._last_failed = ""           # for "watch me" without saying what
+        # Scene / scheduled steps run exactly as written: a step that fails is
+        # reported, never "worked out" into something else (2026-09-30: a scene
+        # step that failed was planned into extracting a zip and a Steam search).
+        self._literal = threading.local()
 
     def handle(self, text: str) -> Optional[AgentResult]:
         if not config.get("agent.enabled", True):
             return None
         t0 = time.perf_counter()
+        from core.focus_guard import focus_guard
+        literal = getattr(self._literal, "on", False)
+        if not literal:
+            focus_guard.begin(text)            # scene steps keep the scene's own "yes, show things"
+
+        from modules.learning.lesson import lessons
+        in_lesson = lessons.active and not literal
 
         # While SAINT watches the user show it something, "done" ends the lesson.
         from modules.learning import demonstration
@@ -66,9 +81,22 @@ class Agent:
             text = demonstration.finish()
             # A long lesson is read back and needs a "yes" (demonstration.learn_from).
             return AgentResult(text, "learning.done", expects_reply=confirmations.pending is not None)
-        if learning.is_done(text) and demonstration.just_finished():
+        if not in_lesson and learning.is_done(text) and demonstration.just_finished():
             # It had already stopped (15 quiet seconds) and saved what it saw.
             return AgentResult("I'd already stopped watching. " + demonstration.just_finished(), "learning.done")
+
+        # "No, that's wrong" / "I didn't ask for that" right after SAINT acted:
+        # a recipe SAINT worked out itself is unlearned on the spot, and the
+        # mistake is journaled so the planner doesn't repeat it. The utterance
+        # still goes on ("no, I meant X" runs X; "stop" stops).
+        from modules.learning.feedback import feedback, is_complaint
+        unlearned = None if literal or in_lesson else feedback.check_complaint(text)
+        if unlearned and is_complaint(text) and len(text.split()) <= 6 and not demonstration.recorder.active:
+            from modules.agent.meta import match_meta as _mm
+            if _mm(text) is None:
+                log.info("agent.intent learning.unlearned")
+                event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.unlearned", "text": text[:80]})
+                return AgentResult(unlearned + " What did you want instead?", "learning.unlearned")
 
         # Commands about SAINT itself (stop, "what are you doing?", silent
         # mode) never wait for the lock a running plan holds.
@@ -79,6 +107,20 @@ class Agent:
             log.info("agent.intent meta.%s", meta.kind)
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": f"meta.{meta.kind}", "text": text[:80]})
             return AgentResult(reply, f"meta.{meta.kind}")
+
+        # Being walked through a task, or running one that was taught that way:
+        # the next utterance is the next step / the answer to SAINT's question.
+        from modules.agent.confirm import choices
+        if in_lesson and confirmations.pending is None and choices.pending is None:
+            with self._lock:
+                try:
+                    reply = lessons.feed(text)
+                except Exception:
+                    log.exception("agent.lesson_failed")
+                    lessons.stop()
+                    reply = Reply("Something went wrong in that lesson, so I stopped it.", ok=False)
+            if reply is not None:
+                return self._lesson_result(text, reply, t0)
 
         # Dictation mode: while active, every utterance is *content*, not a
         # command. Say "done" to finish, "cancel" to throw it away.
@@ -96,7 +138,6 @@ class Agent:
             return AgentResult(greeting, "dictation.start", expects_reply=True)
 
         from modules.learning.corrections import corrections
-        from modules.agent.confirm import choices
         if confirmations.pending is not None or choices.pending is not None:
             # "No, close the finals" / "no, I meant the folder you just made" answers
             # the question *and* says what to do instead.
@@ -109,6 +150,11 @@ class Agent:
         if answer is not None:
             log.info("agent.intent confirmation_reply")
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "confirmation", "text": text[:80]})
+            if in_lesson and confirmations.pending is None:
+                with self._lock:
+                    resumed = lessons.resume(answer)
+                if resumed is not None:
+                    return self._lesson_result(text, resumed, t0)
             return AgentResult(answer, "confirmation")
 
         with self._lock:
@@ -116,6 +162,11 @@ class Agent:
         if chosen is not None:
             log.info("agent.intent choice_reply")
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "choice", "text": text[:80]})
+            if in_lesson and choices.pending is None and confirmations.pending is None:
+                with self._lock:
+                    resumed = lessons.resume(chosen)
+                if resumed is not None:
+                    return self._lesson_result(text, resumed, t0)
             return AgentResult(chosen, "choice", expects_reply=choices.pending is not None)
 
         from modules.agent.aliases import aliases, parse_alias_command
@@ -128,6 +179,10 @@ class Agent:
         if expanded != text:
             log.info("agent.alias.expand %r -> %r", text[:60], expanded[:60])
             text = expanded
+
+        task = None if literal else lessons.start_phrase(text)
+        if task:
+            return self._lesson_result(text, lessons.start(task), t0)
 
         lk = learning.parse(text, last_failed=self._last_failed)
         if lk is not None:
@@ -142,11 +197,28 @@ class Agent:
         from modules.automation.scenes import scenes
         scene = scenes.match(text)
         if scene is not None:
+            plan = scenes.plan(scene)
+            if plan.interactive:
+                return self._run_interactive_scene(scene, plan, text, t0)
             # Runs on its own thread: steps re-enter handle(), which holds _lock.
             scenes.run_in_background(scene, self.run_command)
             log.info("agent.intent scene.run name=%r", scene.name)
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "scene.run", "text": text[:80]})
             return AgentResult(f"Running {scene.name}.", "scene.run")
+
+        taught = None if literal else lessons.match(text)
+        if taught is not None:
+            log.info("agent.intent lesson %r", taught.phrase)
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.lesson", "domain": "learned",
+                                                          "text": text[:80], "steps": taught.steps})
+            with self._lock:
+                try:
+                    reply = lessons.run(taught, text)
+                except Exception:
+                    log.exception("agent.lesson_run_failed %r", taught.phrase)
+                    lessons.stop()
+                    reply = Reply("Something went wrong running that, so I stopped.", ok=False)
+            return self._lesson_result(text, reply, t0, emit=False)
 
         from modules.learning.skills import skills, run_steps
         skill = skills.match(text)
@@ -162,10 +234,23 @@ class Agent:
                     reply = None
             skills.note_result(skill, bool(reply and reply.ok))
             if reply is not None and (reply.ok or not _TRY_HARDER.search(reply.text)):
-                return self._finish(text, "learning.skill", reply, t0)
+                return self._finish(text, "learning.skill", reply, t0, steps=skill.steps)
             # The learned way stopped working: work it out again below.
 
         intent = route(text)
+        from core.game_mode import game_mode
+        if intent is None and not game_mode.feature("ai_chat"):
+            return self._finish(text, "gaming.ai_off", Reply(
+                "AI chat is off in Gaming Mode. Commands like music, volume and timers still work.", ok=False), t0)
+        if intent is not None and intent.domain == "spotify" and not game_mode.feature("spotify"):
+            return self._finish(text, "gaming.spotify_off", Reply(
+                "Spotify control is off in Gaming Mode. Turn it on in Settings > Gaming Mode.", ok=False), t0)
+        if intent is None and not literal and lessons.should_offer(text):
+            # A job with several steps it was never shown ("write an email"):
+            # ask to be walked through it instead of guessing it all in one go.
+            log.info("agent.intent learning.lesson_offer text=%r", text[:80])
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.lesson_offer", "text": text[:80]})
+            return self._lesson_result(text, lessons.offer(text), t0, emit=False)
         if intent is None:
             from modules.learning import planner
             if planner.worth_planning(text):
@@ -194,12 +279,58 @@ class Agent:
             return self._try_harder(text, reply.text, t0, first=intent.name)
         return self._finish(text, intent.name, reply, t0)
 
+    def _run_interactive_scene(self, scene, plan, text: str, t0: float) -> AgentResult:
+        """A scene with questions in it ("ask which account", "ask what to write about"): every
+        question is asked and answered before the first step runs, drafts are read out for
+        changes, and nothing after a "confirm" runs without a yes (modules/automation/scene_plan.py)."""
+        from modules.automation.scenes import scenes
+        from modules.learning.lesson import lessons
+        log.info("agent.intent scene.run name=%r interactive steps=%r", scene.name, plan.lines)
+        event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "scene.run", "text": text[:80],
+                                                      "steps": plan.lines})
+        with self._lock:
+            try:
+                reply = lessons.run(scenes.interactive_run(scene, plan.lines), text)
+            except Exception:
+                log.exception("agent.scene_run_failed %r", scene.name)
+                lessons.stop()
+                reply = Reply(f"Something went wrong starting {scene.name}, so I stopped.", ok=False)
+        lead = ""
+        if plan.notes and scene.explained != scenes.steps_hash(scene):
+            lead = " ".join(plan.notes)                 # said once per version of the steps
+            scenes.mark_explained(scene)
+        if reply.expects_reply:
+            lead = f"{lead} Before I start —".strip()
+        return self._lesson_result(text, Reply(f"{lead} {reply.text}".strip(), ok=reply.ok,
+                                               expects_reply=reply.expects_reply), t0, emit=False)
+
     # ------------------------------------------------------------------ #
     # Learning
     # ------------------------------------------------------------------ #
-    def _finish(self, text: str, name: str, reply, t0: float) -> AgentResult:
+    def _lesson_result(self, text: str, reply, t0: float, emit: bool = True) -> AgentResult:
+        """A lesson turn. Not fed to the rephrase / complaint learners: "school"
+        answering "Which account?" is not a new way to say the last request."""
+        log.info("agent.lesson ok=%s asks=%s reply=%r", reply.ok, reply.expects_reply, reply.text[:120])
+        if emit:
+            event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.lesson", "text": text[:80]})
+        event_bus.emit_event(EventType.LATENCY_INTENT, {
+            "ms": round((time.perf_counter() - t0) * 1000, 1), "intent": "learning.lesson"})
+        return AgentResult(reply.text, "learning.lesson", ok=reply.ok, expects_reply=reply.expects_reply)
+
+    def _finish(self, text: str, name: str, reply, t0: float, steps=None) -> AgentResult:
         from modules.learning.corrections import corrections
+        from modules.learning.feedback import feedback
         corrections.note(text, name, reply.ok)
+        if not getattr(self._literal, "on", False):
+            feedback.note_result(text, name, reply.ok, reply.text, steps=steps, expects_reply=reply.expects_reply)
+            if reply.ok:
+                from modules.learning.habits import habits
+                habits.maybe_scan()                    # notice routines (rate-limited, background)
+            taught, at = feedback.just_taught
+            if taught and time.time() - at < 2:
+                feedback.just_taught = ("", 0.0)
+                reply = type(reply)(f"{reply.text.rstrip()} Got it — next time you say “{taught.strip(' .!?')}”, "
+                                    f"that's what I'll do.", ok=True)
         self._last_failed = "" if reply.ok else text
         event_bus.emit_event(EventType.LATENCY_INTENT, {
             "ms": round((time.perf_counter() - t0) * 1000, 1), "intent": name})
@@ -211,12 +342,17 @@ class Agent:
         from modules.agent.router import Reply
         from modules.learning import demonstration, planner
         from modules.learning.corrections import corrections
+        from modules.learning.feedback import feedback
+        if getattr(self._literal, "on", False):
+            log.info("agent.literal_step_failed text=%r failure=%r", text[:80], failure[:80])
+            return self._finish(text, first or "learning.unknown",
+                                Reply(failure or f"I didn't understand the step “{text.strip()}”.", ok=False), t0)
         log.info("agent.try_harder text=%r failure=%r", text[:80], failure[:80])
         event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.plan", "text": text[:80],
                                                       "failure": failure[:120]})
         with self._lock:
             try:
-                out = planner.attempt(text, failure)
+                out = planner.attempt(text, failure, domain=first.split(".")[0] if first else "")
             except Exception:
                 log.exception("agent.planner_failed")
                 out = None
@@ -224,7 +360,7 @@ class Agent:
             r = out.reply
             if out.learned:
                 r = Reply(r.text.rstrip() + " I'll remember how to do that.", ok=True)
-            return self._finish(text, "learning.planned", r, t0)
+            return self._finish(text, "learning.planned", r, t0, steps=out.steps)
         if out is None and not failure and self._llm_can_act(text):
             # No plan from known commands: let the model try its tools directly;
             # if that does nothing either, the AI module offers to watch and learn.
@@ -236,12 +372,16 @@ class Agent:
         # starts watching, so SAINT never records whatever happens next by itself.
         lead = failure or (out.reply.text if out is not None else "")
         lead = (lead.rstrip(". ") + ". ") if lead else ""
+        # Either way the user can just *say* what it should do next: the next
+        # command that works is learned for this wording (feedback.expect_teaching).
         if config.get("learning.watch_after_failure", True) and demonstration.offer(text):
-            msg = lead + "I don't know how to do that yet. Want to show me? Say yes, do it, then say “done”."
-            return self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False, expects_reply=True),
-                                t0)
-        msg = lead + "I don't know how to do that yet."
-        return self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False), t0)
+            msg = lead + ("I don't know how to do that yet. Tell me what it should do, or say yes and show me, "
+                          "then say “done”.")
+        else:
+            msg = lead + "I don't know how to do that yet. Tell me what it should do and I'll remember it."
+        res = self._finish(text, first or "learning.unknown", Reply(msg.strip(), ok=False, expects_reply=True), t0)
+        feedback.expect_teaching(text, first or "learning.unknown")
+        return res
 
     @staticmethod
     def _llm_can_act(text: str) -> bool:
@@ -272,7 +412,7 @@ class Agent:
     # Intents never started from speech SAINT wasn't addressed with: song lyrics
     # like "my name is ..." or "type ..." must not be saved or typed.
     _UNADDRESSED_BLOCKED = ("memory.remember", "memory.forget", "memory.forget_all", "desktop.type_text",
-                            "automation.schedule_command")
+                            "desktop.compose_type", "automation.schedule_command")
 
     def accepts_followup(self, text: str) -> bool:
         """Would ``text`` do something if it were a command? Used by the voice
@@ -282,9 +422,15 @@ class Agent:
         if not text:
             return False
         try:
+            from modules import lang as _lang
+            text = _lang.analyze(text, update_state=False).routed_text
+        except Exception:
+            log.debug("agent.accepts_followup lang failed", exc_info=True)
+        try:
             from modules.agent.dictate import dictation
             from modules.agent.confirm import choices
-            if dictation.active or confirmations.can_answer(text) or choices.pending is not None:
+            from modules.learning.lesson import lessons
+            if dictation.active or confirmations.can_answer(text) or choices.pending is not None or lessons.active:
                 return True
             from modules.agent.meta import match_meta
             if match_meta(text) is not None:
@@ -308,8 +454,15 @@ class Agent:
         return intent is not None and intent.name not in self._UNADDRESSED_BLOCKED
 
     def run_command(self, text: str) -> str:
-        """Used by scheduled automations: run a command, return the result text."""
-        res = self.handle(text)
+        """Used by scenes and scheduled automations: run a command exactly as
+        written and return the result text. Nothing is improvised or learned."""
+        self._literal.on = True
+        from core.focus_guard import focus_guard
+        focus_guard.begin(text, explicit=True)     # the user asked for the scene / automation by name
+        try:
+            res = self.handle(text)
+        finally:
+            self._literal.on = False
         if res is None:
             return f"I didn't recognise the scheduled command '{text}'."
         return res.text

@@ -1,7 +1,22 @@
 """
 core/game_mode.py
 
-Game Mode: SAINT gets out of the way of games.
+Game detection and Gaming Mode: SAINT gets out of the way of games.
+
+Two separate things (2026-10-01 — "a user may play a single-player game while
+keeping Gaming Mode off"):
+
+* **A game is running** (detected). Only the anti-cheat safety rules apply:
+  no see-through top-most overlay (Halo, edge tab, action pill) and no
+  synthetic clicks/typing into the game window.
+* **Gaming Mode** is on — by hand ("gaming mode on", the switch in Settings or
+  the tray) or, with *Auto Gaming Mode* on, whenever a game starts. While it is
+  on, each SAINT feature follows its own Gaming Mode setting
+  (``game_mode.features``: wake word, voice, mini player, Spotify,
+  notifications, vision, screen automation, overlay, AI chat, performance,
+  moving SAINT's windows off the game's monitor).
+
+The original notes:
 
 The Halo (and SAINT's other always-on-top, click-through windows) sat on top
 of games. A transparent top-most layered window over a game is exactly what
@@ -63,6 +78,20 @@ DEFAULT_IGNORE = {
 # processes have all sorts of names — e.g. Wallpaper Engine's winrtutil64.exe).
 DEFAULT_IGNORE_FOLDERS = {"wallpaper_engine", "steamvr", "steamworks shared", "soundpad", "lossless scaling",
                           "obs studio", "fpsvr", "ovr advanced settings", "voicemod", "aseprite", "blender"}
+
+# What each SAINT feature does while Gaming Mode is on (game_mode.features overrides).
+# notifications: "all" | "minimal" (errors and reminders only) | "off".
+FEATURE_DEFAULTS = {
+    "wake_word": True, "voice": True, "mini_player": True, "spotify": True, "notifications": "minimal",
+    "vision": False, "screen_automation": False, "overlay": False, "ai_chat": True, "performance": True,
+    "reposition_ui": True,
+}
+FEATURE_LABELS = {
+    "wake_word": "Wake word", "voice": "Spoken replies", "mini_player": "Mini player", "spotify": "Spotify",
+    "notifications": "Notifications", "vision": "Vision (screen capture)", "screen_automation": "Screen automation",
+    "overlay": "Halo and overlays", "ai_chat": "AI chat", "performance": "Performance mode",
+    "reposition_ui": "Move SAINT off the game's monitor",
+}
 
 # SHQueryUserNotificationState results that mean "something fullscreen is in front".
 _QUNS_BUSY, _QUNS_D3D_FULLSCREEN, _QUNS_PRESENTATION = 2, 3, 4
@@ -130,8 +159,32 @@ def _foreground_pid() -> int:
         return 0
 
 
+def _windows_of(pids) -> List[Tuple[int, Tuple[int, int, int, int]]]:
+    """Visible top-level windows of these processes: [(hwnd, (l, t, r, b))]."""
+    out = []
+    try:
+        import win32gui
+        import win32process
+
+        def each(hwnd, _):
+            try:
+                if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
+                    return True
+                if win32process.GetWindowThreadProcessId(hwnd)[1] in pids:
+                    l, t, r, b = win32gui.GetWindowRect(hwnd)
+                    if r - l > 200 and b - t > 150:
+                        out.append((hwnd, (l, t, r, b)))
+            except Exception:
+                pass
+            return True
+        win32gui.EnumWindows(each, None)
+    except Exception:
+        log.debug("game_mode.windows_failed", exc_info=True)
+    return out
+
+
 class GameMode:
-    """Tracks running games; ``active`` drives what SAINT suspends."""
+    """Tracks running games (``running``) and Gaming Mode (``active``)."""
 
     def __init__(self, interval: float = 2.0):
         self._interval = interval
@@ -147,36 +200,81 @@ class GameMode:
         self._manual: Optional[bool] = None               # "game mode on/off" by voice
         self._fullscreen = False
         self._last = (False, "", False)
-        self.active = False
-        self.game = ""
+        self.active = False                               # Gaming Mode
+        self.running = False                              # a game is running (or about to)
+        self.game = ""                                    # the running game's name
 
     # ------------------------------------------------------------------ #
     # Queries used by the rest of SAINT (thread-safe, no side effects)
     # ------------------------------------------------------------------ #
+    def feature(self, name: str):
+        """What a SAINT feature should do now: its Gaming Mode setting while
+        Gaming Mode is on, otherwise fully on (True / "all")."""
+        if not self.active:
+            return "all" if name == "notifications" else True
+        value = self.features().get(name, True)
+        if name == "notifications":
+            return value if value in ("all", "minimal", "off") else ("all" if value else "off")
+        return bool(value)
+
+    def features(self) -> Dict[str, object]:
+        feats = dict(FEATURE_DEFAULTS)
+        saved = config.get("game_mode.features", {}) or {}
+        feats.update({k: v for k, v in saved.items() if k in FEATURE_DEFAULTS})
+        return feats
+
+    @property
+    def busy(self) -> bool:
+        """A game is running or Gaming Mode is on: no background screen work."""
+        return self.running or self.active
+
     @property
     def overlays_blocked(self) -> bool:
-        """Hide the Halo / edge tab / action pill / mini player."""
-        return self.active or self._fullscreen
+        """Hide the Halo / edge tab / action pill: they'd sit on top of a game
+        (anti-cheat), a fullscreen app, or Gaming Mode turned them off."""
+        if self._fullscreen:
+            return True
+        if self.running and config.get("game_mode.protect_overlays", True):
+            return True
+        return self.active and not self.feature("overlay")
+
+    @property
+    def mini_player_allowed(self) -> bool:
+        """The mini player may show: nothing is in the way, or Gaming Mode keeps it on."""
+        if self.active:
+            return bool(self.feature("mini_player"))
+        return not self.overlays_blocked
 
     def is_game_pid(self, pid: int) -> bool:
         with self._lock:
             return pid in self._games
 
     def game_in_front(self) -> bool:
-        """The foreground window belongs to a running game."""
-        return self.active and self.is_game_pid(_foreground_pid())
+        """The foreground window belongs to a running game (Gaming Mode or not)."""
+        return self.running and self.is_game_pid(_foreground_pid())
+
+    def game_rect(self) -> Optional[Tuple[int, int, int, int]]:
+        """Screen rectangle (l, t, r, b) of the running game's main window, if it has one."""
+        with self._lock:
+            pids = set(self._games)
+        wins = _windows_of(pids) if pids else []
+        if not wins:
+            return None
+        return max(wins, key=lambda w: (w[1][2] - w[1][0]) * (w[1][3] - w[1][1]))[1]
 
     def refuse_capture(self) -> Optional[str]:
         """A spoken reason when screen capture must not run, else None."""
-        if self.active and config.get("game_mode.block_capture", True):
-            return f"Game Mode is on while {self.game or 'your game'} runs, so I'm not capturing the screen."
+        if self.active and not self.feature("vision") and config.get("game_mode.block_capture", True):
+            return "Vision is off in Gaming Mode, so I'm not capturing the screen. Say “gaming mode off” to use it."
         return None
 
     def refuse_input(self) -> Optional[str]:
-        """A spoken reason when synthetic clicks/typing must not go to the game."""
+        """A spoken reason when synthetic clicks/typing must not run, else None."""
         if config.get("game_mode.block_input", True) and self.game_in_front():
             return (f"{self.game or 'Your game'} is in front, and I don't click or type into games — "
                     "anti-cheat can treat that as a bot.")
+        if self.active and not self.feature("screen_automation"):
+            return "Screen automation is off in Gaming Mode. Say “gaming mode off”, or turn it on in Settings."
         return None
 
     # ------------------------------------------------------------------ #
@@ -197,7 +295,7 @@ class GameMode:
     def expect_launch(self, name: str, seconds: float = 90.0):
         """SAINT is starting a game: get out of the way *before* its anti-cheat
         starts, instead of up to one scan later."""
-        if not config.get("game_mode.enabled", True):
+        if not config.get("game_mode.detect", True):
             return
         self._armed_until = time.monotonic() + seconds
         self._armed_name = name or ""
@@ -241,8 +339,8 @@ class GameMode:
         return name, game
 
     def _scan(self, psutil):
-        if not config.get("game_mode.enabled", True):
-            # Switched off in Settings: nothing is suspended (a manual "game mode on" still works).
+        if not config.get("game_mode.detect", True):
+            # Detection switched off: nothing is suspended (a manual "gaming mode on" still works).
             with self._lock:
                 self._games = {}
             self._fullscreen = False
@@ -276,21 +374,22 @@ class GameMode:
             running = bool(self._games)
         if running:
             self._armed_until = 0.0            # the real process took over
-        auto = running or time.monotonic() < self._armed_until
+        running = running or time.monotonic() < self._armed_until
+        auto = running and bool(config.get("game_mode.enabled", True))       # Auto Gaming Mode
         if self._manual is False and not auto:
             self._manual = None                # the game switched off by hand has exited: automatic again
         active = auto if self._manual is None else self._manual
-        game = (self._display_name() or "your game") if active else ""
-        blocked = active or self._fullscreen
+        game = (self._display_name() or "your game") if running else ""
         was_active = self.active
-        self.active, self.game = active, game
-        if (active, game, blocked) == self._last:
+        self.active, self.running, self.game = active, running, game
+        blocked = self.overlays_blocked
+        if (active, running, game, blocked) == self._last:
             return
-        self._last = (active, game, blocked)
+        self._last = (active, running, game, blocked)
         if active != was_active:
             log.info("game_mode.%s game=%r manual=%s", "on" if active else "off", game, self._manual)
-        event_bus.emit_event(EventType.GAME_MODE, {"active": active, "game": game, "overlays_blocked": blocked,
-                                                   "changed": active != was_active,
+        event_bus.emit_event(EventType.GAME_MODE, {"active": active, "running": running, "game": game,
+                                                   "overlays_blocked": blocked, "changed": active != was_active,
                                                    "manual": self._manual is not None})
 
 

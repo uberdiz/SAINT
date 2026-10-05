@@ -21,7 +21,6 @@ near-instantaneous TTFB on a modern GPU and enables word-by-word UI updates.
 """
 
 import os
-import torch
 import threading
 import time
 from typing import Optional, Callable, Tuple, List, Union
@@ -29,6 +28,15 @@ from typing import Optional, Callable, Tuple, List, Union
 import numpy as np
 
 from core.audio_echo import playback_monitor
+
+try:                        # PyTorch Kokoro / Qwen; the packaged app speaks through ONNX instead
+    import torch
+except ImportError:         # pragma: no cover - packaged build
+    torch = None
+
+
+def _torch_available() -> bool:
+    return torch is not None
 
 
 # ---------------------------------------------------------------------------
@@ -163,11 +171,18 @@ class KokoroTTS(TTSEngine):
         self._load_error: Optional[Exception] = None
         self._load_attempted = False
         self._active_turn_id: int = -1
+        self._closed = False
 
         import queue
         self._audio_queue = queue.Queue()
         self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
         self._playback_thread.start()
+
+    def close(self):
+        """Stop the playback thread and release the audio stream (an engine that
+        failed to load, or one being replaced)."""
+        self._closed = True
+        self._interrupt_event.set()
 
     def _playback_loop(self):
         import sounddevice as sd
@@ -179,7 +194,7 @@ class KokoroTTS(TTSEngine):
         stream.start()
 
         try:
-            while True:
+            while not self._closed:
                 if self._interrupt_event.is_set():
                     while not self._audio_queue.empty():
                         try:
@@ -219,6 +234,8 @@ class KokoroTTS(TTSEngine):
                 gain = output_policy.gain()
                 if gain != 1.0:
                     samples = samples * gain
+                    if gain > 1.0:
+                        samples = np.clip(samples, -1.0, 1.0)
                 # Write blocks in smaller chunks to allow quick cancellation
                 chunk_size = sample_rate // 10  # 100ms chunks
                 for i in range(0, len(samples), chunk_size):
@@ -418,6 +435,47 @@ class KokoroTTS(TTSEngine):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------ #
+    # Languages: one pipeline (and voice) per language, sharing the loaded model.
+    # A sentence in Spanish is spoken by a Spanish voice; one that mixes Spanish
+    # and English switches voice where the language does (modules/lang).
+    # ------------------------------------------------------------------ #
+    def _voice_for(self, code: str):
+        """(pipeline, voice) for a language code; English (the configured voice)
+        for "en", unknown languages and languages Kokoro has no voice for."""
+        if code in ("", "en", "und"):
+            return self._pipeline, self._voice
+        cache = self.__dict__.setdefault("_lang_pipelines", {})
+        if code not in cache:
+            cache[code] = None
+            try:
+                from modules.lang.pack import get_pack
+                pack = get_pack(code)
+                if pack is not None and pack.tts_lang and pack.tts_voice:
+                    from kokoro import KPipeline
+                    pipe = KPipeline(lang_code=pack.tts_lang, model=self._pipeline.model,
+                                     device=getattr(self, "_resolved_device", None))
+                    cache[code] = (pipe, pack.tts_voice)
+                else:
+                    import logging
+                    logging.info("tts.no_voice_for_language %s: speaking it with the English voice", code)
+            except Exception as e:
+                import logging
+                logging.warning("tts.language_voice_failed %s: %s", code, e)
+        return cache[code] or (self._pipeline, self._voice)
+
+    def _chain(self, text: str):
+        """Synthesis results for ``text``, language by language."""
+        try:
+            from modules.lang import state
+            from modules.lang.segments import segments
+            plan = segments(text, hint=state.reply_language)
+        except Exception:
+            plan = [("en", text)]
+        for code, part in plan or [("en", text)]:
+            pipeline, voice = self._voice_for(code)
+            yield from pipeline(part, voice=voice, speed=self._speed)
+
     def speak(self, text: str, turn_id: int = 0, on_chunk_start: Optional[Callable[[str], None]] = None):
         """Synthesise full text via the Kokoro pipeline and stream audio chunks.
 
@@ -426,8 +484,6 @@ class KokoroTTS(TTSEngine):
         sentence-level audio tensor that we play while the next chunk is being
         generated — giving ~30-40x realtime throughput on a modern GPU.
         """
-        import sounddevice as sd
-        import torch
         import time
         import logging
 
@@ -453,11 +509,7 @@ class KokoroTTS(TTSEngine):
             # Single pipeline call for the full text — the generator yields
             # sentence-level Result objects with pre-synthesised audio.
             t_infer_start = time.perf_counter()
-            generator = self._pipeline(
-                text,
-                voice=self._voice,
-                speed=self._speed,
-            )
+            generator = self._chain(text)
 
             for i, result in enumerate(generator):
                 if self._interrupt_event.is_set():
@@ -466,7 +518,9 @@ class KokoroTTS(TTSEngine):
                 if result.audio is None:
                     continue
 
-                samples = result.audio.cpu().numpy()
+                audio = result.audio
+                # A torch tensor (PyTorch Kokoro) or already numpy (ONNX Kokoro).
+                samples = audio.cpu().numpy() if hasattr(audio, "cpu") else np.asarray(audio, dtype=np.float32)
                 if len(samples) == 0:
                     continue
 
@@ -867,7 +921,7 @@ class QwenTTS(TTSEngine):
                 gain = output_policy.gain()
                 if gain != 1.0:
                     samples = samples * gain
-                    samples_int16 = (samples_int16.astype(np.float32) * gain).astype(np.int16)
+                    samples_int16 = np.clip(samples_int16.astype(np.float32) * gain, -32768, 32767).astype(np.int16)
                 playback_monitor.note_block(float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0,
                                             duration)
                 sd.play(samples_int16, sample_rate)
@@ -1063,7 +1117,19 @@ class MockTTS(TTSEngine):
 
 def make_tts(backend: str = "kokoro", **kwargs) -> TTSEngine:
     """Factory."""
-    if backend == "kokoro":
+    if backend in ("kokoro", "kokoro_onnx"):
+        # The same voice through onnxruntime when asked for, or when PyTorch isn't
+        # there (the packaged SAINT.exe ships without it — modules/voice/kokoro_onnx.py).
+        try:
+            if backend == "kokoro_onnx" or not _torch_available():
+                from modules.voice import kokoro_onnx
+            if (backend == "kokoro_onnx" or not _torch_available()) and kokoro_onnx.available():
+                import logging
+                logging.info("TTS initialized: model=kokoro (onnxruntime), voice=%s", kwargs.get("voice", "af_heart"))
+                return kokoro_onnx.KokoroOnnxTTS(**kwargs)
+        except Exception as e:
+            import logging
+            logging.warning(f"Kokoro ONNX unavailable ({e}); trying PyTorch Kokoro.")
         try:
             tts = KokoroTTS(**kwargs)
             import logging

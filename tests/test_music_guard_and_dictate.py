@@ -88,7 +88,7 @@ def test_dictate_cancel_throws_it_out():
 
 def test_dictate_start_recognises_multiple_kinds():
     for start in ("write me a message about the meeting",
-                  "draft an email about the launch",
+                  "draft a post about the launch",        # an email is a task to do (modules/learning/lesson.py)
                   "take a note about the bug",
                   "let me dictate a prompt about game ideas",
                   "take this down: my thoughts on tea"):

@@ -75,7 +75,7 @@ def transport(action: str, on_error=None):
     """play_pause / next / previous on whatever the mini player is showing:
     Spotify through its API, anything else through Windows' media controls."""
     np = ui_bus.now_playing()
-    if np.get("source") == "spotify":
+    if str(np.get("source", "")).startswith("spotify"):
         if action == "play_pause":
             play_pause(on_error)
         else:
@@ -133,6 +133,11 @@ def toggle_listening(done=None):
 # ---------------------------------------------------------------------- #
 def run_scene(scene, on_done=None):
     from modules.automation.scenes import scenes
+    if scenes.plan(scene).interactive and submit(f"run {scene.name}"):
+        # It asks questions ("which account?"): run it in the conversation, where they're answered.
+        if on_done:
+            on_done(["Started — answer SAINT's questions to continue."])
+        return
     scenes.run_in_background(scene, on_done=on_done)
 
 

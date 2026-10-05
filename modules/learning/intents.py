@@ -49,6 +49,19 @@ _MAKE_SKILL = re.compile(r"^(?:make|create|add|set up)\s+(?:an?\s+|a new\s+)?(?:
                          r"(?:does|runs|will)?\s*(?P<steps>.+)$")
 
 
+# "When I say gaming time, open Steam and Discord" — a routine taught in one sentence.
+_WHEN_I_SAY = re.compile(r"^(?:from now on[,\s]+)?(?:when(?:ever)?|if)\s+i\s+say\s+[\"“']?(?P<name>.+?)[\"”']?"
+                         r"(?:,\s*|\s+)(?:you\s+should\s+|i\s+want\s+you\s+to\s+|please\s+|just\s+)?(?:also\s+)?"
+                         r"(?P<steps>(?:open|close|play|pause|resume|skip|switch|launch|start|mute|unmute|turn|set|show|"
+                         r"minimi[sz]e|maximi[sz]e|move|put|press|click|go|take|search|lock|focus|restore|save)\b.+)$")
+# Answering a habit SAINT noticed (modules/learning/habits.py).
+_ROUTINE_YES = re.compile(r"^(?:yes|yeah|yep|sure|ok(?:ay)?)?[,\s]*(?:please\s+)?(?:make\s+(?:that|it|this)\s+"
+                          r"(?:a|into\s+a|my)\s+routine|do\s+(?:that|both|it)\s+automatically|"
+                          r"(?:do|add)\s+that\s+(?:every\s+time|from now on))(?:\s+please)?$")
+_ROUTINE_NO = re.compile(r"^(?:no|nah|nope)?[,\s]*(?:don'?t\s+make\s+(?:that|it)\s+a\s+routine|no\s+routine|"
+                         r"don'?t\s+do\s+that\s+automatically)$")
+
+
 def _t(text: str) -> str:
     return norm(text).strip(" ?!.")
 
@@ -76,9 +89,14 @@ def parse(text: str, last_failed: str = "") -> Optional[Tuple[str, str]]:
     m = _SAVE_AS.match(t)
     if m and m.group("name").strip() and m.group("name").strip() not in ("automation", "shortcut", "command"):
         return "save_as", m.group("name").strip()
-    m = _MAKE_SKILL.match(t)
+    m = _MAKE_SKILL.match(t) or _WHEN_I_SAY.match(t)
     if m:
         return "make", m.group("name").strip() + "\n" + m.group("steps").strip()
+    if _ROUTINE_YES.match(t) or _ROUTINE_NO.match(t):
+        from modules.learning.habits import habits
+        s = habits.latest()
+        if s is not None and time.time() - s.get("created", 0) < 3600:
+            return ("routine_yes" if _ROUTINE_YES.match(t) else "routine_no"), s["id"]
     m = _FORGET_NAMED.match(t)
     if m:
         what = (m.group("what") or m.group("what2") or "").strip()
@@ -112,10 +130,16 @@ def run(kind: str, arg: str) -> str:
     if kind == "make":
         name, steps = arg.split("\n", 1)
         return _make(name, steps)
+    if kind in ("routine_yes", "routine_no"):
+        from modules.learning.habits import habits
+        return habits.accept(arg) if kind == "routine_yes" else habits.dismiss(arg)
     if kind == "watch":
         if not arg:
             return "Tell me what you're about to show me, like “let me show you how to open disk cleanup”."
         if not demonstration.watch_for(arg):
+            if not demonstration.can_watch():
+                return "I can't watch while a game is running — tell me what it should do instead, like " \
+                       "“when I say gaming time, open Steam and Discord”."
             return "I can't watch the screen on this computer."
         return f"Okay, I'm watching. Show me how to {arg}, then say “done”."
     return ""
@@ -178,4 +202,4 @@ def _make(name: str, steps_text: str) -> str:
         return f"I don't know how to “{bad[0]}” yet, so I didn't save it. You can show me: say “let me show you how to {bad[0]}”."
     if skills.learn(name, steps, "saved") is None:
         return f"I can't use “{name}” as a name — pick something more specific."
-    return f"Done — “{name}” will {', then '.join(steps)}. You can change it on the Automations page."
+    return f"Done — “{name}” will {', then '.join(steps)}. You can change it on the Learned page."
