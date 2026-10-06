@@ -82,7 +82,7 @@ def label_for(tool: str, args: dict = None) -> str:
         return f"Play {a.get('query') or a.get('name')}"
     if tool == "memory.remember":
         return "Remember that"
-    from ui.pages.home import tool_label
+    from ui.components.activity_item import tool_label
     return tool_label(tool)
 
 

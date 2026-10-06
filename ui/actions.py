@@ -43,6 +43,52 @@ def spotify(tool: str, on_error=None, **kwargs):
               lambda e: on_error and on_error(str(e)))
 
 
+# ---------------------------------------------------------------------- #
+# Agent tasks (modules/agent/autonomy)
+# ---------------------------------------------------------------------- #
+def current_task():
+    """The task to show: running / waiting / paused, else the last one (the card says how long ago)."""
+    try:
+        from modules.agent.autonomy.manager import agent_tasks
+        t = agent_tasks.current() or agent_tasks.last()
+        return t.summary() if t else None
+    except Exception:
+        return None
+
+
+def task_list(limit: int = 30):
+    try:
+        from modules.agent.autonomy.manager import agent_tasks
+        return [t for t in reversed(agent_tasks.all()[-limit:])]
+    except Exception:
+        return []
+
+
+def task_control(kind: str, on_done=None):
+    """pause / resume / stop / redo — the same as saying it."""
+    def go():
+        from modules.agent.autonomy.manager import agent_tasks
+        if kind == "pause":
+            return agent_tasks.pause()
+        if kind == "resume":
+            return agent_tasks.resume()
+        if kind == "stop":
+            return agent_tasks.stop_active("you pressed Stop")
+        if kind == "redo":
+            res = agent_tasks.redo()
+            return res and res.get("text")
+        return None
+    run_async(go, on_done, lambda e: on_done and on_done(str(e)))
+
+
+def answer(text: str, on_done=None):
+    """Answer the question SAINT is waiting on (a task's "go ahead?"), as if it were said."""
+    def go():
+        from modules.agent.confirm import confirmations
+        return confirmations.resolve(text)
+    run_async(go, on_done, lambda e: on_done and on_done(str(e)))
+
+
 def spotify_fast_poll(key: str, on: bool):
     """A Spotify volume control is on screen (``on``) or gone: poll Spotify every few seconds while
     one is visible so changes made in Spotify or on the phone show up (modules/spotify/module.py)."""

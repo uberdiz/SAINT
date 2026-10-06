@@ -8,24 +8,24 @@ global hotkey, the command palette, toasts and demo mode.
 
 import logging
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import (QAction, QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap,
                            QShortcut)
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
-                               QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QMainWindow, QMenu, QStackedWidget, QSystemTrayIcon,
+                               QVBoxLayout, QWidget)
 
 from core.config import config
 from core.events import event_bus, EventType
-from ui import actions, icons, motion
+from ui import actions, motion
+from ui.components.sidebar import PAGES, Sidebar, ordered_pages  # noqa: F401  (PAGES: the page registry)
 from ui.reactive import ui_bus
 from ui.theme import build_stylesheet, current_palette, qt_palette, state_color
-from ui.widgets import ElidedLabel, IconButton, Orb
+from ui.widgets import IconButton
 
 log = logging.getLogger("saint.ui")
 
-PAGES = [("Home", "home"), ("Music", "music"), ("Automations", "zap"), ("History", "history"),
-         ("Memory", "memory"), ("Activity", "activity"), ("Storage", "drive"), ("System", "cpu"),
-         ("Devices", "smartphone"), ("Settings", "settings")]
+# Old page names that still work (voice commands, demo, older settings).
+PAGE_ALIASES = {"Home": "Overview", "Dashboard": "Overview"}
 
 LOGO_PATH = "SAINT.png"       # the SAINT logo shipped in the repository root
 
@@ -76,112 +76,6 @@ def app_icon() -> QIcon:
     return icon
 
 
-class Sidebar(QFrame):
-    navigated = Signal(int)
-    search = Signal()
-
-    def __init__(self):
-        super().__init__()
-        self.setObjectName("Sidebar")
-        self.pill = QFrame(self)
-        self.pill.setObjectName("NavPill")
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 18, 12, 12)
-        lay.setSpacing(3)
-
-        brand = QHBoxLayout()
-        brand.setContentsMargins(6, 0, 0, 12)
-        brand.setSpacing(9)
-        self.logo = QLabel()
-        self.word = QLabel("SAINT")
-        self.word.setObjectName("Wordmark")
-        brand.addWidget(self.logo)
-        brand.addWidget(self.word, 1)
-        lay.addLayout(brand)
-
-        self.search_btn = QPushButton("  Search")
-        self.search_btn.setObjectName("SearchButton")
-        self.search_btn.setCursor(Qt.PointingHandCursor)
-        self.search_btn.clicked.connect(self.search)
-        sl = QHBoxLayout(self.search_btn)
-        sl.setContentsMargins(0, 0, 8, 0)
-        sl.addStretch()
-        self.search_hint = QLabel("Ctrl K")
-        self.search_hint.setObjectName("Kbd")
-        sl.addWidget(self.search_hint, 0, Qt.AlignVCenter)
-        lay.addWidget(self.search_btn)
-        lay.addSpacing(12)
-
-        self.group = QButtonGroup(self)
-        self.buttons = []
-        for i, (name, _icon) in enumerate(PAGES):
-            b = QPushButton(name)
-            b.setObjectName("NavButton")
-            b.setCheckable(True)
-            b.setCursor(Qt.PointingHandCursor)
-            b.setIconSize(QSize(17, 17))
-            b.setToolTip(f"{name}  (Ctrl+{i + 1})")
-            self.group.addButton(b, i)
-            self.buttons.append(b)
-            if name == "Settings":
-                lay.addStretch()
-            lay.addWidget(b)
-        self.group.idClicked.connect(self.navigated)
-
-        lay.addSpacing(10)
-        status = QHBoxLayout()
-        status.setContentsMargins(4, 0, 0, 0)
-        status.setSpacing(8)
-        self.orb = Orb(22)
-        self.status = ElidedLabel("Starting…")
-        self.status.setObjectName("Faint")
-        self.mic = IconButton("mic", "Microphone on / off", 16)
-        status.addWidget(self.orb)
-        status.addWidget(self.status, 1)
-        status.addWidget(self.mic)
-        lay.addLayout(status)
-        self._collapsed = False
-
-    def select(self, i: int, animate: bool = True):
-        b = self.buttons[i]
-        b.setChecked(True)
-        target = b.geometry()
-        if animate and self.pill.isVisible() and self.pill.geometry().width() > 0:
-            motion.animate(self.pill, b"geometry", self.pill.geometry(), target, motion.BASE)
-        else:
-            self.pill.setGeometry(target)
-        self.pill.show()
-        self.pill.lower()
-
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        checked = self.group.checkedButton()
-        if checked:
-            self.pill.setGeometry(checked.geometry())
-
-    def set_collapsed(self, collapsed: bool):
-        self._collapsed = collapsed
-        self.setFixedWidth(68 if collapsed else 232)
-        for b, (name, _i) in zip(self.buttons, PAGES):
-            b.setText("" if collapsed else name)
-        self.word.setVisible(not collapsed)
-        self.search_btn.setText("" if collapsed else "  Search")
-        self.search_hint.setVisible(not collapsed)
-        self.status.setVisible(not collapsed)
-        self.mic.setVisible(not collapsed)
-
-    def refresh(self):
-        p = current_palette()
-        self.logo.setPixmap(logo_pixmap(24))
-        self.search_btn.setIcon(icons.icon("search", p.faint, 15))
-        for b, (_n, name) in zip(self.buttons, PAGES):
-            b.setIcon(icons.icon(name, p.muted, 17, active_color=p.text))
-
-    def render_state(self, s):
-        self.orb.set_state(s.get("state", "offline"))
-        self.status.setText(s.get("label", ""))
-
-
 class MainWindow(QMainWindow):
     def __init__(self, app, runtime=None):
         super().__init__()
@@ -195,8 +89,7 @@ class MainWindow(QMainWindow):
         # A test profile is never mistaken for the real thing (core/profiles.py).
         self._profile = profile_name()
         self.setWindowTitle(f"SAINT — {self._profile} profile (test data)" if self._profile else "SAINT")
-        self.resize(1360, 860)
-        self.setMinimumSize(1040, 680)
+        self._fit_to_screen()
 
         from ui.action_notice import ActionNotice
         from ui.demo import Demo
@@ -205,7 +98,9 @@ class MainWindow(QMainWindow):
         from ui.pages.activity import ActivityPage
         from ui.pages.automations import AutomationsPage
         from ui.pages.history import HistoryPage
-        from ui.pages.home import HomePage
+        from ui.pages.overview import OverviewPage
+        from ui.pages.tasks import TasksPage
+        from ui.components.agent_status import AgentStatusBar
         from ui.pages.memory import MemoryPage
         from ui.pages.music import MusicPage
         from ui.pages.system import SystemPage
@@ -220,8 +115,8 @@ class MainWindow(QMainWindow):
         lay = QHBoxLayout(central)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
-        self.sidebar = Sidebar()
-        self.sidebar.navigated.connect(lambda i: self.navigate(PAGES[i][0]))
+        self.sidebar = Sidebar(logo_pixmap)
+        self.sidebar.navigated.connect(lambda key: self.navigate(key))
         self.sidebar.search.connect(lambda: self.palette.open())
         self.sidebar.mic.clicked.connect(lambda: actions.toggle_listening(lambda _ok: self._sync_mic()))
         lay.addWidget(self.sidebar)
@@ -229,17 +124,23 @@ class MainWindow(QMainWindow):
         content.setObjectName("Content")
         cl = QVBoxLayout(content)
         cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
         self.stack = QStackedWidget()
-        cl.addWidget(self.stack)
+        cl.addWidget(self.stack, 1)
+        self.status_bar = AgentStatusBar(self)
+        cl.addWidget(self.status_bar)
         lay.addWidget(content, 1)
 
-        self.home = HomePage(self)
         self.music = MusicPage(self)
         self.settings_ui = SettingsUI(on_appearance_changed=self.apply_appearance)
         from ui.pages.devices import DevicesPage
         from ui.pages.storage import StoragePage
-        self.pages = [self.home, self.music, AutomationsPage(), HistoryPage(), MemoryPage(), ActivityPage(),
-                      StoragePage(), SystemPage(), DevicesPage(), self.settings_ui]
+        self.overview = OverviewPage(self)
+        self.page_map = {"Overview": self.overview, "Activity": ActivityPage(), "Tasks": TasksPage(self),
+                         "Music": self.music, "Devices": DevicesPage(), "Memory": MemoryPage(),
+                         "Automations": AutomationsPage(), "History": HistoryPage(), "Storage": StoragePage(),
+                         "System": SystemPage(self), "Settings": self.settings_ui}
+        self.pages = list(self.page_map.values())
         for page in self.pages:
             self.stack.addWidget(page)
 
@@ -262,12 +163,12 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self, activated=self.palette.open)
         QShortcut(QKeySequence("Ctrl+,"), self, activated=lambda: self.navigate("Settings"))
         QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._escape)
-        for i, (name, _icon) in enumerate(PAGES[:9]):              # Ctrl+1 ... Ctrl+9
-            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda n=name: self.navigate(n))
+        for i in range(9):                                         # Ctrl+1 ... Ctrl+9: the sidebar's order
+            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: self._nth_page(i))
 
         self._build_tray()
         self.apply_appearance()
-        self.navigate("Home", animate=False)
+        self.navigate("Overview", animate=False)
         ui_bus.event.connect(self._on_event)
         from core.ui_link import ui_link
         ui_link.attached = True            # voice can now drive the window ("open the dashboard")
@@ -278,14 +179,67 @@ class MainWindow(QMainWindow):
     # Navigation
     # ------------------------------------------------------------------ #
     def navigate(self, name: str, animate: bool = True):
-        idx = next((i for i, (n, _) in enumerate(PAGES) if n == name), 0)
-        if self.stack.currentIndex() == idx and self.sidebar.group.checkedId() == idx:
+        name = PAGE_ALIASES.get(name, name)
+        page = self.page_map.get(name) or self.overview
+        if self.stack.currentWidget() is page and self.sidebar.current() == name:
             return
-        self.stack.setCurrentIndex(idx)
-        self.sidebar.select(idx, animate)
+        self.stack.setCurrentWidget(page)
+        self.sidebar.select(name, animate)
         if animate:
-            motion.fade_in(self.stack.currentWidget(), motion.BASE)
+            motion.fade_in(page, motion.BASE)
         event_bus.emit_event(EventType.UI_UPDATED, {"page": name})
+
+    def _nth_page(self, i: int):
+        keys = self.sidebar.keys()
+        if 0 <= i < len(keys):
+            self.navigate(keys[i])
+
+    def open_settings(self, section: str = ""):
+        """Settings, open at ``section`` ("Appearance", "Voice", ...)."""
+        if not self.isVisible() or self.isMinimized():
+            self.show_normal()
+        if section in self.page_map:                 # "Devices" is a page, not a Settings category
+            self.navigate(section)
+            return
+        self.navigate("Settings")
+        if section:
+            self.settings_ui.show_section(section)
+
+    def _fit_to_screen(self):
+        """A size that fits the screen it opens on (the old 1040 x 680 minimum didn't fit a 125 %
+        laptop), on the monitor chosen in Settings › Appearance › Layout if there is one."""
+        screens = QGuiApplication.screens()
+        want = int(config.get("layout.start_monitor", 0) or 0)
+        screen = screens[want - 1] if 1 <= want <= len(screens) else QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        self.setMinimumSize(760, 520)
+        if avail is None:
+            self.resize(1360, 860)
+            return
+        w = min(1360, int(avail.width() * 0.9))
+        h = min(880, int(avail.height() * 0.9))
+        self.resize(max(760, w), max(520, h))
+        if want:
+            self.move(avail.x() + (avail.width() - self.width()) // 2, avail.y() + (avail.height() - self.height()) // 2)
+
+    def _update_badges(self):
+        try:
+            t = actions.current_task()
+            busy = t and t.get("status") in ("understanding", "observing", "planning", "executing", "verifying",
+                                             "recovering", "waiting_for_user")
+            self.sidebar.set_badge("Tasks", "!" if t and t.get("status") == "waiting_for_user" else "1" if busy else "")
+        except Exception:
+            pass
+        try:
+            if config.get("link.enabled", False):
+                from modules.link.service import get_link
+                link = get_link()
+                n = len(link.node.connected_ids()) if link.running else 0
+                self.sidebar.set_badge("Devices", str(n) if n else "")
+            else:
+                self.sidebar.set_badge("Devices", "")
+        except Exception:
+            pass
 
     def _escape(self):
         if self.palette.isVisible():
@@ -294,15 +248,20 @@ class MainWindow(QMainWindow):
             self.demo.stop()
 
     def _ask(self, text):
-        self.navigate("Home")
+        self.navigate("Overview")
         if not actions.submit(text):
             self.toast("Still starting", "SAINT isn't ready for requests yet — try again in a moment.", "warn")
 
     def _commands(self):
         from ui.palette import Command
         from modules.automation.scenes import scenes
-        cmds = [Command(f"Go to {n}", f"Page · Ctrl+{i + 1}" if i < 9 else "Page", ic, lambda n=n: self.navigate(n))
-                for i, (n, ic) in enumerate(PAGES)]
+        cmds = [Command(f"Go to {label}", f"Page · Ctrl+{i + 1}" if i < 9 else "Page", ic,
+                        lambda k=key: self.navigate(k))
+                for i, (key, label, ic, _sec) in enumerate(ordered_pages())]
+        cmds += [Command("Continue the task", "Agent task", "play", lambda: actions.task_control("resume")),
+                 Command("Pause the task", "Agent task", "pause-task", lambda: actions.task_control("pause")),
+                 Command("Stop the task", "Agent task", "stop", lambda: actions.task_control("stop")),
+                 Command("Customize the layout", "Appearance", "layout", lambda: self.open_settings("Appearance"))]
         hk = config.get("overlay.hotkey", "")
         halo = config.get("overlay.halo", "minimized")
         dark = current_palette().dark
@@ -394,6 +353,11 @@ class MainWindow(QMainWindow):
             self.set_widget(bool(config.get("widgets.spotify", False)))
         elif key == "widgets.lyrics":
             self.widget.set_lyrics(bool(config.get("widgets.lyrics", False)))
+        elif key.startswith("layout."):
+            self.sidebar.rebuild()
+            self.overview.arrange(force=True)
+            self.status_bar.setVisible(bool(config.get("layout.status_bar", True)))
+            self.navigate(self.sidebar.current() or "Overview", animate=False)
 
     def start_demo(self):
         self.demo.start()
@@ -438,6 +402,7 @@ class MainWindow(QMainWindow):
                 self.show()
         self.sidebar.set_collapsed(not a.get("sidebar_labels", True))
         self.sidebar.refresh()
+        self.status_bar.setVisible(bool(config.get("layout.status_bar", True)))
         for w in QApplication.allWidgets():
             if isinstance(w, IconButton):
                 w.refresh()
@@ -474,6 +439,7 @@ class MainWindow(QMainWindow):
         on = actions.listening()
         self.sidebar.mic.set_icon("mic" if on else "mic-off")
         self.sidebar.mic.setToolTip("Stop listening" if on else "Start listening")
+        self.status_bar.sync_mic()
         if getattr(self, "_listen_action", None):
             self._listen_action.setText("Stop listening" if on else "Start listening")
 
@@ -633,6 +599,12 @@ class MainWindow(QMainWindow):
         t, p = ev.type, ev.payload or {}
         if t == EventType.UI_COMMAND:
             self._handle_ui_command(p)
+        elif t == EventType.AGENT_TASK:
+            self._update_badges()
+            if p.get("status") == "waiting_for_user":
+                self._notice("SAINT is waiting for you", p.get("reason", ""), "warn", "bell")
+            elif p.get("status") == "failed" and p.get("result"):
+                self._notice(f"{p.get('goal', 'A task')} didn't finish", p.get("result", ""), "error")
         elif t == EventType.ASSISTANT_STATE:
             self._render_state(p)
         elif t == EventType.GAME_MODE:
@@ -660,7 +632,7 @@ class MainWindow(QMainWindow):
         try:
             message = ""
             if cmd == "navigate":
-                page = args.get("page", "Home")
+                page = args.get("page", "Overview")
                 if not self.isVisible() or self.isMinimized():
                     self.show_normal()
                 self.navigate(page)

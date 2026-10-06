@@ -953,6 +953,29 @@ class SettingsUI(QWidget):
         self._row(f, "Sidebar", self._check("appearance.sidebar_labels", "Show labels"))
         lay.addWidget(box)
 
+        # ---- layout: what shows where (applies immediately) ------------------------------------
+        from ui.components.layout_editor import OrderedChecklist
+        from ui.components.sidebar import FIXED, PAGES
+        from ui.pages.overview import PANELS
+        box, f = self._section("Layout", "Tick what you want to see and drag to reorder. Changes apply right away.")
+        self.sidebar_editor = OrderedChecklist([(k, label) for k, label, _i, _s in PAGES if k != "Settings"],
+                                               "layout.sidebar_hidden", "layout.sidebar_order", fixed=("Overview",))
+        self.sidebar_editor.changed.connect(lambda: ui_bus.setting_changed.emit("layout.sidebar"))
+        self._row(f, "Sidebar pages", self.sidebar_editor)
+        self.panel_editor = OrderedChecklist([(k, t) for k, t, _c in PANELS], "layout.overview_hidden",
+                                             "layout.overview_order", fixed=("task",))
+        self.panel_editor.changed.connect(lambda: ui_bus.setting_changed.emit("layout.overview"))
+        self._row(f, "Overview panels", self.panel_editor,
+                  "On a wide window the task, conversation and activity panels sit on the left, the rest on "
+                  "the right; on a narrow one everything is one column in this order.")
+        self._row(f, "Status bar", self._check("layout.status_bar", "Show what SAINT is doing at the bottom",
+                                               live="Status bar {state}."))
+        from PySide6.QtGui import QGuiApplication
+        mons = ["Where it was last"] + [f"Monitor {i + 1}" for i in range(len(QGuiApplication.screens()))]
+        self._row(f, "Open on", self._combo("layout.start_monitor", mons, data=list(range(len(mons)))),
+                  "Takes effect the next time SAINT starts.")
+        lay.addWidget(box)
+
         box, f = self._section("Halo & overlay",
                                "The Halo is a soft light that travels around your screen edge while SAINT works in "
                                "the background. Rest the cursor at the top-centre edge, or press the hotkey, to open "
@@ -1236,6 +1259,15 @@ class SettingsUI(QWidget):
             self.status.setText("Settings saved and applied.")
             self.status.setStyleSheet(f"color:{pal.success};")
         QTimer.singleShot(1500, self._render_wake_status)
+
+    def show_section(self, name: str):
+        """Open a category ("Appearance", "Voice") — used by Customize / Settings buttons elsewhere."""
+        for i, cat in enumerate(self.CATEGORIES):
+            if cat.lower() == (name or "").lower():
+                self.search.clear()
+                self.nav.setCurrentRow(i)
+                return True
+        return False
 
     # ------------------------------------------------------------------ #
     def _filter(self, text):

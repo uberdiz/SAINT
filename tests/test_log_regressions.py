@@ -90,7 +90,7 @@ def test_ui_link_round_trip():
 
 def test_page_names():
     from modules.ui_control.tools import page_for
-    assert page_for("dashboard") == "Home"
+    assert page_for("dashboard") == "Overview" and page_for("home") == "Overview"
     assert page_for("stats") == "History"
     assert page_for("Settings") == "Settings"
 
@@ -175,7 +175,7 @@ def test_untagged_model_matches_latest(monkeypatch):
 def test_config_v7_migration():
     from core.config import _migrate
     data = _migrate({"config_version": 6, "ai": {"model": "llama3"}, "desktop": {"multi_window_policy": "ask"}})
-    assert data["config_version"] == 7 and data["ai"]["model"] == "llama3.1"
+    assert data["config_version"] >= 7 and data["ai"]["model"] == "llama3.1"
     assert data["desktop"]["multi_window_policy"] == "smart"
     kept = _migrate({"config_version": 6, "ai": {"model": "mistral"}, "desktop": {"multi_window_policy": "recent"}})
     assert kept["ai"]["model"] == "mistral" and kept["desktop"]["multi_window_policy"] == "recent"

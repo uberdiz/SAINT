@@ -444,6 +444,37 @@ class LinkService:
             out.append(d)
         return out
 
+    def device_states(self) -> List[dict]:
+        """For the device cards: each paired device, whether it's connected and how (Wi-Fi /
+        Tailscale / internet, from the address the session runs over), when it was last seen and
+        the last measured round trip. Cheap: nothing is sent."""
+        out = []
+        for d in self.devices():
+            s = self.node.session_for(d["id"]) if self.node.running else None
+            ip = ""
+            if s is not None:
+                try:
+                    ip = s.channel.sock.getpeername()[0]
+                except Exception:
+                    ip = ""
+            d.update(ip=ip, transport=transport_of(ip) if ip else "", rtt_ms=getattr(s, "rtt_ms", None) if s else None,
+                     since=getattr(s, "created", 0.0) if s else 0.0)
+            out.append(d)
+        return out
+
+    def measure_latency(self, peer_id: str) -> Optional[float]:
+        """Round trip to a connected device in ms (a status.get every version answers), kept on its session."""
+        s = self.node.session_for(peer_id) if self.node.running else None
+        if s is None:
+            return None
+        t0 = time.perf_counter()
+        try:
+            s.request("status.get", {}, timeout=5.0)
+        except Exception:
+            return None
+        s.rtt_ms = round((time.perf_counter() - t0) * 1000, 1)
+        return s.rtt_ms
+
     def status(self) -> dict:
         offer = self.pairing.current
         addrs = lan_addresses() if self.node.running else []
@@ -888,6 +919,28 @@ def ensure_internet_firewall_rule(port: int, force: bool = False):
         log.info("link.firewall_internet_rule_requested port=%d rc=%s", port, rc)
     except Exception:
         log.warning("link.firewall_internet_rule_failed", exc_info=True)
+
+
+def transport_of(ip: str) -> str:
+    """How a connected device reaches this PC, from its address: "Tailscale" (100.64.0.0/10),
+    "Wi-Fi" (a private / link-local address on this network) or "Internet"."""
+    ip = (ip or "").split("%")[0].strip("[]")
+    if not ip:
+        return ""
+    if ip.startswith("::ffff:"):
+        ip = ip[7:]
+    if is_tailscale(ip):
+        return "Tailscale"
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ""
+    if addr.is_loopback:
+        return "This PC"
+    if addr.is_private or addr.is_link_local:
+        return "Wi-Fi"
+    return "Internet"
 
 
 def tailscale_address(addrs: List[str]) -> str:

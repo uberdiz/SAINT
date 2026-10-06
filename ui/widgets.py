@@ -73,10 +73,16 @@ def with_alpha(color, alpha: int) -> QColor:
 def clear_layout(layout):
     while layout.count():
         item = layout.takeAt(0)
-        if item.widget():
-            item.widget().deleteLater()
+        w = item.widget()
+        if w is not None:
+            # Detach now: a widget only marked deleteLater() stays painted where it was until the
+            # event loop gets to it, and the rows drawn in its place overlapped it.
+            w.hide()
+            w.setParent(None)
+            w.deleteLater()
         elif item.layout():
             clear_layout(item.layout())
+            item.layout().deleteLater()
 
 
 # ---------------------------------------------------------------------- #

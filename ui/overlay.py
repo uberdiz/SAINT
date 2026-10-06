@@ -564,7 +564,7 @@ class Overlay(QWidget):
     def _on_event(self, ev):
         t, p = ev.type, ev.payload or {}
         if t == EventType.TOOL_STARTED:
-            from ui.pages.home import ToolRow
+            from ui.components.activity_item import ToolRow
             self.live_empty.hide()
             row = ToolRow(p.get("tool", ""))
             self._rows.insert(0, row)
@@ -596,7 +596,7 @@ class Overlay(QWidget):
 
     def _demo_changed(self, on):
         if not on:
-            from ui.pages.home import drop_demo_rows
+            from ui.components.activity_item import drop_demo_rows
             drop_demo_rows(self._rows, self.live_empty)
 
     def _show_queue(self, on: bool):

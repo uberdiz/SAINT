@@ -277,6 +277,37 @@ QPlainTextEdit#ConsoleOutput {{
     font-family: "Cascadia Mono", Consolas, "Courier New", monospace; font-size: {fs - 1}px;
 }}
 QTextBrowser#ChatView {{ background-color: transparent; border: none; }}
+/* ---------- v0.4 design system (ui/components) ---------- */
+QFrame#Panel {{ background-color: {p.surface}; border: 1px solid {p.border}; border-radius: 12px; }}
+QFrame#PanelActive {{ background-color: {_mix(p.surface, p.accent, 0.05)}; border: 1px solid {rgba(p.accent, 0.32)};
+    border-radius: 12px; }}
+QLabel#PanelTitle {{ font-size: {fs - 2}px; font-weight: 600; color: {p.faint}; }}
+QLabel#PanelHint {{ color: {p.faint}; font-size: {fs - 2}px; }}
+QLabel#Goal {{ font-size: {fs + 5}px; font-weight: 600; }}
+QLabel#Eyebrow {{ color: {p.accent}; font-size: {fs - 2}px; font-weight: 600; }}
+QLabel#StepPending {{ color: {p.muted}; }}
+QLabel#StepDone {{ color: {p.muted}; }}
+QLabel#StepActive {{ color: {p.text}; font-weight: 600; }}
+QLabel#StepFailed {{ color: {p.danger}; }}
+QLabel#Reason {{ color: {p.muted}; font-style: italic; }}
+QLabel#Metric {{ font-size: {fs + 8}px; font-weight: 600; }}
+QLabel#NavSection {{ color: {p.faint}; font-size: {fs - 3}px; font-weight: 600; padding: 8px 10px 2px 10px; }}
+QLabel#NavBadge {{ background: {p.accent_soft}; color: {p.accent}; border-radius: 8px; padding: 0px 6px;
+    font-size: {fs - 3}px; font-weight: 600; }}
+QFrame#AgentBar {{ background: {p.sidebar}; border: none; border-top: 1px solid {p.border}; }}
+QLineEdit#AskInput {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 9px;
+    padding: {pad}px 12px; }}
+QLineEdit#AskInput:focus {{ border-color: {p.accent}; }}
+QFrame#TrailRow {{ background: transparent; border: none; }}
+QLabel#TrailTime {{ color: {p.faint}; font-family: "Cascadia Mono", Consolas, monospace; font-size: {fs - 2}px; }}
+QLabel#TrailKind {{ font-family: "Cascadia Mono", Consolas, monospace; font-size: {fs - 3}px; font-weight: 600; }}
+QFrame#HealthRow {{ background: transparent; border: none; border-bottom: 1px solid {p.border}; }}
+QListWidget#TaskList {{ background: transparent; border: none; }}
+QListWidget#TaskList::item {{ padding: 8px 10px; border-radius: 8px; border: none; }}
+QListWidget#TaskList::item:selected {{ background: {p.surface2}; color: {p.text}; }}
+QListWidget#TaskList::item:hover {{ background: {hover}; }}
+QListWidget#LayoutList {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 10px; }}
+
 QMenu {{ background: {p.raised}; border: 1px solid {p.border_strong}; padding: 5px; border-radius: 10px; }}
 QMenu::item {{ padding: 6px 18px; border-radius: 6px; }}
 QMenu::item:selected {{ background: {p.surface2}; }}

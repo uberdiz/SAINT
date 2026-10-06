@@ -34,10 +34,12 @@ def _pump(app, secs):
 def test_every_page_opens(window):
     from ui.main_window import PAGES
     app, w = window
-    for name, _icon in PAGES:
-        w.navigate(name, animate=False)
+    for key, *_rest in PAGES:
+        w.navigate(key, animate=False)
         _pump(app, 0.05)
-        assert w.stack.currentIndex() == w.sidebar.group.checkedId()
+        assert w.stack.currentWidget() is w.page_map[key] and w.sidebar.current() == key
+    w.navigate("Home", animate=False)                       # the old name still works (voice, demo)
+    assert w.stack.currentWidget() is w.overview
 
 
 def test_palette_lists_pages_and_runs_a_command(window):

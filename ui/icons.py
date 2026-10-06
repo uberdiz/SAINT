@@ -87,6 +87,19 @@ PATHS = {
     "refresh": '<path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/>'
                '<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/>',
     "video": '<rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3"/>',
+    # v0.4
+    "overview": '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/>'
+                '<rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
+    "tasks": '<path d="m3 6 1.5 1.5L7.5 4.5"/><path d="M11 6h10"/><path d="m3 12 1.5 1.5 3-3"/><path d="M11 12h10"/>'
+             '<circle cx="5" cy="18" r="1.6"/><path d="M11 18h10"/>',
+    "stop": f'<rect {_F} x="6" y="6" width="12" height="12" rx="2"/>',
+    "pause-task": '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+    "link": '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
+            '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+    "check-circle": '<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>',
+    "circle": '<circle cx="12" cy="12" r="8"/>',
+    "dot": f'<circle {_F} cx="12" cy="12" r="5"/>',
+    "skip": '<path d="M5 12h11"/><path d="m12 7 5 5-5 5"/><path d="M19 6v12"/>',
 }
 
 

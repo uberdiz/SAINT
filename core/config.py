@@ -12,7 +12,7 @@ import threading
 
 from core.paths import data_path
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 
 DEFAULT_CONFIG = {
     "config_version": CONFIG_VERSION,
@@ -246,6 +246,28 @@ DEFAULT_CONFIG = {
     "agent": {
         "enabled": True,
         "confirm_timeout_sec": 30,        # pending confirmations expire after this
+        # v0.4 task loop (modules/agent/autonomy): jobs run as observed, verified, recoverable tasks.
+        "tasks": True,
+        "task_timeout_sec": 900,          # a task stops after this long, whatever it's doing
+        "model_planning": True,           # let the local model plan a complex request nothing else covers
+        "model_recovery": True,           # ...and suggest another way when a step fails
+        "max_model_recoveries": 2,
+    },
+
+    # ------------------------------------------------------------------
+    # v0.4 window layout (Settings › Appearance › Layout)
+    # ------------------------------------------------------------------
+    "layout": {
+        "sidebar_hidden": [],             # page keys not shown in the sidebar (Overview / Settings always are)
+        "sidebar_order": [],              # page keys in the user's order ([] = default)
+        "overview_hidden": [],            # Overview panels turned off
+        "overview_order": [],
+        "status_bar": True,               # the strip at the bottom: state, last exchange, ask box
+        "start_monitor": 0,               # 0 = wherever it was; 1..n = open on that monitor
+    },
+    "goals": {
+        "coding": {"extra_steps": []},    # commands added to "set up my coding workspace"
+        "meeting": {"app": ""},           # "" = the first of Teams / Zoom / Webex / Discord installed
     },
 
     # ------------------------------------------------------------------
@@ -339,6 +361,7 @@ DEFAULT_CONFIG = {
         "from_mistakes": True,            # unlearn on "that's wrong", learn rephrasings, keep a mistake journal
         "watch_max_sec": 120,
         "watch_idle_sec": 15,             # stop 15 s after the last thing the user did
+        "from_tasks": True,               # finished agent tasks become procedures (modules/learning/procedures.py)
     },
 
     # ------------------------------------------------------------------
@@ -360,6 +383,10 @@ DEFAULT_CONFIG = {
         "project_dir": "",                # "run the tests" runs here (blank = SAINT's own folder)
         "test_command": "python -m pytest -q",
         "editor": "code",                 # opens "the file causing the error"
+        "projects": {},                   # name -> folder, learned from "open my X project"
+        "search_roots": [],               # extra folders to look for projects in
+        "clone_root": "",                 # where "clone this repo" puts it (blank = ~/source/repos)
+        "test_timeout_sec": 900,
     },
 
     # ------------------------------------------------------------------
@@ -434,6 +461,7 @@ DEFAULT_CONFIG = {
         "redirect_uri": "http://127.0.0.1:8888/callback",
         "preferred_device": "",
         "poll_interval_sec": 15,          # background listening-history sync
+        "poll_interval_fast_sec": 3,      # while a volume slider is on screen (mini player, Music page)
         "track_history": True,            # remember what you listen to / skip
         "auto_device": True,              # wake an available device if none is active
         "volume_step": 10,                # "turn Spotify up"; "a little" halves it, "a lot" doubles it
@@ -589,6 +617,13 @@ def _migrate(data: dict) -> dict:
         if desktop.get("multi_window_policy", "ask") == "ask":
             desktop["multi_window_policy"] = "smart"
         data["config_version"] = 7
+    if version < 8:
+        # v0.4: new sections (layout, goals, agent tasks) come from the defaults; nothing to change in
+        # what the user set. The Home page is called Overview now.
+        layout = data.setdefault("layout", {})
+        order = layout.get("sidebar_order") or []
+        layout["sidebar_order"] = ["Overview" if k == "Home" else k for k in order]
+        data["config_version"] = 8
     return data
 
 

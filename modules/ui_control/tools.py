@@ -10,8 +10,10 @@ the GUI thread and reports back.
 
 from modules.automation.tools import P, PermissionLevel, Tool, ToolError
 
-PAGES = ("Home", "Music", "Automations", "History", "Memory", "Activity", "Storage", "System", "Devices", "Settings")
-_PAGE_ALIASES = {"dashboard": "Home", "home": "Home", "main": "Home", "music": "Music", "spotify": "Music",
+PAGES = ("Overview", "Activity", "Tasks", "Music", "Devices", "Memory", "Automations", "History", "Storage", "System",
+         "Settings")
+_PAGE_ALIASES = {"dashboard": "Overview", "home": "Overview", "main": "Overview", "overview": "Overview",
+                 "tasks": "Tasks", "task": "Tasks", "agent": "Tasks", "music": "Music", "spotify": "Music",
                  "automations": "Automations", "automation": "Automations", "scenes": "Automations",
                  "reminders": "Automations", "history": "History", "stats": "History", "memory": "Memory",
                  "memories": "Memory", "activity": "Activity", "console": "Activity", "logs": "Activity",

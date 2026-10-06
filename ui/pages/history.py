@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QL
 
 from core.events import EventType
 from ui import icons
-from ui.pages.home import tool_label
+from ui.components.activity_item import tool_label
 from ui.reactive import ui_bus
 from ui.theme import current_palette
 from ui.widgets import (Bars, Card, ElidedLabel, Heatmap, IconButton, Page, Segmented, StackBar, chip, clear_layout,
