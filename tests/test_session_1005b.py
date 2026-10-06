@@ -103,8 +103,12 @@ def test_corner_and_amount_words():
 def test_albums_and_not_this_kind_of_song():
     assert _name("Play the album, fancy that.") == "spotify.play_album"
     assert _name("play the album called DAMN") == "spotify.play_album"
-    assert _name("This is not the kind of song I was talking about.") == "spotify.next_reject"
-    assert _name("this is not hype at all") == "spotify.next_reject"
+    # Off-vibe, not disliked (2026-10-06): skip it and steer the mix, don't mark the song down.
+    assert _name("This is not the kind of song I was talking about.") == "spotify.not_mood"
+    assert _name("this is not hype at all") == "spotify.not_mood"
+    assert _name("thats not the type of music i said") == "spotify.not_mood"
+    assert _name("that's not the vibe I asked for") == "spotify.not_mood"
+    assert _name("I'm not feeling this song") == "spotify.next_reject"
     assert _name("this is not the kind of game i like") != "spotify.next_reject"
 
 

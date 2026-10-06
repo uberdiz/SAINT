@@ -37,11 +37,12 @@ LYRICS_H = 92
 # The card is the visible player (no shadow, no lyrics panel). Free resizing between these:
 DEFAULT_W, DEFAULT_H = 340, 138
 MIN_W, MIN_H = 96, 96
-MAX_W, MAX_H = 900, 640
+MAX_W, MAX_H = 1400, 1000
 ART_W, FULL_MIN_H = 250, 132           # smaller than this -> album-art mode
+ART_ASPECT = 1.6                       # narrower than this (w / h) -> album-art mode, at any size
 ART_RADIUS = 16
-SIZES = {"Album art": (150, 150), "Compact": (340, 138), "Normal": (400, 138), "Wide": (520, 150),
-         "Large": (520, 240)}
+SIZES = {"Album art": (150, 150), "Big album art": (360, 360), "Compact": (340, 138), "Normal": (400, 138),
+         "Wide": (520, 150), "Large": (520, 240)}
 EDGE = 7                               # px inside the card's border that resize instead of move
 OPACITIES = (1.0, 0.9, 0.75, 0.6)
 
@@ -398,8 +399,10 @@ class SpotifyWidget(QWidget):
 
     @staticmethod
     def mode_for(w: int, h: int) -> str:
-        """"art" (just the album art, controls on hover) when it's too small for the full player."""
-        return "art" if w < ART_W or h < FULL_MIN_H else "full"
+        """"art" (just the album art, controls on hover) when it's too small for the full player — or
+        squarish: a big square card is a big album cover, not a player with empty space (the art used
+        to stop growing at 250 px wide, 2026-10-06)."""
+        return "art" if w < ART_W or h < FULL_MIN_H or w < h * ART_ASPECT else "full"
 
     def set_card(self, w: int, h: int, save: bool = False):
         """Resize the card (the visible player, without its shadow or the lyrics panel)
@@ -421,7 +424,7 @@ class SpotifyWidget(QWidget):
         else:
             self.outer.setContentsMargins(SHADOW + 14, SHADOW + 12, SHADOW + 10, SHADOW + 12)
             room = h - 24 - STATUS_H - 10              # height beside the status line
-            self.player.set_cover_size(max(56, min(room, int(w * 0.42), 260)))
+            self.player.set_cover_size(max(56, min(room, int(w * 0.42))))
         if lyr and self.isVisible():
             self.lyrics.start()
         else:
@@ -471,18 +474,27 @@ class SpotifyWidget(QWidget):
         self.lyrics_btn.setToolTip("Hide lyrics" if on else "Show lyrics")
         if on and self._mode == "art":
             # Lyrics need the full player: grow back to it rather than silently doing nothing.
-            self._card = (max(self._card[0], DEFAULT_W), max(self._card[1], DEFAULT_H))
+            w = max(self._card[0], DEFAULT_W)
+            h = max(DEFAULT_H, min(self._card[1], int(w / ART_ASPECT) - 1))
+            self._card = (w, h)
         self.set_card(*self._card, save=on and save)
         if self.isVisible():
             self._keep_on_screen()
 
-    def _keep_on_screen(self):
-        screen = QGuiApplication.screenAt(self.geometry().center()) or QGuiApplication.primaryScreen()
+    def clamped_position(self, pos: QPoint, anchor: QPoint) -> QPoint:
+        """``pos`` moved just enough that the card stays on the screen ``anchor`` is on (the cursor
+        while dragging, so it can still cross to another monitor) — only the shadow may hang off."""
+        screen = (QGuiApplication.screenAt(anchor) or QGuiApplication.screenAt(pos)
+                  or QGuiApplication.primaryScreen())
         area = screen.availableGeometry()
-        x = max(area.left(), min(self.x(), area.right() - self.width() + SHADOW))
-        y = max(area.top(), min(self.y(), area.bottom() - self.height() + SHADOW))
-        if (x, y) != (self.x(), self.y()):
-            self.move(x, y)
+        x = max(area.left() - SHADOW, min(pos.x(), area.right() + 1 - self.width() + SHADOW))
+        y = max(area.top() - SHADOW, min(pos.y(), area.bottom() + 1 - self.height() + SHADOW))
+        return QPoint(x, y)
+
+    def _keep_on_screen(self):
+        p = self.clamped_position(self.pos(), self.geometry().center())
+        if p != self.pos():
+            self.move(p)
 
     def _apply_pin(self, on: bool):
         visible = self.isVisible()
@@ -689,17 +701,19 @@ class SpotifyWidget(QWidget):
             edges, p0, geo0, card0 = self._resize
             self.resize_by(edges, gp.x() - p0.x(), gp.y() - p0.y(), geo0, card0)
         elif self._drag is not None and e.buttons() & Qt.LeftButton:
-            self.move(gp - self._drag)
+            self.move(self.clamped_position(gp - self._drag, gp))     # never dragged off screen
         else:
             self.setCursor(self._cursor_for(self.edges_at(self.mapFromGlobal(gp))))
 
     def mouseReleaseEvent(self, e):
         if self._resize is not None:
             self._resize = None
+            self._keep_on_screen()
             self._remember_size()
             self.remember_position()
         if self._drag is not None:
             self._drag = None
+            self._keep_on_screen()
             self.remember_position()
 
     def enterEvent(self, e):

@@ -580,7 +580,16 @@ class SpotifyTools:
         if not albums and not artist:
             return self._album_by_split(q)
         if not albums:
-            return None
+            # A misheard artist ("Fancy That by Pink Panthers"): look through the albums of
+            # the artist it sounds like.
+            found = self._artist_named(artist)
+            if found is None:
+                return None
+            own = self.client.artist_albums(found["id"], 20) or []
+            best = max(own, key=lambda a: _title_score(title, a.get("name", "")), default=None)
+            if best is None or _title_score(title, best.get("name", "")) < 0.75:
+                return None
+            return self._album_entity(best)
         best = max(albums, key=lambda a: _sim(title, a.get("name", "")) * 2 + (
             max((_sim(artist, x.get("name", "")) for x in a.get("artists", []) if x), default=0) if artist else 0))
         return {"kind": "album", "uri": best["uri"], "name": best["name"], "artist": _artists(best),
@@ -844,7 +853,15 @@ class SpotifyTools:
         # "X by Y" is a track (or an album) — unless the whole phrase is a title ("Stand By Me").
         title, artist = self._split_by(q)
         if artist:
-            hit = self._resolve_track(q) or self._resolve_album(q)
+            hit = self._resolve_track(q)
+            if hit is None or hit.get("title_score", 1.0) < 0.9:
+                # "Fancy That by PinkPantheress" is an album, not her song "Tonight" (2026-10-05):
+                # an album whose name matches what was said better than the best song wins.
+                album = self._resolve_album(q)
+                if album is not None and _title_score(title, album["name"]) >= max(
+                        0.8, hit.get("title_score", 0.0) + 0.05 if hit else 0.8):
+                    return album
+                hit = hit or album
             if hit is None or hit.get("kind") == "track" and (hit.get("title_score", 1.0) < 0.75
                                                               or hit.get("artist_score", 1.0) < 0.75):
                 whole = _items(self.client.search(q, "track", limit=5), "track")
@@ -1150,8 +1167,8 @@ class SpotifyTools:
         tid = track.get("id")
         if mood and tid:
             self.memory.mark_mood_mismatch(mood, track)
-        if config.get("spotify.track_history", True):
-            self.memory.record_feedback(track, -0.2, f"not {mood or 'the vibe'}")
+        # Not recorded as a dislike: the song can be one the user likes, just not for this
+        # (2026-10-06 — "it wasn't the vibe I asked for, but I liked it").
         with self._lock:
             if self._radio is not None:
                 self._radio["pool"] = [p for p in self._radio.get("pool") or [] if p.get("id") != tid]

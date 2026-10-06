@@ -1,19 +1,36 @@
 import SwiftUI
 import SaintCore
 
-/// What SAINT knows — and what it has learned from your other devices.
+/// The Memory tab, like the desktop's Memory page: what SAINT knows about you — and what it has learned from your
+/// other devices — with a search. Swipe to forget; + to teach it something.
 struct LearnedView: View {
     @EnvironmentObject var model: AppModel
     @State private var adding = false
     @State private var newFact = ""
+    @State private var query = ""
 
-    private var memories: [MemoryEntry] { _ = model.dataVersion; return model.brain.memory.all() }
-    private var skills: [Skill] { _ = model.dataVersion; return model.brain.skills.all() }
+    private func matches(_ texts: String...) -> Bool {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return q.isEmpty || texts.contains { $0.lowercased().contains(q) }
+    }
+
+    private var memories: [MemoryEntry] {
+        _ = model.dataVersion
+        return model.brain.memory.all().filter { matches($0.content, $0.category) }
+    }
+    private var skills: [Skill] {
+        _ = model.dataVersion
+        return model.brain.skills.all().filter { matches($0.phrase, $0.steps.joined(separator: " ")) }
+    }
     private var aliases: [(key: String, value: String)] {
         _ = model.dataVersion
         return model.brain.aliases.all().sorted { $0.key < $1.key }.map { (key: $0.key, value: $0.value) }
+            .filter { matches($0.key, $0.value) }
     }
-    private var routines: [Routine] { _ = model.dataVersion; return model.brain.scenes.all() }
+    private var routines: [Routine] {
+        _ = model.dataVersion
+        return model.brain.scenes.all().filter { matches($0.name, $0.phrase, $0.steps.joined(separator: " ")) }
+    }
 
     private var syncLine: String {
         let pcs = model.peers.filter { $0.isOwn && $0.online }
@@ -31,7 +48,9 @@ struct LearnedView: View {
                 }
                 Section("About you") {
                     if memories.isEmpty {
-                        Text("Nothing yet. Say “SAINT, my favorite color is green” or “SAINT, remember that my sister is called Ana”.")
+                        Text(query.isEmpty
+                             ? "Nothing yet. Say “SAINT, my favorite color is green” or “SAINT, remember that my sister is called Ana”."
+                             : "Nothing about you matches “\(query)”.")
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                     ForEach(memories) { m in
@@ -83,16 +102,17 @@ struct LearnedView: View {
                 }
             }
             .scrollContentBackground(.hidden)
+            .searchable(text: $query, prompt: "Search memory")
+            .refreshable { await model.syncNow() }
             .saintBackground()
             .tint(Theme.accent)
-            .navigationTitle("Learned")
+            .navigationTitle("Memory")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("Teach SAINT something")
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { Task { await model.syncNow() } } label: { Image(systemName: "arrow.triangle.2.circlepath") }
-                        .accessibilityLabel("Sync now")
+                    SyncNowButton()
                 }
             }
             .alert("Teach SAINT", isPresented: $adding) {

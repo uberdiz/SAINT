@@ -181,6 +181,30 @@ class DevicesPage(Page):
         self.add_card.body.addLayout(join)
         self.root.addWidget(self.add_card)
 
+        # ---- away from home without Tailscale (modules/link/remote.py) --------------------
+        self.remote_card = Card("Away from home")
+        rrow = QHBoxLayout()
+        self.remote_switch = Switch("Reach this PC from anywhere (no Tailscale needed)")
+        self.remote_switch.setChecked(bool(config.get("link.remote_access", False)))
+        self.remote_switch.toggled.connect(self._toggle_remote)
+        rrow.addWidget(self.remote_switch)
+        rrow.addStretch()
+        self.remote_card.body.addLayout(rrow)
+        self.remote_label = QLabel("")
+        self.remote_label.setWordWrap(True)
+        self.remote_label.setObjectName("Muted")
+        self.remote_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.remote_card.body.addWidget(self.remote_label)
+        mrow = QHBoxLayout()
+        self.manual_addr = QLineEdit(str(config.get("link.public_address", "") or ""))
+        self.manual_addr.setPlaceholderText("Optional: your own address or dynamic-DNS name, if you forwarded "
+                                            "the port on your router yourself")
+        self.manual_addr.editingFinished.connect(self._save_manual_addr)
+        mrow.addWidget(self.manual_addr, 1)
+        self.remote_card.body.addLayout(mrow)
+        self._remote_busy = False
+        self.root.addWidget(self.remote_card)
+
         # ---- waiting for a yes ------------------------------------------------------------
         self.approvals_card = Card("Waiting for your OK")
         self.approvals_box = QVBoxLayout()
@@ -205,8 +229,12 @@ class DevicesPage(Page):
         self.keep_btn.clicked.connect(self._keep_shared)
         self.open_btn = QPushButton("Open received files")
         self.open_btn.clicked.connect(self._open_inbox)
+        self.logs_btn = QPushButton("Device logs")
+        self.logs_btn.setToolTip("Every paired device's log, collected on this PC while they're connected")
+        self.logs_btn.clicked.connect(self._open_device_logs)
         self.inbox_row.addWidget(self.keep_btn)
         self.inbox_row.addWidget(self.open_btn)
+        self.inbox_row.addWidget(self.logs_btn)
         self.inbox_card.body.addLayout(self.inbox_row)
         self.root.addWidget(self.inbox_card)
         self.root.addStretch()
@@ -271,9 +299,11 @@ class DevicesPage(Page):
             addr = info["addresses"][0] if info["addresses"] else "this PC's IP address"
             who = "your phone or other PC" if role == "own" else "your friend"
             ts = info.get("tailscale") or ""
-            away = (f"\nFrom anywhere (Tailscale): {ts}:{info['port']} — the code includes it." if ts else
-                    "\nTo reach this PC away from home, install Tailscale on this PC and your phone, then show "
-                    "the code again.")
+            public = info.get("public") or ""
+            away = (f"\nFrom anywhere: {public}:{info['port']} — the code includes it." if public else
+                    f"\nFrom anywhere (Tailscale): {ts}:{info['port']} — the code includes it." if ts else
+                    "\nTo reach this PC away from home, turn on “Reach this PC from anywhere” below (or use "
+                    "Tailscale), then show the code again.")
             qr = "" if info.get("matrix") else "\n(The QR code needs the segno package — type the address instead.)"
             self.how.setText(f"On {who}, open SAINT → Devices and scan this code — or on another PC just type the "
                              f"code below into “Join” (same Wi-Fi or Tailscale: no address needed).\n\n"
@@ -283,6 +313,61 @@ class DevicesPage(Page):
             self.enable.setChecked(True)
             self.refresh()
         run_async(lambda: _link().offer(role), done, lambda e: self._say(str(e), True))
+
+    def _toggle_remote(self, on: bool):
+        if self._remote_busy:
+            return
+        self._remote_busy = True
+        self.remote_label.setText("Asking your router to let SAINT through…" if on else "Closing the port…")
+
+        def done(st):
+            self._remote_busy = False
+            if on and not _link().running:
+                self.enable.setChecked(True)
+            self._render_remote(st)
+
+        def fail(e):
+            self._remote_busy = False
+            self._render_remote({"state": "error", "message": str(e)})
+        run_async(lambda: _link().set_remote_access(on), done, fail)
+
+    def _save_manual_addr(self):
+        value = self.manual_addr.text().strip().strip("/").replace("http://", "").replace("https://", "")
+        if value != str(config.get("link.public_address", "") or ""):
+            config.set("link.public_address", value)
+            self.refresh()
+
+    def _render_remote(self, st: dict):
+        on = bool(config.get("link.remote_access", False))
+        if self.remote_switch.isChecked() != on:
+            self.remote_switch.blockSignals(True)
+            self.remote_switch.setChecked(on)
+            self.remote_switch.blockSignals(False)
+        state = st.get("state", "off")
+        if not on or state == "off":
+            text = ("Off. Paired devices reach this PC on your home network, or anywhere with Tailscale. Turn this "
+                    "on and SAINT asks your router (UPnP) to forward its port, so your phone can reach it from "
+                    "anywhere with nothing else installed. Connections still need a paired device's key.")
+            if on and not _link().running:
+                text = "Turns on with SAINT Link (“Connect my devices” above)."
+        else:
+            text = st.get("message") or ""
+        self.remote_label.setText(text)
+        self.remote_label.setObjectName("ErrorText" if on and state in ("error", "unavailable", "blocked")
+                                        else "Muted")
+        self.manual_addr.setVisible(on)
+        self.remote_label.style().unpolish(self.remote_label)
+        self.remote_label.style().polish(self.remote_label)
+
+    def _open_device_logs(self):
+        path = _link().device_logs.directory
+        os.makedirs(path, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        # Fetch what's new from connected devices too (off the GUI thread: it's network).
+        run_async(_link().collect_logs,
+                  lambda n: n and self._say(f"Collected {n} new log line{'s' if n != 1 else ''} from your "
+                                            f"devices — this PC's own log is in {os.path.dirname(path)}."),
+                  lambda e: None)
 
     def _cancel_offer(self):
         self._offer = None
@@ -317,11 +402,14 @@ class DevicesPage(Page):
         if running:
             st = link.status()
             addrs = st["addresses"]
-            remote = " · Tailscale on" if st.get("tailscale") else ""
+            remote = (" · reachable from anywhere" if (st.get("remote") or {}).get("state") == "open" else
+                      " · Tailscale on" if st.get("tailscale") else "")
             set_chip(self.status, f"Listening on {addrs[0] if addrs else '…'}:{link.node.port}{remote}", "ok")
         else:
             set_chip(self.status, "Off", "")
         self.add_card.setEnabled(True)
+        if not self._remote_busy:
+            self._render_remote(link.remote_status())
         self._render_approvals(link)
         self._render_devices(link)
         pending = link.shared_inbox.pending()

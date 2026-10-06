@@ -40,7 +40,9 @@ struct TransferState: Equatable {
 final class AppModel: ObservableObject {
     static let shared = AppModel()
 
-    enum Tab: Hashable { case talk, music, activity, devices, settings }
+    /// Talk, Music, History, Memory, Settings. Devices opens from the PC chip and Settings (``showDevices``) —
+    /// a sixth tab would hide two of them behind iOS's "More".
+    enum Tab: Hashable { case talk, music, history, memory, settings }
 
     let keychain: Keychain
     let settings: AppSettings
@@ -63,6 +65,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var bannerID = UUID()
     @Published var tab: Tab = .talk
     @Published var showListening = false
+    @Published var showDevices = false
+    /// A "Sync now" is running: its buttons show it and don't start another.
+    @Published var syncing = false
     @Published var cameraRequest: CameraRequest?
     @Published var messageDraft: MessageDraft?
     /// The Shortcut SAINT just started ("SAINT Low Power On"); saint://shortcut-done says how it went.
@@ -384,6 +389,7 @@ final class AppModel: ObservableObject {
     // MARK: things the phone did outside a conversation turn
 
     private func log(request: String, action: String, kind: String, ok: Bool) {
+        AppLog.shared.log(ok ? "INFO" : "WARNING", kind, "“\(request)” → \(action)")
         brain.actions.add(ActionEntry(request: request, action: action, kind: kind, status: ok ? "done" : "failed",
                                       device: settings.deviceName))
         dataVersion += 1
@@ -473,7 +479,24 @@ final class AppModel: ObservableObject {
         _ = dataVersion
         guard let peer = link.peerStore.get(id) else { return nil }
         let hosts = [peer.host] + (peer.altHosts ?? [])
-        return hosts.first { Self.isTailscale($0) } ?? peer.altHosts?.first
+        // Tailscale first, then the PC's internet address ("Reach this PC from anywhere" on the PC) — never a
+        // home-network address, which used to be shown as "reachable from anywhere".
+        return hosts.first { Self.isTailscale($0) } ?? hosts.first { Self.isInternet($0) }
+    }
+
+    /// An address that works away from home: a public IPv4, a global IPv6 (2000::/3) or a DNS name.
+    static func isInternet(_ host: String) -> Bool {
+        let h = host.lowercased()
+        if h.isEmpty || isTailscale(h) { return false }
+        if h.contains(":") { return h.hasPrefix("2") || h.hasPrefix("3") }
+        let parts = h.split(separator: ".").compactMap { Int($0) }
+        if parts.count == 4 {
+            let (a, b) = (parts[0], parts[1])
+            if a == 10 || a == 127 || a == 0 || (a == 192 && b == 168) || (a == 172 && (16...31).contains(b))
+                || (a == 169 && b == 254) || (a == 100 && (64...127).contains(b)) || a >= 224 { return false }
+            return true
+        }
+        return h.contains(".") && !h.hasSuffix(".local") && !h.hasSuffix(".lan") && !h.hasSuffix(".home")
     }
 
     func setRemoteHost(_ id: String, host: String) {
@@ -506,6 +529,14 @@ final class AppModel: ObservableObject {
     }
 
     func syncNow() async {
+        if syncing { return }
+        guard !link.peerStore.all().filter({ $0.isOwn }).isEmpty else {
+            banner = "Pair your PC first (Devices), then sync."
+            return
+        }
+        syncing = true
+        banner = "Syncing with your PC…"
+        defer { syncing = false }
         let results = await link.syncAll()
         if results.isEmpty {
             banner = "Pair your PC first (Devices), then sync."

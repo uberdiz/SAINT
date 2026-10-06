@@ -45,7 +45,6 @@ struct HomeView: View {
             dock
         }
         .saintBackground()
-        .overlay(alignment: .top) { bannerView }
     }
 
     // MARK: header
@@ -63,7 +62,7 @@ struct HomeView: View {
                 }
             }
             Spacer()
-            Button { model.tab = .devices } label: { pcChip }.buttonStyle(.plain)
+            Button { model.showDevices = true } label: { pcChip }.buttonStyle(.plain)
         }
         .padding(.horizontal, 16)
         .padding(.top, 6)
@@ -213,25 +212,6 @@ struct HomeView: View {
                 Button { speaker.stop() } label: { Label("Stop talking", systemImage: "speaker.slash") }
                 Button { model.messages.removeAll() } label: { Label("Clear the conversation", systemImage: "trash") }
             }
-        }
-    }
-
-    @ViewBuilder
-    private var bannerView: some View {
-        if let text = model.banner {
-            Text(text)
-                .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Theme.text)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .glassCard(radius: 18, fill: Theme.raised, stroke: Theme.borderStrong)
-                .padding(.top, 54)
-                .transition(.move(edge: .top).combined(with: .opacity))
-                .allowsHitTesting(false)
-                .task(id: model.bannerID) {
-                    try? await Task.sleep(nanoseconds: 3_500_000_000)
-                    withAnimation { model.banner = nil }
-                }
         }
     }
 

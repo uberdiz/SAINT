@@ -84,8 +84,13 @@ page — is in the rest of this repository. The phone and the PC share their lan
 - **Spotify like the desktop:** "play Blinding Lights" plays it and queues more by the artist; liked songs, what you
   played today, your top track, queue, add to a playlist, recommendations, play on another device, seek.
   Sign in again once so SAINT gets the new permissions.
-- **From anywhere:** with Tailscale on the PC and the phone, the pairing code carries the PC's Tailscale address and
-  the phone tries it whenever the Wi-Fi address doesn't answer (or add it on the device's page). Devices can be renamed.
+- **From anywhere:** turn on *Reach this PC from anywhere* on the PC (Devices) — the PC gives the phone its internet
+  and IPv6 addresses, nothing to install here — or use Tailscale on both. The phone tries those addresses whenever the
+  Wi-Fi address doesn't answer (or add one on the device's page). Devices can be renamed.
+
+**0.3 (unreleased):** History and Memory tabs (search, a summary of the last week), Devices as a sheet from the PC chip
+and Settings, Settings rows that never run text under their controls, Sync now that shows it's working on every tab,
+and the app's log collected by your PC (`log.get`).
 
 **0.2.0 (build 2):** AirPods stay in full-quality audio while SAINT listens (it uses the iPhone's microphone
 unless you turn on "Use my headset's microphone"), and the current audio route is shown under the orb; tap the

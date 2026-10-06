@@ -62,7 +62,8 @@ DEFAULT_CONFIG = {
         # Input mode
         "mode": "always_on",            # "always_on" | "push_to_talk"
         "auto_start": True,             # start the microphone when SAINT launches
-        "mic_device": None,             # sounddevice device index (None = system default)
+        "mic_device": None,             # the microphone's name (None = system default; old configs: an index)
+        "allow_bluetooth_mic": False,   # a headset's hands-free mic drops it to call quality: only when picked
         "mic_sensitivity": 0.015,       # RMS threshold for VAD (0.0-1.0)
         "silence_duration_ms": 700,     # ms of silence before utterance ends
         "agent_response_delay_ms": 0,   # artificial delay before agent responds
@@ -475,6 +476,9 @@ DEFAULT_CONFIG = {
         "approval_timeout_sec": 60,       # how long a collaborator's request waits for your yes
         "max_file_mb": 1024,
         "manage_firewall": True,          # ask once to let SAINT Link's port through Windows Firewall
+        "remote_access": False,           # reachable away from home: router port (UPnP) + IPv6 + public_address
+        "public_address": "",            # your own port forward's address / dynamic-DNS name (optional)
+        "collect_logs": True,             # gather your own devices' logs into data/logs/devices
         "max_prompt_chars": 2000,
         "inbox_dir": "",                  # blank = data/link/inbox
         "prompt_targets": {},             # extra apps for "send this prompt to ... on <app>"

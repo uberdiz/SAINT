@@ -37,7 +37,9 @@ from modules.link.approvals import ApprovalQueue
 from modules.link.context_feed import context_feed
 from modules.link.identity import (ALLOW, COLLABORATOR, DENY, OWN, PERMISSIONS, Identity, PairingManager, Peer,
                                    PeerStore, decode_code, looks_like_code, parse_address, parse_pair_uri)
-from modules.link.node import DEFAULT_PORT, LinkNode, dial_first, is_tailscale, lan_addresses
+from modules.link.logs import LogCollector
+from modules.link.node import DEFAULT_PORT, LinkNode, dial_first, global_ipv6_addresses, is_tailscale, lan_addresses
+from modules.link.remote import RemoteAccess, is_public
 from modules.link.sync import SyncEngine
 from modules.link.wire import LinkError
 
@@ -96,6 +98,11 @@ class LinkService:
         self._started = False
         self._subscribed = False
         self.shared_inbox = SharedInbox()
+        self.remote = RemoteAccess()
+        self.node.public_addrs = self.public_addresses
+        self.device_logs = LogCollector()
+        self._log_pulls: set = set()
+        self._no_logs: set = set()                     # devices that don't answer log.get (older versions)
         self._register_handlers()
 
     # ------------------------------------------------------------------ #
@@ -123,6 +130,10 @@ class LinkService:
                 peer = self.peers.get(payload.get("peer_id", ""))
                 if peer is not None and peer.role == OWN and peer.permission("sync") == ALLOW:
                     threading.Thread(target=self._safe_sync, args=(peer.id,), daemon=True, name="link-sync").start()
+                if peer is not None and peer.role == OWN:
+                    self._no_logs.discard(peer.id)
+                    threading.Thread(target=self.collect_logs, args=(peer.id,), daemon=True,
+                                     name="link-logs").start()
             elif name == "link.paired":
                 event_bus.emit_event(EventType.NOTIFY, {"title": "SAINT",
                                                         "message": f"Paired with {payload.get('name', 'a device')}."})
@@ -183,6 +194,8 @@ class LinkService:
                                                                   if self.pairing.current else ""))
                 self._discovery.start(port)
             threading.Thread(target=ensure_firewall_rule, args=(port,), daemon=True, name="link-firewall").start()
+            if config.get("link.remote_access", False):
+                self._start_remote(port)
             if not self._subscribed:
                 event_bus.subscribe(self._on_event)
                 self._subscribed = True
@@ -200,6 +213,7 @@ class LinkService:
                 self._discovery.stop()
                 self._discovery = None
             self.pairing.cancel()
+            self.remote.stop()
             self.node.stop()
             if self._subscribed:
                 event_bus.unsubscribe(self._on_event)
@@ -213,6 +227,68 @@ class LinkService:
             return self.start()
         self.stop()
         return False
+
+    # ------------------------------------------------------------------ #
+    # Away from home without Tailscale: a port mapping on the router (modules/link/remote.py)
+    # ------------------------------------------------------------------ #
+    def _start_remote(self, port: int):
+        self.node.start_ipv6()
+        threading.Thread(target=ensure_internet_firewall_rule, args=(port,), daemon=True,
+                         name="link-firewall-internet").start()
+        local = next((a for a in lan_addresses() if not is_tailscale(a)), "")
+        if not local:
+            log.info("link.remote.no_lan_address")
+            return
+        self.remote.start(port, local, on_change=lambda st: self._emit("link.remote", self.remote_status()))
+
+    def public_addresses(self) -> List[str]:
+        """Where a device away from home can try this PC: the router's address (UPnP), an address the
+        owner typed (their own port forward / dynamic DNS name), and this PC's IPv6 addresses."""
+        if not config.get("link.remote_access", False):
+            return []
+        out = [self.remote.public_address(), str(config.get("link.public_address", "") or "").strip()]
+        if self.node.ipv6_listening:
+            out += global_ipv6_addresses()
+        return [a for a in dict.fromkeys(out) if a]
+
+    def remote_status(self) -> dict:
+        """UPnP, IPv6 and a typed address together, in words, for the Devices page."""
+        st = self.remote.status()
+        if not config.get("link.remote_access", False) or not self.node.running:
+            return dict(st, state="off", ipv6=[], manual="")
+        v6 = global_ipv6_addresses() if self.node.ipv6_listening else []
+        manual = str(config.get("link.public_address", "") or "").strip()
+        lines = [st.get("message") or ""]
+        state = st.get("state", "off")
+        if manual:
+            lines.append(f"Also using the address you entered: {manual}:{self.node.port}.")
+        if v6:
+            lines.append(f"IPv6: [{v6[0]}]:{self.node.port} — works from mobile networks with IPv6 (most of them) "
+                         f"if your router's IPv6 firewall allows incoming connections.")
+        if state != "open" and (v6 or manual) and state != "working":
+            state = "partial"
+        return dict(st, state=state, message="\n".join(l for l in lines if l), ipv6=v6, manual=manual)
+
+    def set_remote_access(self, on: bool) -> dict:
+        """Turn "reach this PC from anywhere" on or off. Returns the remote status (when turning it
+        on: once the router has answered, a few seconds)."""
+        config.set("link.remote_access", bool(on))
+        if not on:
+            self.remote.stop()
+            self.node.stop_ipv6()
+            return self.remote_status()
+        if not self.node.running:
+            return self._wait_remote() if self.start() else self.remote_status()
+        self._start_remote(self.node.port)
+        return self._wait_remote()
+
+    def _wait_remote(self, timeout: float = 12.0) -> dict:
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.remote.status()["state"] not in ("working", "off"):
+                break
+            time.sleep(0.25)
+        return self.remote_status()
 
     def _found(self, peer_id: str, host: str, port: int):
         if self.peers.get(peer_id) is not None:
@@ -230,13 +306,14 @@ class LinkService:
         addrs = lan_addresses()
         host = addrs[0] if addrs else "127.0.0.1"
         ts = tailscale_status()
-        alternates = addrs[1:] + [a for a in (ts.get("dns"),) if a]
+        alternates = addrs[1:] + [a for a in (ts.get("dns"),) if a] + self.public_addresses()
         uri = offer.uri(host, self.node.port, self.identity.name, alternates=alternates)
         if self._discovery is not None:
             self._discovery.announce_now()          # PCs nearby see the open window straight away
         return {"code": offer.code, "uri": uri, "port": self.node.port, "addresses": addrs, "role": role,
                 "expires": offer.expires, "matrix": qr_matrix(uri), "name": self.identity.name,
-                "tailscale": tailscale_address(addrs) or ts.get("ip", ""), "tailscale_name": ts.get("dns", "")}
+                "tailscale": tailscale_address(addrs) or ts.get("ip", ""), "tailscale_name": ts.get("dns", ""),
+                "public": next(iter(self.public_addresses()), "")}
 
     def pair(self, text: str, role: Optional[str] = None) -> Peer:
         """Join another device's pairing window. ``text`` is the ``saint://pair?...``
@@ -334,7 +411,8 @@ class LinkService:
             return out + [f"I don't have an address for {peer.name} yet. Open SAINT on it (its Link must be on) or "
                           f"pair again."]
         for h in hosts:
-            label = f"{h}:{port}" + (" (Tailscale)" if is_tailscale(h) or h.endswith(".ts.net") else "")
+            label = f"{h}:{port}" + (" (Tailscale)" if is_tailscale(h) or h.endswith(".ts.net") else
+                                     " (internet)" if is_public(h) else "")
             try:
                 sock, _ = dial_first([h], port, 3.0)
                 sock.close()
@@ -342,6 +420,8 @@ class LinkService:
             except LinkError:
                 why = ("not reachable — is Tailscale on (and logged in to the same account) on both devices?"
                        if is_tailscale(h) or h.endswith(".ts.net") else
+                       "not reachable from here — its router may have a new address, or “Reach this PC from "
+                       "anywhere” is off on it" if is_public(h) else
                        "not reachable — different network, the device is asleep, or its firewall blocks SAINT's port")
                 out.append(f"{label}: {why}")
         ts = tailscale_status()
@@ -372,6 +452,7 @@ class LinkService:
                 "devices": self.devices(), "pending_approvals": self.approvals.pending(),
                 "pairing": None if offer is None else {"role": offer.role, "expires": offer.expires},
                 "discovery": self._discovery.backends if self._discovery else [],
+                "remote": self.remote_status(), "device_logs": self.device_logs.directory,
                 "inbox": self._inbox_dir()}
 
     def set_permission(self, peer_id: str, perm: str, policy: str) -> Optional[Peer]:
@@ -461,6 +542,7 @@ class LinkService:
                 self.sync_now()
             except Exception:
                 log.exception("link.sync_loop")
+            self.collect_logs()
 
     # ------------------------------------------------------------------ #
     # Local events: changes to sync, turns to share
@@ -497,6 +579,7 @@ class LinkService:
         n.register("automation.list", lambda ctx, d: {"automations": automations.catalog(ctx.peer)})
         n.register("share.push", self._h_share)
         n.register("context.feed", self._h_context)
+        n.register("log.get", self._h_log_get)
 
     def _h_status(self, ctx, data: dict) -> dict:
         ctx.require("status", "tell you what this PC is doing")
@@ -510,6 +593,51 @@ class LinkService:
             pass
         return {"device": self.identity.hello(), "time": time.time(), "now_playing": playing,
                 "language": config.get("language.preferred", [])}
+
+    def _h_log_get(self, ctx, data: dict) -> dict:
+        """This PC's recent log lines, for the owner's other PC that collects them."""
+        if getattr(ctx.peer, "role", "") != OWN:
+            raise LinkError("Logs are only shared with your own devices.", "denied")
+        from core.logger import log_ring
+        try:
+            after = max(0, int(data.get("after") or 0))
+        except (TypeError, ValueError):
+            after = 0
+        return log_ring.since(after, str(data.get("boot") or ""))
+
+    # ------------------------------------------------------------------ #
+    # Every device's log, collected here (modules/link/logs.py)
+    # ------------------------------------------------------------------ #
+    def collect_logs(self, peer_id: Optional[str] = None) -> int:
+        """Fetch new log lines from connected own devices; returns how many lines arrived."""
+        if not config.get("link.collect_logs", True):
+            return 0
+        total = 0
+        for pid in ([peer_id] if peer_id else self.node.connected_ids()):
+            peer = self.peers.get(pid)
+            if peer is None or peer.role != OWN or (pid in self._no_logs and not peer_id):
+                continue
+            with self._lock:
+                if pid in self._log_pulls:
+                    continue
+                self._log_pulls.add(pid)
+            try:
+                for _ in range(10):                   # at most 10 pages (2000 lines each) per round
+                    data = self.node.request(pid, "log.get", self.device_logs.request_args(pid), timeout=30)
+                    n = self.device_logs.store(pid, peer.name, data)
+                    total += n
+                    if n < 2000:
+                        break
+            except LinkError as e:
+                if e.code == "unknown":           # an older SAINT: ask again after it reconnects
+                    self._no_logs.add(pid)
+                log.info("link.logs.pull_failed peer=%s %s", peer.name, e)
+            except Exception:
+                log.exception("link.logs.pull_crashed peer=%s", peer.name)
+            finally:
+                with self._lock:
+                    self._log_pulls.discard(pid)
+        return total
 
     def _h_chat(self, ctx, data: dict) -> dict:
         ctx.require("chat")
@@ -734,6 +862,32 @@ def ensure_firewall_rule(port: int, udp_port: int = 8766, force: bool = False):
         log.info("link.firewall_rule_requested port=%d rc=%s", port, rc)
     except Exception:
         log.warning("link.firewall_rule_failed", exc_info=True)
+
+
+def ensure_internet_firewall_rule(port: int, force: bool = False):
+    """"Reach this PC from anywhere": the usual rule only lets the home network and Tailscale in.
+    A second rule admits SAINT Link's port from any address (every connection is still a Noise
+    handshake that needs a paired device's key or the one-time pairing code). Asked once per port."""
+    if os.name != "nt" or not config.get("link.manage_firewall", True):
+        return
+    import subprocess
+    name = "SAINT Link (anywhere)"
+    kw = {"creationflags": 0x08000000, "capture_output": True, "timeout": 10}
+    try:
+        shown = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"], **kw)
+        if shown.returncode == 0 and port in rule_tcp_ports(shown.stdout.decode("utf-8", "ignore")):
+            return
+        if config.get("link.firewall_internet_asked_port", 0) == port and not force:
+            return
+        config.set("link.firewall_internet_asked_port", port)
+        script = (f'netsh advfirewall firewall delete rule name="{name}" & '
+                  f'netsh advfirewall firewall add rule name="{name}" dir=in action=allow protocol=TCP '
+                  f'localport={port} remoteip=any profile=any')
+        import ctypes
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c {script}', None, 0)
+        log.info("link.firewall_internet_rule_requested port=%d rc=%s", port, rc)
+    except Exception:
+        log.warning("link.firewall_internet_rule_failed", exc_info=True)
 
 
 def tailscale_address(addrs: List[str]) -> str:

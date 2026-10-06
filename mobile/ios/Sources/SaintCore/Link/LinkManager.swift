@@ -70,7 +70,18 @@ public final class LinkManager: PCBridge {
         return nil
     }
 
-    private func emit(_ event: LinkEvent) { onEvent?(event) }
+    private func emit(_ event: LinkEvent) {
+        switch event {
+        case .connected(let peer): AppLog.shared.info("link", "connected to \(peer.name)")
+        case .disconnected(let id): AppLog.shared.info("link", "disconnected from \(peerStore.get(id)?.name ?? id)")
+        case .paired(let peer): AppLog.shared.info("link", "paired with \(peer.name) (\(peer.role))")
+        case .synced(let peer, let received, let sent): AppLog.shared.info("sync", "\(peer): received \(received), sent \(sent)")
+        case .fileReceived(let peer, let name, _): AppLog.shared.info("files", "received \(name) from \(peer)")
+        case .problem(let message): AppLog.shared.warning("link", message)
+        case .fileProgress: break
+        }
+        onEvent?(event)
+    }
 
     public func rename(to name: String) { identity.name = String(name.prefix(40)) }
 
@@ -147,6 +158,7 @@ public final class LinkManager: PCBridge {
                     _ = try await self.connect(peerID: peer.id)
                     self.noteConnectResult(peer.id, success: true)
                 } catch {
+                    AppLog.shared.info("link", "couldn't reach \(peer.name): \(error.localizedDescription)")
                     self.noteConnectResult(peer.id, success: false)
                 }
             }
@@ -599,6 +611,11 @@ public final class LinkManager: PCBridge {
             try requireOwn(peerID)
             return ["device": identity.hello(), "time": Date().timeIntervalSince1970, "now_playing": [String: Any](),
                     "language": languages()]
+        case "log.get":
+            // Your PC collects every device's log in one place (desktop: modules/link/logs.py).
+            try requireOwn(peerID)
+            let after = (data["after"] as? NSNumber)?.intValue ?? 0
+            return AppLog.shared.since(after: after, boot: (data["boot"] as? String) ?? "")
         case "file.offer":
             try requireOwn(peerID)
             return try fileOffer(peerID: peerID, data: data)

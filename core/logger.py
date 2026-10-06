@@ -13,8 +13,11 @@ Central logging for SAINT.
 * The level can be changed at runtime from Settings (``apply_level``).
 """
 
+import collections
 import logging
 import os
+import threading
+import uuid
 from logging.handlers import RotatingFileHandler
 
 from core.events import event_bus
@@ -54,6 +57,42 @@ NOISY_EVENTS = frozenset({
 _ERROR_EVENTS = frozenset({"error", "ai.error", "module.crash", "tool.failed",
                            "automation.failed", "wake.error", "tts.error"})
 _WARNING_EVENTS = frozenset({"warning", "tool.permission.denied", "voice.stt.error"})
+
+class LogRing(logging.Handler):
+    """The last few thousand log lines in memory, numbered, so a paired PC can collect this
+    device's log over SAINT Link (``log.get``) without reading files: "lines after N"."""
+
+    def __init__(self, capacity: int = 4000):
+        super().__init__()
+        self._lines = collections.deque(maxlen=capacity)
+        self._seq = 0
+        self._ring_lock = threading.Lock()
+        self.boot = uuid.uuid4().hex[:12]        # changes each run: the reader starts again from 0
+        self.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                                            "%Y-%m-%d %H:%M:%S"))
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            line = self.format(record)
+        except Exception:
+            return
+        with self._ring_lock:
+            self._seq += 1
+            self._lines.append((self._seq, line))
+
+    def since(self, after: int = 0, boot: str = "", limit: int = 2000) -> dict:
+        """Lines numbered above ``after`` (all of them when ``boot`` is another run's)."""
+        with self._ring_lock:
+            if boot and boot != self.boot or after > self._seq:
+                after = 0
+            first = self._lines[0][0] if self._lines else self._seq + 1
+            out = [line for n, line in self._lines if n > after][:limit]
+            cursor = min(self._seq, max(after, first - 1) + len(out))
+            dropped = max(0, first - 1 - after)
+        return {"lines": out, "cursor": cursor, "dropped": dropped, "boot": self.boot}
+
+
+log_ring = LogRing()
 
 _logger = logging.getLogger("SAINT")      # event-bus mirror
 _saint = logging.getLogger("saint")       # subsystem loggers (saint.voice, ...)
@@ -98,7 +137,7 @@ def init_logger(level="Normal", debug=False):
     file_handler.setFormatter(formatter)
     stream = logging.StreamHandler()
     stream.setFormatter(formatter)
-    _handlers[:] = [file_handler, stream]
+    _handlers[:] = [file_handler, stream, log_ring]
 
     for lg in (_logger, _saint):
         lg.propagate = False
@@ -109,6 +148,7 @@ def init_logger(level="Normal", debug=False):
     # file, but only at WARNING and above.
     root = logging.getLogger()
     root.addHandler(file_handler)
+    root.addHandler(log_ring)
     if root.level == logging.NOTSET or root.level > logging.WARNING:
         root.setLevel(logging.WARNING)
 
@@ -126,10 +166,20 @@ def apply_level(level="Normal", debug=False):
     _saint.setLevel(lvl)
 
 
+_last_media = [None]
+
+
 def _on_event(ev):
     t = ev.type
     if t in NOISY_EVENTS:
         return
+    if t == "media.changed":
+        # Windows reports progress every few seconds; log a change of song / play state only.
+        p = ev.payload or {}
+        key = (p.get("app_id"), p.get("title"), p.get("artist"), p.get("is_playing"))
+        if key == _last_media[0]:
+            return
+        _last_media[0] = key
     msg = f"{t} {ev.payload}" if ev.payload else t
     if t in _ERROR_EVENTS:
         _logger.error(msg)

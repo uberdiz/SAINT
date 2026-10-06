@@ -16,7 +16,6 @@ struct SettingsView: View {
     @State private var replyInUserLanguage = true
     @State private var claudeKey = ""
     @State private var showReminders = false
-    @State private var showLearned = false
     @State private var showShortcuts = false
     @State private var phonePermissions = PhonePermissions.current()
 
@@ -54,7 +53,6 @@ struct SettingsView: View {
                 phonePermissions = PhonePermissions.current()
             }
             .sheet(isPresented: $showReminders) { RemindersView() }
-            .sheet(isPresented: $showLearned) { LearnedView() }
             .sheet(isPresented: $showShortcuts) { ShortcutsHelpView() }
         }
     }
@@ -66,12 +64,19 @@ struct SettingsView: View {
             SaintLogo(size: 48)
             VStack(alignment: .leading, spacing: 3) {
                 Text(settings.deviceName).font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text)
+                    .lineLimit(1).minimumScaleFactor(0.8)
                 Text("SAINT Mobile \(Self.version)").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                    .lineLimit(1)
             }
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(1)
             if let pc = model.brain.ownPC() {
-                Pill(text: pc.online ? "PC connected" : "PC offline", icon: "desktopcomputer",
-                     tint: pc.online ? Theme.success : Theme.muted, fill: pc.online ? Theme.successSoft : Theme.surface2)
+                Button { model.showDevices = true } label: {
+                    Pill(text: pc.online ? "PC connected" : "PC offline", icon: "desktopcomputer",
+                         tint: pc.online ? Theme.success : Theme.muted, fill: pc.online ? Theme.successSoft : Theme.surface2)
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
             }
         }
         .padding(16)
@@ -90,7 +95,7 @@ struct SettingsView: View {
             SectionTitle("Audio")
             CardList {
                 SettingRow(icon: "speaker.wave.2.fill", title: "Output", subtitle: "Now: \(voice.outputName)",
-                           iconTint: Theme.accent, tile: Theme.accentSoft) {
+                           iconTint: Theme.accent, tile: Theme.accentSoft, stacked: true) {
                     Picker("Output", selection: $settings.audioOutput) {
                         Text("Headphones when connected").tag("auto")
                         Text("iPhone speaker").tag("speaker")
@@ -302,10 +307,8 @@ struct SettingsView: View {
             CardList {
                 SettingRow(icon: "desktopcomputer", title: "Ask my PC first for anything else") { toggle($settings.preferPC) }
                 RowDivider()
-                SettingRow(icon: "cpu", title: "On-device model") {
-                    Text(OnDeviceModel.isAvailable ? "Available" : "Needs iOS 26 + Apple Intelligence")
-                        .font(.system(size: 13)).foregroundStyle(Theme.muted)
-                }
+                SettingRow(icon: "cpu", title: "On-device model",
+                           subtitle: OnDeviceModel.isAvailable ? "Available" : "Needs iOS 26 and Apple Intelligence")
                 RowDivider()
                 SettingRow(icon: "sparkles", title: "Also use Claude", subtitle: "Needs internet and an API key") {
                     toggle($settings.useClaude)
@@ -380,13 +383,13 @@ struct SettingsView: View {
                 }
                 .buttonStyle(.plain)
                 RowDivider()
-                Button { showLearned = true } label: {
-                    SettingRow(icon: "brain.head.profile", title: "Learned", subtitle: "Memories, skills, routines and nicknames") { chevron }
+                Button { model.tab = .memory } label: {
+                    SettingRow(icon: "brain.head.profile", title: "Memory", subtitle: "Memories, skills, routines and nicknames") { chevron }
                 }
                 .buttonStyle(.plain)
                 RowDivider()
-                Button { model.tab = .activity } label: {
-                    SettingRow(icon: "waveform.path.ecg", title: "Activity log", subtitle: "Everything SAINT did; synced to your PC's History") { chevron }
+                Button { model.tab = .history } label: {
+                    SettingRow(icon: "clock.arrow.circlepath", title: "History", subtitle: "Everything SAINT did; synced to your PC's History") { chevron }
                 }
                 .buttonStyle(.plain)
             }
@@ -399,6 +402,12 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             SectionTitle("This phone")
             CardList {
+                Button { model.showDevices = true } label: {
+                    SettingRow(icon: "laptopcomputer.and.iphone", title: "Devices",
+                               subtitle: "Your PC, pairing, files, and reaching it away from home") { chevron }
+                }
+                .buttonStyle(.plain)
+                RowDivider()
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Name on your other devices").font(.system(size: 15)).foregroundStyle(Theme.text)
                     TextField("iPhone", text: $settings.deviceName)

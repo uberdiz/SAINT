@@ -116,7 +116,9 @@ route C there, or use GitHub's macOS runners as in route A. A rented Mac can't p
 3. **Spotify:** make a free app at <https://developer.spotify.com/dashboard>, add the redirect URI `saint://spotify-callback`,
    paste its *Client ID* in **Settings → Spotify**, and sign in. Controlling playback needs Spotify Premium (Spotify's rule).
 4. **Your PC:** on the PC open SAINT → **Devices** → turn on **Link** → **Pair a phone**. In the app: **Devices → +** and scan
-   the QR code, or type the address and code. Both devices need to reach each other (same Wi-Fi, or a VPN such as Tailscale).
+   the QR code, or type the address and code. Both devices need to reach each other: same Wi-Fi, Tailscale, or — for
+   away from home with nothing else installed — turn on **Devices → Reach this PC from anywhere** on the PC, then open
+   the app once at home so it learns the PC's internet addresses.
 
 ## What "always listening" really means on iOS
 

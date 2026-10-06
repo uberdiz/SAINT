@@ -653,7 +653,7 @@ The same notes go to the language model as facts, so it doesn't invent results. 
 
 ## SAINT Link
 
-`modules/link` — connect SAINT to your **phone**, your **other PCs**, and **friends' SAINTs** over `IP:port`, on the same network or any network where they can reach each other (a VPN or Tailscale works). **Off by default** — turn it on in *Devices*, or set `link.enabled`.
+`modules/link` — connect SAINT to your **phone**, your **other PCs**, and **friends' SAINTs** over `IP:port`: on the same network, through Tailscale, or over the internet with **Reach this PC from anywhere** (below — nothing to install on the phone). **Off by default** — turn it on in *Devices*, or set `link.enabled`.
 
 ### Two kinds of device
 
@@ -689,6 +689,21 @@ The common ones work in the languages above too ("manda este prompt al PC de Gia
 - **Discovery** is mDNS (`_saint._tcp`, via `zeroconf`) plus a small UDP beacon on port 8766. Both only *advertise* an address; they carry no trust. Paired devices dial each other by the last address they saw, or you can type `IP:port`.
 - **Firewall.** When Link starts, SAINT asks once (an admin prompt) to add a Windows Firewall rule for port 8765 from the local network and Tailscale (100.64.0.0/10) only — a dismissed "allow access?" prompt, or a Wi-Fi Windows calls "public", used to block devices that were "connected" in Tailscale. `link.manage_firewall: false` turns this off.
 
+### Reach this PC from anywhere (no Tailscale)
+
+*Devices → Away from home → Reach this PC from anywhere* (`link.remote_access`, off by default; `modules/link/remote.py`). When it's on, SAINT:
+
+1. asks your router to forward TCP 8765 to this PC (**UPnP**; the mapping is renewed every 25 minutes and removed when you turn it off) and learns the router's public address;
+2. also listens on **IPv6** — most home connections give each PC a public IPv6 address and most mobile networks are IPv6, so the phone can often dial the PC directly with no port forwarding;
+3. asks once (admin prompt) for a firewall rule *SAINT Link (anywhere)* for the port;
+4. lists those addresses — plus one you type yourself (`link.public_address`: your own port forward's address or a dynamic-DNS name) — in the pairing code and in every hello, so a phone that connected once at home dials them later.
+
+The card says what worked. It can't help when the router has UPnP off (turn it on, or forward the port yourself and type the address), behind carrier-grade NAT, or when the router's IPv6 firewall drops incoming connections — Tailscale still works then. It's safe to expose: every connection is a Noise handshake that needs a paired device's key, or the one-time pairing code while a pairing window is open. If your home's public address changes while you're away, the phone learns the new one the next time it connects at home (a dynamic-DNS name avoids that).
+
+### Every device's log in one place
+
+While your own devices are connected, this PC collects their logs into `logs/devices/<device>-<id>.log` in SAINT's data folder (`link.collect_logs`, on by default): it asks each one for the lines it hasn't fetched yet (`log.get`), once a minute and whenever a device connects. The iPhone app and other PCs keep their recent log in memory for this. *Devices → Device logs* opens the folder. Only your own devices are asked, and only your own devices get an answer.
+
 ### Configuration
 
 ```json
@@ -696,7 +711,8 @@ The common ones work in the languages above too ("manda este prompt al PC de Gia
   "enabled": false, "port": 8765, "bind": "0.0.0.0", "device_name": "", "discoverable": true,
   "auto_connect": true, "sync_interval_sec": 60, "share_context": true, "announce": true,
   "approval_timeout_sec": 60, "max_file_mb": 1024, "max_prompt_chars": 2000, "inbox_dir": "",
-  "prompt_targets": {}, "shared_scenes": []
+  "prompt_targets": {}, "shared_scenes": [], "manage_firewall": true,
+  "remote_access": false, "public_address": "", "collect_logs": true
 }
 ```
 
@@ -840,12 +856,14 @@ Main sections: `voice.*` (mic, VAD, barge-in, STT, TTS, wake word, `music_hotwor
 ## Logging and debugging
 
 - Log file: `data/logs/saint.log` (rotating, 2 MB × 5), also printed to the terminal.
+- Your phone's and other PCs' logs: `data/logs/devices/` (see [SAINT Link](#saint-link)), collected while they're
+  connected; *Devices → Device logs* opens it.
 - Recorded: wake detections and scores, listening state changes, STT results and latency, the
   selected intent, tool start/finish/failure with duration, Spotify actions and errors, memory
   operations, automation creation/execution, desktop actions, TTS start/stop, barge-ins and
   interruptions, and all errors.
 - High-frequency events (audio levels, tokens, per-chunk TTS timing, wake scores) are never logged
-  per occurrence.
+  per occurrence; what's playing is logged when the song or play state changes, not every few seconds.
 - Settings → Advanced: log level (Verbose / Normal / Errors Only) and **Debug mode**. Settings →
   Wake Word → *Debug* logs every wake score above 0.1.
 
@@ -899,6 +917,8 @@ Spotify, screen, mouse/keyboard, windows, browser, multi-step, natural answers).
 | Problem | Fix |
 |---|---|
 | Mic meter flat / SAINT never hears you | Settings → Voice → Input device, then **Test (3 s)**. With Voicemeeter, make sure your microphone is actually routed to the bus SAINT listens on (e.g. "Voicemeeter Out B1"). |
+| Bluetooth headphones (AirPods) sound bad on the PC | Something opened their microphone, which switches them to call quality. SAINT remembers its mic by name and never opens a Bluetooth headset's mic unless you pick it (Settings → Voice; `voice.allow_bluetooth_mic`). If they still drop, check Voicemeeter's hardware inputs and Windows' default communications device. |
+| The phone can't reach the PC away from home | *Devices → Reach this PC from anywhere* (or Tailscale); open the app once at home afterwards. *Check connection* on the device says which address fails. |
 | Wake word never triggers | Say "**Hey** SAINT". Raise the sensitivity and watch the live score in Settings → Wake Word. Check the status line for model errors. |
 | Wake word triggers on TV or speech | Lower the sensitivity or add a confirmation frame. |
 | "Wake word unavailable" | The status line gives the reason (missing model, missing feature models, onnxruntime not installed). |

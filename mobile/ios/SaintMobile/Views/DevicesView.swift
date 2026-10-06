@@ -4,7 +4,14 @@ import SaintCore
 
 struct DevicesView: View {
     @EnvironmentObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
     @State private var pairing = false
+    /// Opened as a sheet (from the PC chip or Settings): it gets a Done button.
+    private let asSheet: Bool
+
+    init(asSheet: Bool = false) {
+        self.asSheet = asSheet
+    }
 
     private var own: [PeerInfo] { model.peers.filter { $0.isOwn } }
     private var friends: [PeerInfo] { model.peers.filter { !$0.isOwn } }
@@ -75,12 +82,14 @@ struct DevicesView: View {
             .tint(Theme.accent)
             .navigationTitle("Devices")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    SyncNowButton()
                     Button { pairing = true } label: { Image(systemName: "plus") }.accessibilityLabel("Add a device")
                 }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { Task { await model.syncNow() } } label: { Image(systemName: "arrow.triangle.2.circlepath") }
-                        .accessibilityLabel("Sync now")
+                if asSheet {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Done") { dismiss() }.tint(Theme.accent)
+                    }
                 }
             }
             .sheet(isPresented: $pairing) { PairSheet() }
@@ -111,7 +120,8 @@ struct DevicesView: View {
         .listRowBackground(Color.clear)
     }
 
-    /// Reaching your PC away from home: through Tailscale (the PC puts its Tailscale address in the pairing code).
+    /// Reaching your PC away from home: its internet address ("Reach this PC from anywhere" on the PC — no app needed
+    /// here) or Tailscale. The PC lists them in the pairing code and every time it connects.
     private var remoteSection: some View {
         let remote = own.compactMap { peer -> (PeerInfo, String)? in
             guard let host = model.remoteHost(of: peer.id) else { return nil }
@@ -120,12 +130,14 @@ struct DevicesView: View {
         return Section {
             if let r = remote {
                 SettingRow(icon: "globe", title: "Reachable from anywhere",
-                           subtitle: "\(r.0.name) over Tailscale (\(r.1)). Keep Tailscale on, on this iPhone too.",
+                           subtitle: AppModel.isTailscale(r.1)
+                               ? "\(r.0.name) over Tailscale (\(r.1)). Keep Tailscale on, on this iPhone too."
+                               : "\(r.0.name) over the internet (\(r.1)) — nothing to install on this iPhone.",
                            iconTint: Theme.success, tile: Theme.successSoft)
                     .listRowInsets(EdgeInsets())
             } else {
                 SettingRow(icon: "wifi", title: "Only on your Wi-Fi",
-                           subtitle: "Install Tailscale on your PC and this iPhone (same account), then pair again — or add the PC's Tailscale address in its page.",
+                           subtitle: "On your PC: Devices → turn on “Reach this PC from anywhere”, then open SAINT here once at home. Or use Tailscale on both.",
                            iconTint: Theme.accent, tile: Theme.accentSoft) {
                     Link(destination: URL(string: "https://tailscale.com/download/ios")!) {
                         Text("Get").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.onAccent)
@@ -327,7 +339,13 @@ struct DeviceDetailView: View {
             }
             if live.isOwn {
                 Section {
-                    Button { Task { await model.syncNow() } } label: { Label("Sync what we've learned", systemImage: "arrow.triangle.2.circlepath") }
+                    Button { Task { await model.syncNow() } } label: {
+                        HStack {
+                            Label(model.syncing ? "Syncing…" : "Sync what we've learned", systemImage: "arrow.triangle.2.circlepath")
+                            if model.syncing { Spacer(); ProgressView() }
+                        }
+                    }
+                    .disabled(model.syncing)
                 }
             }
             Section {
@@ -337,7 +355,8 @@ struct DeviceDetailView: View {
                           systemImage: "globe")
                 }
             } footer: {
-                Text("The away-from-home address is the PC's Tailscale address (100.x.y.z, shown on the PC's Devices page). "
+                Text("The away-from-home address is the PC's internet address (shown on its Devices page when “Reach this PC "
+                     + "from anywhere” is on — this phone learns it by itself at home) or its Tailscale address (100.x.y.z). "
                      + "SAINT tries it whenever your Wi-Fi address doesn't answer.")
             }
             Section {
@@ -364,12 +383,12 @@ struct DeviceDetailView: View {
             Text("Only on this phone. To rename this iPhone everywhere, use Settings → This phone.")
         }
         .alert("Away-from-home address", isPresented: $editingRemote) {
-            TextField("100.x.y.z or name.ts.net", text: $remoteHost)
+            TextField("Internet address, name, or 100.x.y.z", text: $remoteHost)
                 .textInputAutocapitalization(.never).autocorrectionDisabled()
             Button("Save") { model.setRemoteHost(live.id, host: remoteHost) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your PC's Tailscale address. Leave empty to remove it.")
+            Text("Your PC's internet address (or dynamic-DNS name) or its Tailscale address. Leave empty to remove it.")
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
             if case .success(let url) = result { Task { await model.send(file: url, to: live.id) } }
@@ -463,5 +482,22 @@ struct DeviceDetailView: View {
             }
             working = false
         }
+    }
+}
+
+/// "Sync now" in a toolbar: a spinner while it runs, so a press always shows something happened.
+struct SyncNowButton: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Button { Task { await model.syncNow() } } label: {
+            if model.syncing {
+                ProgressView()
+            } else {
+                Image(systemName: "arrow.triangle.2.circlepath")
+            }
+        }
+        .disabled(model.syncing)
+        .accessibilityLabel(model.syncing ? "Syncing" : "Sync now")
     }
 }

@@ -3,6 +3,25 @@
 Moved out of the README on 2026-10-05; newest first.
 
 
+**2026-10-06 — your phone from anywhere without Tailscale, every device's log on your PC:**
+
+- **Reach this PC from anywhere.** Devices → *Away from home*: SAINT forwards its port on your router (UPnP),
+  listens on IPv6, adds the firewall rule, and gives your phone the addresses — no Tailscale or other app needed.
+  You can also type your own port forward's address or a dynamic-DNS name. The card says what worked.
+- **Logs in one place.** Your PC collects the iPhone's and your other PCs' logs into `logs/devices/` while they're
+  connected (*Devices → Device logs*). "Now playing" is no longer logged every five seconds.
+- **AirPods on the PC keep full quality.** The microphone was remembered by number; connecting AirPods renumbered the
+  devices and SAINT opened their hands-free mic, which drops them to call quality. It's now remembered by name, and a
+  Bluetooth headset's mic is never opened unless you choose it.
+- **Albums play as albums.** "Play Fancy That by PinkPantheress" played her song "Tonight" plus a radio of similar
+  songs; an album whose name matches better now wins (misheard artists too), and "X album by Y" / "Y's album X" work.
+- **"That's not the vibe I asked for"** skips the song and keeps it out of that mix without counting it as a dislike.
+- **Mini player:** the album art grows to any size (it stopped at about 250 px wide), a *Big album art* preset, it
+  can't be dragged off screen, and its volume slider is Spotify's own volume.
+- **iPhone:** History and Memory tabs (with search; Devices opens from the PC chip and Settings), Settings text no
+  longer runs under switches and pickers, and Sync now shows a spinner and its result on every tab.
+
+
 **Since 2.2 — SAINT learns long tasks by asking, and interrupting works mid-automation:**
 
 - **Walk SAINT through a task once.** Ask for something it was never taught that takes several steps ("write an
