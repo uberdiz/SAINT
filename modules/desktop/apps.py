@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import re
+import struct
 import subprocess
 import threading
 from dataclasses import dataclass
@@ -98,24 +99,85 @@ def _norm(s: str) -> str:
 
 
 class _ShortcutReader:
-    """Reads where a .lnk points (WScript.Shell, one COM object per thread)."""
-
-    def __init__(self):
-        self._local = threading.local()
+    """Reads where a .lnk points by parsing the file ([MS-SHLLINK] LinkInfo) — no COM.
+    A cached WScript.Shell object went stale and crashed the whole process with an access
+    violation (the release build's tests, 2026-10-06)."""
 
     def target(self, path: str) -> str:
-        if os.name != "nt" or not path.lower().endswith(".lnk"):
+        if not path.lower().endswith(".lnk"):
             return ""
-        shell = getattr(self._local, "shell", None)
         try:
-            if shell is None:
-                import pythoncom
-                import win32com.client
-                pythoncom.CoInitialize()
-                shell = self._local.shell = win32com.client.Dispatch("WScript.Shell")
-            return str(shell.CreateShortcut(path).TargetPath or "")
-        except Exception:
+            with open(path, "rb") as f:
+                data = f.read(1 << 20)
+            return lnk_target(data)
+        except (OSError, ValueError, IndexError, struct.error):
             return ""
+
+
+def _idlist_path(ids: bytes) -> str:
+    """A file-system path from a shell item ID list: a drive item ("C:\\") then folder/file
+    items (long name from their 0xBEEF0004 extension block, else the 8.3 name)."""
+    parts, i = [], 0
+    while i + 2 <= len(ids):
+        size = struct.unpack_from("<H", ids, i)[0]
+        if size < 3:
+            break
+        item, kind = ids[i:i + size], ids[i + 2] & 0x70
+        if kind == 0x20:                                  # volume: "C:\"
+            m = re.match(rb"([A-Za-z]:\\)", item[3:])
+            if m:
+                parts = [m.group(1).decode()]
+        elif kind == 0x30 and parts:                      # file or folder entry
+            ext = item.find(b"\x04\x00\xef\xbe")
+            names = re.findall(rb"((?:[^\x00]\x00){1,255})\x00\x00", item[ext:]) if ext > 0 else []
+            if names:
+                parts.append(names[0].decode("utf-16-le", "replace"))
+            else:
+                short = item[14:].split(b"\0", 1)[0]
+                parts.append(short.decode("latin-1"))
+        i += size
+    if not parts or not parts[0].endswith("\\"):
+        return ""
+    return parts[0] + "\\".join(parts[1:])
+
+
+def lnk_target(data: bytes) -> str:
+    """The local path a shell link points at, or "" (advertised / URL / network-only links)."""
+    if len(data) < 0x4C or struct.unpack_from("<I", data, 0)[0] != 0x4C:
+        return ""
+    flags = struct.unpack_from("<I", data, 0x14)[0]
+    pos = 0x4C
+    idlist_path = ""
+    if flags & 0x1:                                       # HasLinkTargetIDList
+        size = struct.unpack_from("<H", data, pos)[0]
+        idlist_path = _idlist_path(data[pos + 2:pos + 2 + size])
+        pos += 2 + size
+    if not flags & 0x2:                                   # HasLinkInfo (absent when the target never existed)
+        return idlist_path
+    info = pos
+    header = struct.unpack_from("<I", data, info + 4)[0]
+    info_flags = struct.unpack_from("<I", data, info + 8)[0]
+    if not info_flags & 0x1:                              # VolumeIDAndLocalBasePath
+        return idlist_path
+    base_off, suffix_off = struct.unpack_from("<II", data, info + 0x10)
+
+    def ansi(off):
+        end = data.index(b"\0", off)
+        return data[off:end].decode("mbcs" if os.name == "nt" else "latin-1", "replace")
+
+    def wide(off):
+        end = off
+        while data[end:end + 2] != b"\0\0":
+            end += 2
+        return data[off:end].decode("utf-16-le", "replace")
+    if header >= 0x24:                                    # Unicode paths present
+        base_u, suffix_u = struct.unpack_from("<II", data, info + 0x1C)
+        base, suffix = wide(info + base_u), (wide(info + suffix_u) if suffix_u else "")
+    else:
+        base, suffix = ansi(info + base_off), (ansi(info + suffix_off) if suffix_off else "")
+    if suffix and not base.endswith("\\"):
+        base += "\\"
+    return base + suffix
 
 
 _shortcuts = _ShortcutReader()
