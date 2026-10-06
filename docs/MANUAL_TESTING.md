@@ -1,81 +1,87 @@
 # SAINT manual testing — what's left
 
-Everything you marked **Y** up to 2026-10-05 is confirmed and has been removed (installer + Kokoro voice,
-misheard app names, skip N, scene stop, Ollama auto-start, task resume, hover, Gmail lesson by demonstration).
-What's here is fixed since your last pass (re-check), still open, or never tested. Tick an item only after
+Everything you marked **Y** up to 2026-10-06 is confirmed and has been removed (the release installer, the mini
+player's album-art mode / presets / voice sizing / live updates / moving it by voice, file and folder replies,
+English replies for shortcuts, "stop speaking", "Hey SAINT" alone, the email scene in one breath, typing in
+Notepad, music during a lesson, "make it shorter", moving files into a new folder, short replies after multi-step
+tasks, nicknames for Instagram chats, the iPhone keyboard's Send key, text fitting on the iPhone, the iPhone away
+from home over Tailscale, the iPhone answering when Ollama is down, and History across devices).
+
+What's here was fixed since your last pass (re-check), is still open, or was never tested. Tick an item only after
 you've seen it work on the real machine or phone, and add notes the same way as before (`[N — what happened]`).
 
 **Test without your real data:** `run.bat --profile clean` (fresh install) or `run.bat --profile demo` (sample
 scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-…` tests on a copy of your data.
 
-## 1. Fixed after your 2026-10-05 notes — re-check
+## 1. Fixed after your 2026-10-06 notes — re-check
+
+**Your phone away from home, without Tailscale** (new: Devices → *Reach this PC from anywhere*)
+- [ ] Turn it on and accept the Windows prompt (a firewall rule for SAINT's port from anywhere). The card says what
+      worked: the router port (UPnP), IPv6, or both. Your Xfinity gateway didn't answer UPnP when tested — if the card
+      says so, either turn on UPnP in the Xfinity app, or forward TCP 8765 to this PC there and type your address
+      (or a dynamic-DNS name) in the box under the switch.
+- [ ] Open SAINT on the iPhone once at home (so it learns the new addresses), then switch to cellular with Tailscale
+      off: the iPhone reaches the PC and answers with its model. Devices → your PC says “over the internet”.
+- [ ] Turn the switch off: the iPhone can no longer reach the PC from cellular (Tailscale still works).
 
 **Mini player**
-- [ ] Drag any edge or corner: it resizes up/down *and* side to side, and keeps that size after a restart.
-- [ ] Make it small or square: only the album art shows. Hovering shows title, progress, play/skip and volume;
-      a new track shows its name for a few seconds.
-- [ ] Right-click → Size presets (Album art, Compact, Normal, Wide, Large) and the Lyrics toggle work.
-- [ ] “Make the mini player smaller” / “bigger” / “just show the album art” / “normal size”.
-- [ ] Track, progress bar and lyrics change on their own — no clicking or moving it — on the desktop and in a game
-      (turn it on by voice while the game runs: it appears and is the right size straight away).
-- [ ] Volume: the slider and mute button change Spotify's volume; with a YouTube video playing they change the
-      browser's volume. Scrolling over the player changes volume; ctrl+scroll still fades it.
-- [ ] “Move the mini player to the top left of my second screen”, then “right a bit” and “down a couple pixels”:
-      it moves each time and never turns off.
-
-**Voice and language**
-- [ ] “Make a new folder in my Downloads and add a text file to it”: the reply says “Downloads”, not
-      `C:\Users\…`, in SAINT's normal (not French) accent.
-- [ ] “Open this "C:\…\Antigravity IDE.lnk" for Antigravity” gets an English reply; “Open Antigravity” opens
-      Antigravity IDE.
-- [ ] “Stop speaking, friend!” while SAINT talks: it stops talking and the mic stays on.
-- [ ] “Hey SAINT” alone (no wake chime) → “I'm here — what do you need?”.
-
-**Email and typing**
-- [ ] “Hey SAINT, write an email to Mr Norton about Friday” in one breath runs the email scene without asking
-      who or what.
-- [ ] Say a new person's address (“J. Norton at EssexTech.net”): SAINT says “I've got j.norton@essextech.net —
-      is that right?”; after “yes” the next email to them doesn't ask again.
-- [ ] An email body of 600+ characters goes in complete (no 500-character error).
-- [ ] “Type out a summary of what SAINT is” in Notepad: clean text, no “pppp gggg”; what you'd copied before is
-      still on the clipboard afterwards.
+- [ ] Drag a corner out into a big square: the album art keeps growing, wide and tall (it stopped at about 250 px
+      wide). A wide strip shows the full player, and its cover is bigger too.
+- [ ] Right-click → Size presets → **Big album art**. Turning lyrics on from a big square switches to the player
+      with lyrics.
+- [ ] Drag it past any screen edge: it stops at the edge. It still moves onto your other monitor.
+- [ ] Volume: change Spotify's volume on the phone or in Spotify — the slider follows; move the slider — Spotify's own
+      volume changes (it used to change the Windows mixer level for Spotify instead). A YouTube video still uses the
+      browser's volume.
 
 **Spotify**
-- [ ] “Play the album, Fancy That”: the whole album plays (not one song), on repeat, shuffle as you had it.
-- [ ] “This is not the kind of song I was talking about” skips the song and steers away from it.
-- [ ] With an unfinished lesson open (e.g. after “I haven't learned how to …”), “play …”, “skip” and “move the
-      mini player …” just happen — no “What's next?” after each.
+- [ ] “Play Fancy That by PinkPantheress” (and “by Pink Panthers”, misheard), “play the album Fancy That”, “play
+      Fancy That album by PinkPantheress”: the whole album from track 1, on repeat, shuffle as you had it — no single
+      song with “songs like it” queued.
+- [ ] “That's not the type of music I said” / “that's not the vibe I asked for”: it skips and says the song isn't
+      counted as one you dislike. A song you actually dislike (“I'm not feeling this song”) still counts.
+
+**AirPods on the PC**
+- [ ] Connect AirPods, then start SAINT: music and SAINT's voice stay in full quality (not call quality). Cause: the
+      microphone was saved as a number, and connecting AirPods renumbered the devices so SAINT opened the AirPods'
+      hands-free mic. It's now saved by name (your Voicemeeter Out B1).
+- [ ] Settings → Voice → Input device lists mics by name; a Bluetooth headset mic is labelled. If SAINT had to use a
+      different mic than the one you picked, it says which and why, once.
+
+**Logs from every device in one place**
+- [ ] With the iPhone (new build) and any other PC connected, Devices → **Device logs** opens
+      `%LOCALAPPDATA%\SAINT\logs\devices` with one log per device, and new lines keep arriving each minute.
+- [ ] `saint.log` no longer has a “media.changed” line every 5 seconds — only when the song or play state changes.
+
+**iPhone** (needs a new build)
+- [ ] Tabs: Talk, Music, **History**, **Memory**, Settings. History has a summary (today / 7 days / % worked) and a
+      search; Memory has a search. Devices opens from the PC chip on Talk and from Settings (top of *This phone*).
+- [ ] Settings on the smallest supported iPhone: no text runs under switches, pickers or buttons. Output's picker
+      sits under its label.
+- [ ] **Sync now** (Devices toolbar, a device's page, Memory, History's menu, pull to refresh): a spinner, then a
+      banner saying what synced — on whichever tab you're on (it used to show only on Talk, so it looked dead).
 
 ## 2. Still open (not fixed yet)
 
-- [ ] “Make it shorter” / “reduce the character count” while SAINT reads a draft back rewrites it (only worked on
-      pasted text).
-- [ ] Mood mixes match the mood (“play something hype” played “RUN” by Brahman); the new mix replaces the whole
-      old queue.
-- [ ] “Make a new folder in Downloads”, then “put that text file in the new folder” moves the file.
-- [ ] Replies after a multi-step task are short (it read out every step and path).
-- [ ] The email scene asked “What's Personal's email address?” — the account name was taken as the recipient.
-- [ ] “When I say John I mean Gian”, then “open my messages with John” opens the Instagram chat with Gian (it
-      looked for an app called “messages with john”).
-- [ ] iPhone + AirPods: audio stays out of call quality; the audio-route UI is compact; output follows the phone
-      (speaker for Spotify, Bluetooth mic for input).
-- [ ] iPhone “Sync now” doesn't crash, and the PC doesn't then say you're on a call.
-- [ ] iPhone: the keyboard's Send key sends.
-- [ ] iPhone: text fits on every supported iPhone size.
+- [ ] **Mood mixes** match the mood (“kinda works but some songs aren't the mood I asked for and it doesn't listen to
+      that very well”).
+- [ ] **Changing the email account** in the email scene (“can't change my email, it doesn't know how”). The scene used
+      to ask “What's Personal's email address?” — the account name was taken as the recipient.
+- [ ] Say a new person's address (“J. Norton at EssexTech.net”): SAINT says “I've got j.norton@essextech.net — is that
+      right?”; after “yes” the next email to them doesn't ask again.
+- [ ] An email body of 600+ characters goes in complete (no 500-character error).
+- [ ] One request after a multi-step task still got a long reply — note which one when you see it again.
+- [ ] iPhone “Sync now” doesn't crash, and the PC doesn't then say you're on a call (the button now responds — see 1).
 
 ## 3. Never tested yet
 
 **SAINT Link (PC ↔ PC, phone)**
 - [ ] PC ↔ PC on the same Wi-Fi: only the 8-character code is needed to pair.
 - [ ] PC ↔ PC over Tailscale only (different networks): the code alone pairs.
-- [ ] First Link start: one admin prompt for the firewall; afterwards the phone connects over Tailscale away
-      from home.
-- [ ] Devices → a disconnected device → “Check connection” names each address and what's blocking it.
+- [ ] First Link start: one admin prompt for the firewall.
+- [ ] Devices → a disconnected device → “Check connection” names each address (Wi-Fi, Tailscale, internet) and
+      what's blocking it.
 - [ ] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
-- [ ] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
-- [ ] Ollama stopped on the PC: the iPhone answers with Claude / its own model instead of reading the error.
-- [ ] A command on PC A shows in PC B's History (“Other PC”) and the iPhone's Activity tab; an “ask once” answer
-      taught on A is known on B.
 
 **Watching and notifications**
 - [ ] “Tell me when Claude finishes.”
@@ -94,10 +100,11 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 
 ## 4. Release gate
 
-- [ ] The release installer (`SAINT-Setup.exe` from the GitHub release) installs and runs on a clean Windows
-      user: Kokoro voice downloads, no personal data included.
+- [ ] The release installer (`SAINT-Setup.exe` from the GitHub release) still installs and runs on a clean Windows
+      user (passed 2026-10-06; re-check on the release commit).
 - [ ] Section 1 passes.
-- [ ] iPhone + AirPods tests pass.
+- [ ] iPhone + AirPods and **PC + AirPods** pass.
+- [ ] The iOS workflow on GitHub is green for the release commit (the iPhone changes were not compiled locally).
 - [ ] Final manual run on the exact commit being released.
 
 ## Test record
@@ -105,8 +112,10 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 | Date | Commit | Area | Result | Notes |
 |---|---|---|---|---|
 | 2026-10-05 | v0.3 | Installer / voice | Pass | Build, clean install, offline install, uninstall, voice volume |
+| 2026-10-06 | 033dc49 | Mini player, voice, email, typing, Link | Mostly pass | Album-art width, off-screen drag, volume sync, album play, off-vibe skip, PC + AirPods, iPhone Settings and Sync now failed — fixed in the next commit |
+| | | Remote access (no Tailscale) | | |
 | | | Mini player | | |
-| | | Voice / language | | |
-| | | Email / typing | | |
 | | | Spotify | | |
-| | | Link / iPhone | | |
+| | | PC + AirPods | | |
+| | | Device logs | | |
+| | | iPhone tabs / Settings / Sync | | |

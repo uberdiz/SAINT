@@ -102,6 +102,42 @@ def lan_addresses() -> List[str]:
     return list(dict.fromkeys(sorted(found, key=rank) + tailscale))
 
 
+def global_ipv6_addresses() -> List[str]:
+    """This machine's internet-routable IPv6 addresses (2xxx:/3xxx:), the one it uses to reach the
+    internet first. With IPv6 there's no router port to forward: a phone on a mobile network (IPv6
+    almost everywhere) can dial the PC directly when the router's IPv6 firewall lets it in."""
+    import ipaddress
+    found: List[str] = []
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+            s.connect(("2001:4860:4860::8888", 9))          # no packet is sent
+            found.append(s.getsockname()[0].split("%")[0])
+    except OSError:
+        pass
+    try:
+        import psutil
+        stats = psutil.net_if_stats()
+        for name, addrs in psutil.net_if_addrs().items():
+            st = stats.get(name)
+            if (st is not None and not st.isup) or any(v in name.lower() for v in _VIRTUAL_IF) \
+                    or "tailscale" in name.lower():
+                continue
+            for a in addrs:
+                if a.family == socket.AF_INET6:
+                    found.append(a.address.split("%")[0])
+    except Exception:
+        pass
+    out = []
+    for a in found:
+        try:
+            ip = ipaddress.IPv6Address(a)
+        except ValueError:
+            continue
+        if ip.is_global and not ip.ipv4_mapped and a not in out:
+            out.append(a)
+    return out[:3]
+
+
 def dial_first(hosts: List[str], port: int, timeout: float) -> tuple:
     """TCP-connect to every address at once and keep the first that answers ("happy eyeballs").
     A phone or PC away from home used to wait out each dead home address in turn before trying
@@ -317,12 +353,14 @@ class LinkNode:
         self._lock = threading.RLock()
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=12, thread_name_prefix="link")
         self._server: Optional[socket.socket] = None
+        self._server6: Optional[socket.socket] = None        # IPv6, only for "reach this PC from anywhere"
         self._threads: List[threading.Thread] = []
         self._stop = threading.Event()
         self.port = 0
         self.address_hints: Dict[str, tuple] = {}       # peer id -> (host, port) from discovery
         self._backoff: Dict[str, tuple] = {}            # peer id -> (next try, delay)
         self.auto_connect = True
+        self.public_addrs: Callable[[], List[str]] = lambda: []    # the router's address (modules/link/remote.py)
 
     # ------------------------------------------------------------------ #
     def emit(self, name: str, payload: dict):
@@ -339,7 +377,9 @@ class LinkNode:
         if self.port:
             hello["port"] = self.port
             try:
-                hello["addrs"] = lan_addresses()[:8]     # so the other side can find us on any network
+                # So the other side can find us on any network: home, Tailscale, the internet.
+                lan = lan_addresses()
+                hello["addrs"] = list(dict.fromkeys(lan[:1] + list(self.public_addrs() or []) + lan[1:]))[:8]
             except Exception:
                 pass
         hello.update(extra)
@@ -366,8 +406,43 @@ class LinkNode:
         log.info("link.listening %s:%d device=%s", host, self.port, self.identity.device_id)
         return self.port
 
+    def start_ipv6(self) -> bool:
+        """Also listen on IPv6 (same port), for devices away from home. Safe to call again."""
+        if self._server is None or not socket.has_ipv6:
+            return False
+        if self._server6 is not None:
+            return True
+        try:
+            srv = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+            srv.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("::", self.port))
+            srv.listen(16)
+        except OSError as e:
+            log.info("link.ipv6_unavailable %s", e)
+            return False
+        self._server6 = srv
+        t = threading.Thread(target=self._accept_loop, args=(True,), daemon=True, name="link-accept6")
+        t.start()
+        self._threads.append(t)
+        log.info("link.listening [::]:%d", self.port)
+        return True
+
+    def stop_ipv6(self):
+        srv, self._server6 = self._server6, None
+        if srv is not None:
+            try:
+                srv.close()
+            except OSError:
+                pass
+
+    @property
+    def ipv6_listening(self) -> bool:
+        return self._server6 is not None
+
     def stop(self):
         self._stop.set()
+        self.stop_ipv6()
         srv, self._server = self._server, None
         if srv is not None:
             try:
@@ -454,9 +529,9 @@ class LinkNode:
     # ------------------------------------------------------------------ #
     # Server side
     # ------------------------------------------------------------------ #
-    def _accept_loop(self):
+    def _accept_loop(self, v6: bool = False):
         while not self._stop.is_set():
-            srv = self._server
+            srv = self._server6 if v6 else self._server
             if srv is None:
                 return
             try:

@@ -394,12 +394,17 @@ _REJECT_TRACK = re.compile(
     r"|^(?:i\s+)?(?:don'?t|do not)\s+(?:want|wanna)\s+(?:to\s+)?(?:hear|listen to)\s+(?:this|it|that)(?:\s+(?:one|song|track))?"
     r"|^(?:this|that)\s+(?:song|track|one)\s+(?:is\s+)?(?:boring|bad|trash|annoying|not it)"
     # "This is not the kind of song I was talking about" / "that's not what I meant" (2026-10-05)
-    r"|^(?:this|that|it)(?:'s|\s+is|\s+isn'?t)\s+(?:not\s+)?(?:the\s+|a\s+|my\s+)?(?:kind|sort|type|vibe|style)\s+"
-    r"(?:of\s+(?:song|track|music|thing|stuff|vibe)\s+)?(?:i\s+(?:was\s+)?(?:talking about|asked for|meant|wanted|"
-    r"had in mind|was going for|like)|i\s+want)"
-    r"|^(?:this|that)(?:'s|\s+is)\s+not\s+(?:very\s+)?(?:hype|chill|energetic|upbeat|sad|calm|relaxing|mellow)"
-    r"(?:\s+at\s+all)?"
     r"|^(?:ugh|nah|no),?\s+(?:skip|next|change)(?:\s+(?:it|this|this one))?$")
+# "That's not the vibe I asked for": the song may be fine — it just isn't what was asked for. Skip it
+# without counting it as disliked (2026-10-06: a liked song was marked down for being off-mood).
+_OFF_VIBE = re.compile(
+    r"^(?:no+[,.!]*\s+|nah[,.!]*\s+)?(?:this|that|it)(?:'?s|\s+is|\s+isn'?t)\s+(?:not\s+)?(?:really\s+|exactly\s+)?"
+    r"(?:the\s+|a\s+|my\s+)?(?:kind|sort|type|vibe|style|genre|mood)\s+"
+    r"(?:of\s+(?:song|songs|track|tracks|music|thing|stuff|vibe)\s+)?"
+    r"(?:(?:that\s+)?i\s+(?:was\s+)?(?:talking about|asked for|asked|said|requested|meant|wanted|had in mind|"
+    r"was going for|like|picked)|i\s+want)"
+    r"|^(?:this|that)(?:'?s|\s+is)\s+not\s+(?:very\s+)?(?:hype|chill|energetic|upbeat|sad|calm|relaxing|mellow)"
+    r"(?:\s+at\s+all)?")
 _SIMILAR_TO = re.compile(
     r"^(?:(?:play|put on|give me|find|queue up|recommend|suggest|i want|i'd like|how about)\s+(?:me\s+)?)?"
     r"(?:something|anything|some\s+(?:songs|music|tracks|stuff)|songs|music|tracks|stuff|more)\s+"
@@ -589,6 +594,10 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         n = max(1, min(10, n))
         return SpotifyIntent("next", "spotify.next", {}) if n == 1 else \
             SpotifyIntent("skip_n", "spotify.skip", {"count": n})
+    m = _OFF_VIBE.search(lower)
+    if m:
+        mood = next((v for k, v in _NOT_MOOD_WORDS.items() if re.search(rf"\b{k}\b", lower)), "")
+        return SpotifyIntent("not_mood", "spotify.not_mood", {"mood": mood, "which": "current"})
     if _REJECT_TRACK.search(lower):
         return SpotifyIntent("next_reject", "spotify.next", {})
     if _CHANGE_TRACK.match(lower):
@@ -823,7 +832,16 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     am = re.match(r"^(?:the |that |this |an? )?album[,:]?\s+(?:called |named |titled )?(.+)$", q_orig, re.I) \
         or re.match(r"^(.+?),? (?:the |full |whole |entire )?album$", q_orig, re.I)
     if am:
-        return SpotifyIntent("play_album", "spotify.play_query", {"query": am.group(1).strip(), "kind": "album"})
+        return SpotifyIntent("play_album", "spotify.play_query", {"query": am.group(1).strip(" ,.!?"), "kind": "album"})
+    # "Fancy That album by PinkPantheress", "PinkPantheress's album Fancy That"
+    am = re.match(r"^(?:the )?(.+?),? (?:the |full |whole |entire )?album,? (?:by|from) (.+)$", q_orig, re.I)
+    if am:
+        return SpotifyIntent("play_album", "spotify.play_query",
+                             {"query": f"{am.group(1).strip()} by {am.group(2).strip(' ,.!?')}", "kind": "album"})
+    am = re.match(r"^(.+?)(?:'s|s') (?:new |newest |latest )?album,? (?:called |named )?(.+)$", q_orig, re.I)
+    if am and not re.match(r"^(?:called|named)$", am.group(2).strip(), re.I):
+        return SpotifyIntent("play_album", "spotify.play_query",
+                             {"query": f"{am.group(2).strip(' ,.!?')} by {am.group(1).strip()}", "kind": "album"})
     ar = re.match(r"^(?:(?:some |more )?(?:songs|music|tracks|stuff) (?:by|from)|the artist|artist) (.+)$", q_orig, re.I)
     if ar:
         return SpotifyIntent("play_artist", "spotify.play_query", {"query": ar.group(1).strip(), "kind": "artist"})
@@ -868,11 +886,12 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
     if k == "not_mood":
         what = f"{r.get('track') or 'That one'}" + (f" by {r['artist']}" if r.get("artist") else "")
         mood = r.get("mood")
-        fits = f"isn't {mood}" if mood else "doesn't fit"
+        fits = f"isn't {mood}" if mood else "isn't the vibe you asked for"
         if r.get("which") == "next":
             return f"Got it — {what} {fits}. I'll skip it when it comes up" + \
                 (f" and keep it out of {mood} mixes." if mood else ".")
-        return f"Got it — {what} {fits}. Skipped" + (f", and I'll keep it out of {mood} mixes." if mood else ".")
+        return f"Got it — {what} {fits}. Skipped" + (f", and I'll keep it out of {mood} mixes." if mood else
+                                                     " — it isn't counted as a song you dislike.")
     if k == "playlist_remove":
         return f"Took {r.get('track') or 'it'} out of {r.get('playlist') or 'the playlist'} and skipped it."
     if k == "queue_list":

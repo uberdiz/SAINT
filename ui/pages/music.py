@@ -273,8 +273,14 @@ class NowPlaying(QWidget):
         API when it's connected, else that app's own Windows volume (read off the GUI thread)."""
         if self.vol_icon.isHidden():
             return
-        app = "" if str(np.get("source", "")).startswith("spotify") and self._sp_ok else actions.app_stem(np)
+        app = actions.app_stem(np)
+        if self._sp_ok and (str(np.get("source", "")).startswith("spotify") or app == "spotify"):
+            # Spotify's own volume (what its slider and phone app show), not the Windows mixer's
+            # level for Spotify.exe — that left the two out of sync (2026-10-06).
+            app = ""
         if app == self._app_vol:
+            if not app:
+                self._show_volume(ui_bus.spotify)      # follow changes made in Spotify itself
             return
         self._app_vol = app
         if app:

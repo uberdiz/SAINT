@@ -76,6 +76,9 @@ class FakeClient:
     def artist_top_tracks(self, artist_id):
         return BAD_BUNNY if artist_id == "bb" else []
 
+    def artist_albums(self, artist_id, limit=10):
+        return []
+
     def artist(self, artist_id):
         return {"genres": ["reggaeton", "latin"]}
 

@@ -139,34 +139,55 @@ struct StatusChip: View {
 }
 
 /// The desktop's settings rows: an icon tile, a title and an optional subtitle, something on the right.
+///
+/// The text takes the room that's left and wraps; the control on the right keeps its own size and is never squeezed.
+/// (Before, both were squeezable, so on smaller iPhones long titles and subtitles ran under switches and pickers.)
+/// `stacked`: a wide control (a picker with a long choice) goes under the text instead of beside it.
 struct SettingRow<Right: View>: View {
     let icon: String
     let title: String
     var subtitle: String? = nil
     var iconTint: Color = Theme.text
     var tile: Color = Theme.raised
+    var stacked: Bool = false
     @ViewBuilder var right: () -> Right
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(alignment: stacked ? .top : .center, spacing: 12) {
             Image(systemName: icon)
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(iconTint)
                 .frame(width: 32, height: 32)
                 .background(tile, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 15)).foregroundStyle(Theme.text)
-                if let subtitle = subtitle {
-                    Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.muted)
-                        .fixedSize(horizontal: false, vertical: true)
+            if stacked {
+                VStack(alignment: .leading, spacing: 6) {
+                    texts
+                    right().fixedSize(horizontal: false, vertical: true)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                texts
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+                right().fixedSize()
             }
-            Spacer(minLength: 8)
-            right()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
         .contentShape(Rectangle())
+    }
+
+    private var texts: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 15)).foregroundStyle(Theme.text)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if let subtitle = subtitle {
+                Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 

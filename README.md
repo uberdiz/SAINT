@@ -28,7 +28,9 @@ keyboard and mouse, browser, files, reminders) and answers out loud. The languag
 - **Scenes and learning.** One phrase runs many steps; show SAINT something once and it can do it again.
 - **Memory, reminders, schedules, History** — all stored on your PC.
 - **The Halo, overlay (<kbd>Alt</kbd>+<kbd>`</kbd>) and command palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>).**
-- **SAINT Link.** Your iPhone and other PCs talk to this SAINT, encrypted, over Wi-Fi or Tailscale.
+- **SAINT Link.** Your iPhone and other PCs talk to this SAINT, encrypted — on Wi-Fi, over Tailscale, or from
+  anywhere with *Reach this PC from anywhere* (router port / IPv6, nothing to install on the phone). Their logs are
+  collected on this PC too.
 
 ## Install
 

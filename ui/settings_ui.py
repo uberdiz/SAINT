@@ -224,7 +224,7 @@ class SettingsUI(QWidget):
         box, f = self._section("Microphone")
         self.mic_combo = QComboBox()
         self._bind("voice.mic_device", self.mic_combo.currentData,
-                   lambda v: self.mic_combo.setCurrentIndex(max(0, self.mic_combo.findData(v))))
+                   lambda v: self.mic_combo.setCurrentIndex(max(0, self.mic_combo.findData(self._mic_name(v)))))
         self._populate_mics()
         mic_row = QHBoxLayout()
         mic_row.addWidget(self.mic_combo, 1)
@@ -378,23 +378,42 @@ class SettingsUI(QWidget):
         import threading
         threading.Thread(target=run, daemon=True, name="voice-preview").start()
 
+    @staticmethod
+    def _mic_name(value):
+        """The mic setting is a name; an old config holds a device number."""
+        if isinstance(value, int) and not isinstance(value, bool):
+            try:
+                import sounddevice as sd
+                return sd.query_devices(value)["name"]
+            except Exception:
+                return None
+        return value
+
     def _populate_mics(self):
+        # Stored by name: a device's number changes when Windows adds one (AirPods, a webcam).
+        from modules.voice.mic_select import is_bluetooth_headset
         self.mic_combo.clear()
         self.mic_combo.addItem("System default", None)
         try:
             import sounddevice as sd
-            devices = sd.query_devices()
-            for i, dev in enumerate(devices):
+            for dev in sd.query_devices():
                 if dev["max_input_channels"] > 0 and dev.get("hostapi", 0) == 0:
-                    self.mic_combo.addItem(f"{dev['name']}", i)
-            current = config.get("voice.mic_device", None)
-            if current is not None and self.mic_combo.findData(current) < 0 and 0 <= int(current) < len(devices):
-                self.mic_combo.addItem(f"{devices[int(current)]['name']} (#{current})", int(current))
+                    bt = " — Bluetooth: drops headphones to call quality" if is_bluetooth_headset(dev["name"]) else ""
+                    self.mic_combo.addItem(f"{dev['name']}{bt}", dev["name"])
+            current = self._mic_name(config.get("voice.mic_device", None))
+            if current and self.mic_combo.findData(current) < 0:
+                self.mic_combo.addItem(f"{current} (not connected)", current)
         except Exception as e:
             self.mic_combo.addItem(f"(couldn't list devices: {e})", None)
 
     def _test_mic(self):
-        dev = self.mic_combo.currentData()
+        name = self.mic_combo.currentData()
+        try:
+            import sounddevice as sd
+            from modules.voice.mic_select import pick_input
+            dev = pick_input(name, sd.query_devices(), None, allow_bluetooth=True)[0] if name else None
+        except Exception:
+            dev = None
         self.mic_test.setEnabled(False)
         self.mic_test.setText("Recording…")
 

@@ -75,6 +75,7 @@ keepalive     {"t": "ping"} every 15 s; a connection silent for 50 s is closed
 | `automation.list` / `automation.run` `{name, args}` | to a PC | `send_prompt`, `message`, `open_url`, `run_scene`, `play_music`, `ask`; validated, then permission-checked |
 | `share.push` `{items}` | to a PC | one fact / skill / alias / scene offered to a collaborator (queued until they accept) |
 | `file.offer` `{id, name, size, sha256}` → `{accept}` · chunks · `file.done` `{id}` · `file.cancel` | files | SHA-256 and size verified at the end; the name is flattened to its last path component; size and free-space limits |
+| `log.get` `{after, boot}` → `{lines, cursor, dropped, boot}` | own: PC → any own device | the device's log lines numbered above `after` (all of them if `boot` is another run's); the PC appends them to `data/logs/devices/<name>-<id>.log` (desktop `modules/link/logs.py`, `core/logger.LogRing`; iPhone `AppLog`) |
 
 ### Sync
 
@@ -114,7 +115,12 @@ otherwise send requests back over that same connection. The iPhone app answers `
 
 ## What the link doesn't do (yet)
 
-- No relay: both devices must be able to reach each other's address. Tailscale or another VPN makes that work across networks.
+- No relay: both devices must be able to reach each other's address. Away from home that's either Tailscale (or another
+  VPN) or **“Reach this PC from anywhere”** on the PC (`modules/link/remote.py`, `link.remote_access`): the PC asks the
+  router to forward its TCP port (UPnP IGD), also listens on IPv6, adds a Windows Firewall rule for the port, and lists
+  the router's public address, its global IPv6 addresses and an optional typed address/dynamic-DNS name
+  (`link.public_address`) in the pairing code and every hello — so a phone that connected once at home dials them later.
+  It can't help behind carrier-grade NAT (IPv4) or a router whose IPv6 firewall drops incoming connections.
 - Collaborator automations run on the PC side; the phone can *send* them but doesn't accept them.
 - The phone can't be reached by the PC unless the phone has dialled in — so a PC can push changes only while the app is open or
   listening. (iOS doesn't allow an always-on listening socket for a normal app; background audio keeps the outgoing connection alive.)

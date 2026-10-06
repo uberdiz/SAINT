@@ -516,7 +516,22 @@ class VoiceModule(BaseModule):
     def _start_stream(self) -> bool:
         try:
             import sounddevice as sd
-            device = config.get("voice.mic_device", None)
+            from modules.voice.mic_select import is_bluetooth_headset, pick_input
+            setting = config.get("voice.mic_device", None)
+            try:
+                default = sd.default.device[0]
+                default = int(default) if default is not None and int(default) >= 0 else None
+            except Exception:
+                default = None
+            device, name, note = pick_input(setting, sd.query_devices(), default,
+                                            allow_bluetooth=bool(config.get("voice.allow_bluetooth_mic", False)))
+            if isinstance(setting, int) and not isinstance(setting, bool) and device == setting and name \
+                    and not is_bluetooth_headset(name):
+                # An old index setting: keep the *name*, so plugging in a headset can't change which mic it is.
+                config.set("voice.mic_device", name)
+            if note:
+                log.warning("voice.mic.substituted setting=%r using=%r", setting, name)
+                event_bus.emit_event(EventType.WARNING, {"message": note, "source": "voice"})
             try:
                 device_info = sd.query_devices(device, "input")
             except Exception:
