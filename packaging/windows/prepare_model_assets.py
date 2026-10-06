@@ -2,7 +2,9 @@
 from pathlib import Path
 import json, zipfile
 from huggingface_hub import snapshot_download
+import sys
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))      # "from tools..." below; run as a script, only packaging/windows is on the path
 OUT = ROOT / "build" / "release-assets"; OUT.mkdir(parents=True, exist_ok=True)
 
 def zip_tree(source: Path, archive: Path, root_name: str, extra=None):
