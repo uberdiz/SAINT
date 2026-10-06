@@ -16,26 +16,26 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 ## 1. Fixed after your 2026-10-06 notes — re-check
 
 **Your phone away from home, without Tailscale** (new: Devices → *Reach this PC from anywhere*)
-- [ ] Turn it on and accept the Windows prompt (a firewall rule for SAINT's port from anywhere). The card says what
+- [unsure on my home PC but doesnt work on a public network at school which is fine] Turn it on and accept the Windows prompt (a firewall rule for SAINT's port from anywhere). The card says what
       worked: the router port (UPnP), IPv6, or both. Your Xfinity gateway didn't answer UPnP when tested — if the card
       says so, either turn on UPnP in the Xfinity app, or forward TCP 8765 to this PC there and type your address
       (or a dynamic-DNS name) in the box under the switch.
-- [ ] Open SAINT on the iPhone once at home (so it learns the new addresses), then switch to cellular with Tailscale
+- [Y] Open SAINT on the iPhone once at home (so it learns the new addresses), then switch to cellular with Tailscale
       off: the iPhone reaches the PC and answers with its model. Devices → your PC says “over the internet”.
-- [ ] Turn the switch off: the iPhone can no longer reach the PC from cellular (Tailscale still works).
+- [Y] Turn the switch off: the iPhone can no longer reach the PC from cellular (Tailscale still works).
 
 **Mini player**
-- [ ] Drag a corner out into a big square: the album art keeps growing, wide and tall (it stopped at about 250 px
+- [Y] Drag a corner out into a big square: the album art keeps growing, wide and tall (it stopped at about 250 px
       wide). A wide strip shows the full player, and its cover is bigger too.
-- [ ] Right-click → Size presets → **Big album art**. Turning lyrics on from a big square switches to the player
+- [Y] Right-click → Size presets → **Big album art**. Turning lyrics on from a big square switches to the player
       with lyrics.
-- [ ] Drag it past any screen edge: it stops at the edge. It still moves onto your other monitor.
-- [ ] Volume: change Spotify's volume on the phone or in Spotify — the slider follows; move the slider — Spotify's own
+- [Y] Drag it past any screen edge: it stops at the edge. It still moves onto your other monitor.
+- [N still doesnt sync with spotify, when i change the volume on the miniplayer it goes down but resets back at full and doesnt change the volume of spotify.] Volume: change Spotify's volume on the phone or in Spotify — the slider follows; move the slider — Spotify's own
       volume changes (it used to change the Windows mixer level for Spotify instead). A YouTube video still uses the
       browser's volume.
 
 **Spotify**
-- [ ] “Play Fancy That by PinkPantheress” (and “by Pink Panthers”, misheard), “play the album Fancy That”, “play
+- [Y] “Play Fancy That by PinkPantheress” (and “by Pink Panthers”, misheard), “play the album Fancy That”, “play
       Fancy That album by PinkPantheress”: the whole album from track 1, on repeat, shuffle as you had it — no single
       song with “songs like it” queued.
 - [ ] “That's not the type of music I said” / “that's not the vibe I asked for”: it skips and says the song isn't
@@ -54,11 +54,11 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 - [ ] `saint.log` no longer has a “media.changed” line every 5 seconds — only when the song or play state changes.
 
 **iPhone** (needs a new build)
-- [ ] Tabs: Talk, Music, **History**, **Memory**, Settings. History has a summary (today / 7 days / % worked) and a
+- [Y] Tabs: Talk, Music, **History**, **Memory**, Settings. History has a summary (today / 7 days / % worked) and a
       search; Memory has a search. Devices opens from the PC chip on Talk and from Settings (top of *This phone*).
-- [ ] Settings on the smallest supported iPhone: no text runs under switches, pickers or buttons. Output's picker
+- [Y] Settings on the smallest supported iPhone: no text runs under switches, pickers or buttons. Output's picker
       sits under its label.
-- [ ] **Sync now** (Devices toolbar, a device's page, Memory, History's menu, pull to refresh): a spinner, then a
+- [Y] **Sync now** (Devices toolbar, a device's page, Memory, History's menu, pull to refresh): a spinner, then a
       banner saying what synced — on whichever tab you're on (it used to show only on Talk, so it looked dead).
 
 ## 2. Still open (not fixed yet)
@@ -78,10 +78,10 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 **SAINT Link (PC ↔ PC, phone)**
 - [ ] PC ↔ PC on the same Wi-Fi: only the 8-character code is needed to pair.
 - [ ] PC ↔ PC over Tailscale only (different networks): the code alone pairs.
-- [ ] First Link start: one admin prompt for the firewall.
-- [ ] Devices → a disconnected device → “Check connection” names each address (Wi-Fi, Tailscale, internet) and
+- [Y] First Link start: one admin prompt for the firewall.
+- [Y] Devices → a disconnected device → “Check connection” names each address (Wi-Fi, Tailscale, internet) and
       what's blocking it.
-- [ ] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
+- [cant connect QR code is cut off on my PC at school and doesnt show its address but my PC at home it works fine but with the long connection code so it may not be the same.] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
 
 **Watching and notifications**
 - [ ] “Tell me when Claude finishes.”
