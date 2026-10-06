@@ -15,8 +15,8 @@ from PySide6.QtCore import (QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThr
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QFont, QFontMetrics, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap, QRadialGradient)
-from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser,
-                               QToolButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+                               QTextBrowser, QToolButton, QVBoxLayout, QWidget)
 
 from ui import icons, motion
 from ui.theme import current_palette, state_color
@@ -100,13 +100,43 @@ class Card(QFrame):
 
 
 class Page(QWidget):
-    """A main-window page: title, subtitle, action row, then content."""
+    """A main-window page: title, subtitle, action row, then content.
 
-    def __init__(self, title: str, subtitle: str = ""):
+    ``scroll=True``: the content (``self.root``) scrolls under a fixed header, so a page taller
+    than a small or scaled screen is never squeezed — the Devices page clipped its QR code and
+    pairing address that way on a 125 % laptop (2026-10-06)."""
+
+    def __init__(self, title: str, subtitle: str = "", scroll: bool = False):
         super().__init__()
-        self.root = QVBoxLayout(self)
-        self.root.setContentsMargins(36, 28, 36, 24)
-        self.root.setSpacing(18)
+        from ui.design import tokens
+        m = tokens.PAGE_MARGINS
+        outer = QVBoxLayout(self)
+        self.scroll = None
+        if scroll:
+            from PySide6.QtWidgets import QScrollArea
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            header = QWidget()
+            header_lay = QVBoxLayout(header)
+            header_lay.setContentsMargins(m[0], m[1], m[2], tokens.SPACE_MD)
+            self.scroll = QScrollArea()
+            self.scroll.setWidgetResizable(True)
+            self.scroll.setFrameShape(QFrame.NoFrame)
+            self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            body = QWidget()
+            body.setObjectName("PageBody")
+            self.root = QVBoxLayout(body)
+            self.root.setContentsMargins(m[0], tokens.SPACE_XS, m[2] - 6, m[3])
+            self.root.setSpacing(tokens.SECTION_GAP)
+            self.scroll.setWidget(body)
+            outer.addWidget(header)
+            outer.addWidget(self.scroll, 1)
+            head_parent = header_lay
+        else:
+            self.root = outer
+            self.root.setContentsMargins(*m)
+            self.root.setSpacing(tokens.SECTION_GAP)
+            head_parent = None
         head = QHBoxLayout()
         head.setSpacing(8)
         col = QVBoxLayout()
@@ -123,12 +153,13 @@ class Page(QWidget):
         self.actions = QHBoxLayout()
         self.actions.setSpacing(8)
         head.addLayout(self.actions)
-        self.root.addLayout(head)
+        (head_parent or self.root).addLayout(head)
 
 
 def chip(text: str, kind: str = "") -> QLabel:
     lbl = QLabel(text)
     lbl.setObjectName({"accent": "ChipAccent", "ok": "ChipOk", "warn": "ChipWarn", "err": "ChipErr"}.get(kind, "Chip"))
+    lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)     # a pill, never stretched by its row
     return lbl
 
 

@@ -13,10 +13,10 @@ Nothing listens until "Connect my devices" is on.
 import os
 import time
 
-from PySide6.QtCore import QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QDesktopServices, QFont, QGuiApplication
 from PySide6.QtCore import QUrl
-from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
+from PySide6.QtWidgets import (QBoxLayout, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QFrame, QHBoxLayout,
                                QLabel, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from core.config import config
@@ -33,37 +33,115 @@ def _link():
     return get_link()
 
 
-class QrView(QWidget):
-    """A QR code painted from its module matrix (no image files, no extra Qt modules)."""
+def _host(addr: str) -> str:
+    """IPv6 addresses are written [like::this] before a port."""
+    return f"[{addr}]" if ":" in addr and not addr.startswith("[") else addr
 
-    def __init__(self, size: int = 224):
+
+class CopyField(QWidget):
+    """A label + read-only value + Copy button. A long address (IPv6, a DNS name) scrolls inside
+    its field instead of forcing the page wider than the window."""
+
+    def __init__(self, label: str, mono: bool = False, big: bool = False):
         super().__init__()
-        self.matrix = None
-        self.setFixedSize(size, size)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.label = QLabel(label)
+        self.label.setObjectName("Faint")
+        self.value = QLineEdit()
+        self.value.setReadOnly(True)
+        self.value.setMinimumWidth(60)
+        if mono:
+            f = QFont("Cascadia Mono")
+            f.setStyleHint(QFont.Monospace)
+            if big:
+                f.setPointSize(14)
+            self.value.setFont(f)
+        copy = QPushButton("Copy")
+        copy.setObjectName("Ghost")
+        copy.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.value.text()))
+        lay.addWidget(self.label)
+        lay.addWidget(self.value, 1)
+        lay.addWidget(copy)
 
-    def set_matrix(self, matrix):
-        self.matrix = matrix
-        self.update()
+    def set(self, text: str):
+        self.value.setText(text or "")
+        self.value.setCursorPosition(0)
+        self.setVisible(bool(text))
 
-    def paintEvent(self, _):
-        g = QPainter(self)
-        g.setRenderHint(QPainter.Antialiasing)
-        g.setPen(Qt.NoPen)
-        g.setBrush(QColor("#ffffff"))
-        g.drawRoundedRect(self.rect(), 12, 12)
-        if not self.matrix:
-            g.setPen(QColor("#555555"))
-            g.drawText(self.rect(), Qt.AlignCenter, "QR code unavailable\n(use the code below)")
-            return
-        n = len(self.matrix)
-        pad = 14
-        cell = (self.width() - 2 * pad) / (n + 8)          # 4 quiet modules each side
-        origin = pad + 4 * cell
-        g.setBrush(QColor("#0b0c0e"))
-        for y, row in enumerate(self.matrix):
-            for x, v in enumerate(row):
-                if v:
-                    g.drawRect(QRectF(origin + x * cell, origin + y * cell, cell + 0.6, cell + 0.6))
+
+class OfferBox(QWidget):
+    """The open pairing window: the QR code beside the instructions, or above them when the
+    window is narrow. The QR is sized from the space it gets (never clipped, never below its
+    scannable minimum — the page scrolls instead)."""
+
+    QR_MAX = 300
+
+    def __init__(self):
+        super().__init__()
+        from ui.components.qr_view import QrView
+        self.box = QBoxLayout(QBoxLayout.LeftToRight, self)
+        self.box.setContentsMargins(0, 4, 0, 0)
+        self.box.setSpacing(20)
+        qcol = QVBoxLayout()
+        qcol.setSpacing(6)
+        self.qr = QrView(preferred=260)
+        qcol.addWidget(self.qr, 0, Qt.AlignHCenter)
+        self.bigger = QPushButton("Show larger")
+        self.bigger.setObjectName("Ghost")
+        self.bigger.setToolTip("Open the QR code in its own window, as big as your screen allows")
+        qcol.addWidget(self.bigger, 0, Qt.AlignHCenter)
+        qcol.addStretch()
+        self.box.addLayout(qcol)
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        self.how = QLabel("")
+        self.how.setWordWrap(True)
+        self.how.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.how.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.how.setMinimumWidth(120)
+        col.addWidget(self.how)
+        self.code = CopyField("Code", mono=True, big=True)
+        col.addWidget(self.code)
+        self.address = CopyField("Address")
+        col.addWidget(self.address)
+        self.away = CopyField("Away")
+        col.addWidget(self.away)
+        self.note = QLabel("")
+        self.note.setWordWrap(True)
+        self.note.setObjectName("Faint")
+        self.note.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        col.addWidget(self.note)
+        self.countdown = QLabel("")
+        self.countdown.setObjectName("Faint")
+        col.addWidget(self.countdown)
+        self.cancel = QPushButton("Close pairing")
+        self.cancel.setObjectName("Ghost")
+        col.addWidget(self.cancel, 0, Qt.AlignLeft)
+        col.addStretch()
+        self.box.addLayout(col, 1)
+
+    def qr_side(self, width: int) -> int:
+        lo = self.qr.min_side()
+        if width < 600:
+            return max(lo, min(width, self.QR_MAX + 20))
+        return max(lo, min(self.QR_MAX, int(width * 0.38)))
+
+    def relayout(self, width: int):
+        narrow = width < 600
+        self.box.setDirection(QBoxLayout.TopToBottom if narrow else QBoxLayout.LeftToRight)
+        side = self.qr_side(width)
+        if self.qr.width() != side or self.qr.height() != side:
+            self.qr.setFixedSize(side, side)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.relayout(self.width())
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.relayout(self.width())
 
 
 class PermissionsDialog(QDialog):
@@ -114,7 +192,8 @@ class PermissionsDialog(QDialog):
 
 class DevicesPage(Page):
     def __init__(self):
-        super().__init__("Devices", "Your phone, your other PCs and friends' SAINTs, connected over your network.")
+        super().__init__("Devices", "Your phone, your other PCs and friends' SAINTs, connected over your network.",
+                         scroll=True)
         self._offer = None
         self._busy = False
         self.enable = Switch("Connect my devices")
@@ -140,36 +219,15 @@ class DevicesPage(Page):
         row.addWidget(self.show_btn)
         row.addStretch()
         self.add_card.body.addLayout(row)
-        self.offer_box = QWidget()
-        ob = QHBoxLayout(self.offer_box)
-        ob.setContentsMargins(0, 4, 0, 0)
-        ob.setSpacing(18)
-        self.qr = QrView()
-        ob.addWidget(self.qr)
-        col = QVBoxLayout()
-        col.setSpacing(6)
-        self.how = QLabel("")
-        self.how.setWordWrap(True)
-        self.how.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        col.addWidget(self.how)
-        self.code = QLabel("")
-        mono = QFont("Cascadia Mono")
-        mono.setPointSize(13)
-        self.code.setFont(mono)
-        self.code.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        col.addWidget(self.code)
-        self.countdown = QLabel("")
-        self.countdown.setObjectName("Faint")
-        col.addWidget(self.countdown)
-        cancel = QPushButton("Close pairing")
-        cancel.setObjectName("Ghost")
-        cancel.clicked.connect(self._cancel_offer)
-        col.addWidget(cancel, 0, Qt.AlignLeft)
-        col.addStretch()
-        ob.addLayout(col, 1)
+        self.offer_box = OfferBox()
+        self.qr = self.offer_box.qr
+        self.how = self.offer_box.how
+        self.code = self.offer_box.code
+        self.countdown = self.offer_box.countdown
+        self.offer_box.cancel.clicked.connect(self._cancel_offer)
+        self.offer_box.bigger.clicked.connect(self._show_big_qr)
         self.offer_box.setVisible(False)
         self.add_card.body.addWidget(self.offer_box)
-
         join = QHBoxLayout()
         self.join_text = QLineEdit()
         self.join_text.setPlaceholderText("Join another SAINT: type the code it shows (ABCD-EFGH), or paste its saint:// link")
@@ -184,7 +242,8 @@ class DevicesPage(Page):
         # ---- away from home without Tailscale (modules/link/remote.py) --------------------
         self.remote_card = Card("Away from home")
         rrow = QHBoxLayout()
-        self.remote_switch = Switch("Reach this PC from anywhere (no Tailscale needed)")
+        self.remote_switch = Switch("Reach this PC from anywhere")
+        self.remote_switch.setToolTip("No Tailscale needed: SAINT opens its port on your router (UPnP) and IPv6")
         self.remote_switch.setChecked(bool(config.get("link.remote_access", False)))
         self.remote_switch.toggled.connect(self._toggle_remote)
         rrow.addWidget(self.remote_switch)
@@ -221,10 +280,15 @@ class DevicesPage(Page):
 
         # ---- shared with you / received files ------------------------------------------------
         self.inbox_card = Card("Received")
-        self.inbox_row = QHBoxLayout()
+        # The label holds a folder path: it wraps above the buttons instead of forcing the page wider
+        # than the window (a long inbox path clipped the whole Devices page, QR code included).
         self.inbox_label = QLabel("")
         self.inbox_label.setObjectName("Muted")
-        self.inbox_row.addWidget(self.inbox_label, 1)
+        self.inbox_label.setWordWrap(True)
+        self.inbox_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.inbox_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.inbox_card.body.addWidget(self.inbox_label)
+        self.inbox_row = QHBoxLayout()
         self.keep_btn = QPushButton("Keep what friends shared")
         self.keep_btn.clicked.connect(self._keep_shared)
         self.open_btn = QPushButton("Open received files")
@@ -235,6 +299,7 @@ class DevicesPage(Page):
         self.inbox_row.addWidget(self.keep_btn)
         self.inbox_row.addWidget(self.open_btn)
         self.inbox_row.addWidget(self.logs_btn)
+        self.inbox_row.addStretch()
         self.inbox_card.body.addLayout(self.inbox_row)
         self.root.addWidget(self.inbox_card)
         self.root.addStretch()
@@ -296,19 +361,27 @@ class DevicesPage(Page):
         def done(info):
             self._offer = info
             self.qr.set_matrix(info.get("matrix"))
-            addr = info["addresses"][0] if info["addresses"] else "this PC's IP address"
+            addr = info["addresses"][0] if info["addresses"] else ""
             who = "your phone or other PC" if role == "own" else "your friend"
             ts = info.get("tailscale") or ""
             public = info.get("public") or ""
-            away = (f"\nFrom anywhere: {public}:{info['port']} — the code includes it." if public else
-                    f"\nFrom anywhere (Tailscale): {ts}:{info['port']} — the code includes it." if ts else
-                    "\nTo reach this PC away from home, turn on “Reach this PC from anywhere” below (or use "
-                    "Tailscale), then show the code again.")
-            qr = "" if info.get("matrix") else "\n(The QR code needs the segno package — type the address instead.)"
             self.how.setText(f"On {who}, open SAINT → Devices and scan this code — or on another PC just type the "
-                             f"code below into “Join” (same Wi-Fi or Tailscale: no address needed).\n\n"
-                             f"Address, if it asks: {addr}:{info['port']}{away}{qr}")
-            self.code.setText(info["code"])
+                             f"code into “Join” (same Wi-Fi or Tailscale: no address needed).")
+            self.code.set(info["code"])
+            self.offer_box.address.set(f"{_host(addr)}:{info['port']}" if addr else "")
+            far = public or ts
+            self.offer_box.away.set(f"{_host(far)}:{info['port']}" if far else "")
+            notes = []
+            if not addr:
+                notes.append("No network address found — check this PC is on Wi-Fi or Ethernet.")
+            if far:
+                notes.append("The code includes the away-from-home address too.")
+            else:
+                notes.append("To reach this PC away from home, turn on “Reach this PC from anywhere” below "
+                             "(or use Tailscale), then show the code again.")
+            if not info.get("matrix"):
+                notes.append("The QR code needs the segno package — type the code and address instead.")
+            self.offer_box.note.setText(" ".join(notes))
             self.offer_box.setVisible(True)
             self.enable.setChecked(True)
             self.refresh()
@@ -368,6 +441,12 @@ class DevicesPage(Page):
                   lambda n: n and self._say(f"Collected {n} new log line{'s' if n != 1 else ''} from your "
                                             f"devices — this PC's own log is in {os.path.dirname(path)}."),
                   lambda e: None)
+
+    def _show_big_qr(self):
+        if not self._offer or not self._offer.get("matrix"):
+            return
+        from ui.components.qr_view import QrDialog
+        QrDialog(self._offer["matrix"], f"Code {self._offer['code']}", self).exec()
 
     def _cancel_offer(self):
         self._offer = None
