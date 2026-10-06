@@ -244,6 +244,11 @@ def _context() -> str:
 
 
 def _ask(prompt: str) -> Optional[dict]:
+    return _ask_with(_SYSTEM, prompt)
+
+
+def _ask_with(system: str, prompt: str, num_predict: int = 200) -> Optional[dict]:
+    """One JSON answer from the local model (the agent's planner and recovery use this too)."""
     from modules.ai.module import AIModule
     base = config.get("ai.base_url", "http://localhost:11434")
     try:
@@ -251,8 +256,8 @@ def _ask(prompt: str) -> Optional[dict]:
         r = requests.post(base.replace("localhost", "127.0.0.1").rstrip("/") + "/api/chat",
                           timeout=float(config.get("learning.planner_timeout_sec", 25)),
                           json={"model": model, "stream": False, "keep_alive": -1, "format": "json",
-                                "options": {"temperature": 0.1, "num_predict": 200},
-                                "messages": [{"role": "system", "content": _SYSTEM},
+                                "options": {"temperature": 0.1, "num_predict": num_predict},
+                                "messages": [{"role": "system", "content": system},
                                              {"role": "user", "content": prompt}]})
         if r.status_code != 200:
             log.warning("planner.http %s", r.status_code)
