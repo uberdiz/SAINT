@@ -33,6 +33,9 @@ with open(os.path.join(_TMP, "config.json"), "w", encoding="utf-8") as f:
         "learning": {"planner": False, "watch_and_learn": False, "watch_after_failure": False,
                      "from_mistakes": False},
         "audio": {"voicemeeter": {"enabled": "off"}},
+        # Never touch the real Windows Firewall: a test starting Link on a random port replaced the
+        # real "SAINT Link" rule with that port, and other PCs couldn't connect (2026-10-06).
+        "link": {"manage_firewall": False},
         "game_mode": {"enabled": False, "detect": False},   # never react to games running on this PC
         "spotify": {"client_id": ""},
         "logging": {"level": "Errors Only"},

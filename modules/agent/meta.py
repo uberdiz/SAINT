@@ -20,13 +20,13 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-_FILL = r"(?:(?:hey|ok(?:ay)?|yo|um+|uh+|just|please|saint|now|right now|already|dude|man|oh|thank you|thanks|bro)[\s,.!]*)*"
+_FILL = r"(?:(?:hey|ok(?:ay)?|yo|um+|uh+|just|please|saint|now|right now|already|dude|man|oh|thank you|thanks|bro|friend|buddy|pal|mate|bud|dawg|homie|guys?)[\s,.!]*)*"
 
 _STOP_ALL = re.compile(
     rf"^{_FILL}(?:stop|cancel|abort|kill|halt)\s+(?:everything|it all|all of it|all tasks|all the tasks|"
     rf"all background (?:tasks|work)|whatever you'?re doing)[\s,.!]*{_FILL}$", re.I)
 _STOP = re.compile(
-    rf"^{_FILL}(?:stop(?:\s+(?:it|that|now|talking|what you'?re doing))?|cancel(?:\s+(?:it|that))?|"
+    rf"^{_FILL}(?:stop(?:\s+(?:it|that|now|talking|speaking|saying\s+that|what you'?re doing))?|cancel(?:\s+(?:it|that))?|"
     rf"abort(?:\s+(?:it|that))?|shut\s+up|be\s+quiet|quiet|enough|halt|stop\s+stop)[\s,.!]*{_FILL}$", re.I)
 _STATUS = re.compile(
     rf"^{_FILL}(?:what\s+are\s+you\s+(?:doing|up\s+to|working\s+on)|what'?s\s+(?:going\s+on|happening|"

@@ -393,6 +393,12 @@ _REJECT_TRACK = re.compile(
     r"(?:this|it|this one|that|that one|this song|this track|the song)"
     r"|^(?:i\s+)?(?:don'?t|do not)\s+(?:want|wanna)\s+(?:to\s+)?(?:hear|listen to)\s+(?:this|it|that)(?:\s+(?:one|song|track))?"
     r"|^(?:this|that)\s+(?:song|track|one)\s+(?:is\s+)?(?:boring|bad|trash|annoying|not it)"
+    # "This is not the kind of song I was talking about" / "that's not what I meant" (2026-10-05)
+    r"|^(?:this|that|it)(?:'s|\s+is|\s+isn'?t)\s+(?:not\s+)?(?:the\s+|a\s+|my\s+)?(?:kind|sort|type|vibe|style)\s+"
+    r"(?:of\s+(?:song|track|music|thing|stuff|vibe)\s+)?(?:i\s+(?:was\s+)?(?:talking about|asked for|meant|wanted|"
+    r"had in mind|was going for|like)|i\s+want)"
+    r"|^(?:this|that)(?:'s|\s+is)\s+not\s+(?:very\s+)?(?:hype|chill|energetic|upbeat|sad|calm|relaxing|mellow)"
+    r"(?:\s+at\s+all)?"
     r"|^(?:ugh|nah|no),?\s+(?:skip|next|change)(?:\s+(?:it|this|this one))?$")
 _SIMILAR_TO = re.compile(
     r"^(?:(?:play|put on|give me|find|queue up|recommend|suggest|i want|i'd like|how about)\s+(?:me\s+)?)?"
@@ -813,7 +819,9 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         if re.match(r"^my\s", q_orig, re.I):
             args["own_only"] = True            # "my X playlist" is one of the user's own
         return SpotifyIntent("play_playlist", "spotify.play_query", args)
-    am = re.match(r"^(?:the )?album (.+)$", q_orig, re.I) or re.match(r"^(.+?) (?:the )?album$", q_orig, re.I)
+    # "the album, Fancy That" (the recogniser adds commas), "the album called X", "X the album"
+    am = re.match(r"^(?:the |that |this |an? )?album[,:]?\s+(?:called |named |titled )?(.+)$", q_orig, re.I) \
+        or re.match(r"^(.+?),? (?:the |full |whole |entire )?album$", q_orig, re.I)
     if am:
         return SpotifyIntent("play_album", "spotify.play_query", {"query": am.group(1).strip(), "kind": "album"})
     ar = re.match(r"^(?:(?:some |more )?(?:songs|music|tracks|stuff) (?:by|from)|the artist|artist) (.+)$", q_orig, re.I)

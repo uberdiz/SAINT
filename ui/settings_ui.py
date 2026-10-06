@@ -809,7 +809,7 @@ class SettingsUI(QWidget):
         self._row(f, "Several matching windows", self._combo(
             "desktop.multi_window_policy", ["Ask which one", "Use the most recent"], data=["ask", "recent"]),
                   "e.g. three browser windows are open and none is clearly meant.")
-        self._row(f, "Max typed text", self._spin("desktop.max_type_length", 20, 5000, 20, 0, " chars"))
+        self._row(f, "Paste text longer than", self._spin("desktop.paste_over", 0, 5000, 20, 0, " chars"))
         lay.addWidget(box)
 
         box = QGroupBox("App shortcuts")

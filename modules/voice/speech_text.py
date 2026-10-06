@@ -17,6 +17,7 @@ _ACRONYMS = {
     "CEO", "FBI", "CIA", "NBA", "NFL", "BBC", "CNN", "ESPN", "USA", "ASAP", "DIY", "BTW", "FYI", "IDK", "TBH",
     "LOL", "OMG", "PS", "PS5", "XP", "NPC", "RPG", "FPS", "MMO", "DLC", "AM", "PM", "GB", "MB", "KB", "TB", "GHZ",
     "MHZ", "KBPS", "MBPS", "WIFI", "SMS", "GPS", "NYC", "LA", "UFC", "WWE", "VIP", "BPM", "DM", "DMS", "RSVP",
+    "IDE", "SDK", "EXE", "MCP", "NAS", "SSH", "VS",
 }
 # Short words that are words, not initials, when written in capitals.
 _WORDS = {
@@ -44,9 +45,41 @@ def _fix(word: str, sentence_caps: bool) -> str:
     return word                    # "NVMW", "XQZ": no way to say it but by letters
 
 
+# A Windows path: folders may contain spaces; the last part ends at a file extension or a space.
+_PATH = re.compile(r"\b[A-Za-z]:\\(?:[^\\\n\"“”<>|?*:]+\\)*"
+                   r"(?:[^\\\n\"“”<>|?*:]*?\.[A-Za-z0-9]{1,5}\b|[^\s\\\"“”<>|?*:.,;!]*)")
+_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b")
+_URL = re.compile(r"\bhttps?://(?:www\.)?([^/\s\"”'<>]+)[^\s\"”'<>]*", re.I)
+
+
+def _say_path(m) -> str:
+    raw = m.group(0)
+    last = raw.rstrip("\\").rsplit("\\", 1)[-1]
+    if not last or last.endswith(":"):
+        return f"the {raw[0].upper()} drive"
+    stem, dot, ext = last.rpartition(".")
+    if dot and stem and ext.lower() in ("lnk", "url", "exe"):
+        return stem                       # "Antigravity IDE.lnk" -> "Antigravity IDE"
+    return last
+
+
+def shorten_paths(text: str) -> str:
+    """Paths and links as a person would say them: 'Made it in C:\\Users\\sam\\Downloads'
+    -> 'Made it in Downloads'; 'https://mail.google.com/mail/u/0' -> 'mail.google.com'.
+    Read out whole, they're long and Kokoro's phonemizer switches language on the
+    fragments (a French accent on 'C:\\Users\\...', 2026-10-05)."""
+    if text and "@" in text:
+        text = _EMAIL.sub(lambda m: m.group(0).replace(".", " dot ").replace("@", " at "), text)
+    if not text or (":\\" not in text and "://" not in text):
+        return text
+    text = _URL.sub(lambda m: m.group(1), text)
+    return _PATH.sub(_say_path, text)
+
+
 def for_speech(text: str) -> str:
     """'Playing NO ME QUIERO CASAR by Bad Bunny on your PC' ->
-    'Playing No Me Quiero Casar by Bad Bunny on your PC'."""
+    'Playing No Me Quiero Casar by Bad Bunny on your PC'. Paths and links are shortened."""
+    text = shorten_paths(text)
     if not text or not re.search(r"[A-Z]{2}", text):
         return text
     words = re.findall(r"[A-Za-z][A-Za-z'’]*", text)

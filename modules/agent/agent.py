@@ -36,6 +36,8 @@ from modules.agent.router import route, Reply
 
 log = logging.getLogger("saint.agent")
 
+_GREETED_WAKE = re.compile(r"^\s*(?:hey|hi|ok(?:ay)?|yo)[\s,.!]+(?:saint|sant)\b[\s,.:;!?-]*", re.I)
+
 # Failures worth trying another way ("I couldn't find a window for all my
 # windows") — not ones another attempt can't fix ("Spotify isn't connected").
 _TRY_HARDER = re.compile(r"couldn'?t find|can'?t see|isn'?t a key|isn'?t visible|no such|didn'?t recogni|"
@@ -63,6 +65,14 @@ class Agent:
     def handle(self, text: str) -> Optional[AgentResult]:
         if not config.get("agent.enabled", True):
             return None
+        # "Hey SAINT, write an email to Mr Norton" heard without the wake detector (a barge-in,
+        # a follow-up, typed) kept its greeting and became "I haven't learned how to hey saint
+        # write an email..." (2026-10-05). Only a greeted name is stripped: "Saint Louis weather" stays.
+        stripped = _GREETED_WAKE.sub("", text or "", count=1).strip()
+        if stripped != (text or "").strip():
+            if not stripped.strip(" .!?,"):
+                return AgentResult("I'm here — what do you need?", "meta.wake", expects_reply=True)
+            text = stripped
         t0 = time.perf_counter()
         from core.focus_guard import focus_guard
         literal = getattr(self._literal, "on", False)

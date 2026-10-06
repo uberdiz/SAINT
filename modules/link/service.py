@@ -23,6 +23,7 @@ Nothing here starts on import, and nothing listens unless ``link.enabled`` is on
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -347,8 +348,8 @@ class LinkService:
         if ts.get("installed") and not ts.get("ip"):
             out.append("Tailscale is installed here but not connected — open it and log in.")
         if peer.platform in ("windows", "") and not any("answers" in o for o in out):
-            out.append("If the other PC is on, allow SAINT through its firewall: on that PC turn SAINT Link off "
-                       "and on again and accept the Windows prompt.")
+            out.append("If the other PC is on, allow SAINT through its firewall: on that PC open Devices, press "
+                       "“Check connection” on this device and accept the Windows prompt.")
         return out
 
     # ------------------------------------------------------------------ #
@@ -684,6 +685,22 @@ def tailscale_status(max_age: float = 60.0) -> dict:
     return value
 
 
+def rule_tcp_ports(netsh_output: str) -> set:
+    """The local ports of the TCP entries in `netsh advfirewall firewall show rule` output
+    (one block per entry; labels are localized, so match any "...port..." / "Proto..." label)."""
+    ports = set()
+    for block in re.split(r"\r?\n\s*\r?\n", netsh_output or ""):
+        proto = re.search(r"^\s*proto\w*\s*:\s*(\w+)", block, re.I | re.M)
+        if proto and proto.group(1).upper() != "TCP":
+            continue
+        for m in re.finditer(r"^[^\n:]*(?:port|puerto|porta)[^\n:]*:\s*([\d,\s-]+)$", block, re.I | re.M):
+            for part in m.group(1).split(","):
+                part = part.strip()
+                if part.isdigit():
+                    ports.add(int(part))
+    return ports
+
+
 def ensure_firewall_rule(port: int, udp_port: int = 8766, force: bool = False):
     """Windows Firewall blocks SAINT Link's port by default on networks Windows calls "public" —
     and a dismissed "allow access?" prompt blocks it everywhere. That's the usual reason two devices
@@ -696,9 +713,14 @@ def ensure_firewall_rule(port: int, udp_port: int = 8766, force: bool = False):
     kw = {"creationflags": 0x08000000, "capture_output": True, "timeout": 10}
     try:
         shown = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"], **kw)
-        if shown.returncode == 0 and str(port).encode() in shown.stdout:
+        tcp_ports = rule_tcp_ports(shown.stdout.decode("utf-8", "ignore")) if shown.returncode == 0 else set()
+        if port in tcp_ports:
             return
-        if config.get("link.firewall_asked_port", 0) == port and not force:
+        # The rule exists but for another port (an old port setting — or a test run, 2026-10-06, which
+        # left it on 53430 while SAINT listened on 8765 and PCs couldn't connect over Tailscale): fix it
+        # even though we asked before. A rule that's missing after we asked means you said no: don't nag.
+        stale = bool(tcp_ports)
+        if config.get("link.firewall_asked_port", 0) == port and not force and not stale:
             return                                   # asked once already; don't keep prompting
         config.set("link.firewall_asked_port", port)
         remote = "localsubnet,100.64.0.0/10"

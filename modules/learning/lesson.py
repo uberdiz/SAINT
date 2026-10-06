@@ -178,6 +178,35 @@ _POLITE = re.compile(r"^(?:(?:hey\s+)?saint[,\s]+)?(?:(?:please|can you|could yo
                      r"go ahead and)\s+)*", re.I)
 
 
+_SAID_SYMBOLS = ((r"\s*\b(?:at sign|at symbol|at)\b\s*", "@"), (r"\s*\b(?:dot|period|point)\b\s*", "."),
+                 (r"\s*\b(?:underscore|under score)\b\s*", "_"), (r"\s*\b(?:dash|hyphen|minus)\b\s*", "-"),
+                 (r"\s*\bplus\b\s*", "+"))
+
+
+def spoken_email(text: str) -> str:
+    """An e-mail address as it was said or heard: "J. Norton at EssexTech.net" ->
+    "j.norton@essextech.net", "sam dot lee at gmail dot com" -> "sam.lee@gmail.com".
+    "" when it isn't an address."""
+    t = (text or "").strip().strip(" .!?,\"“”")
+    t = re.sub(r"^(?:it'?s|it is|that'?s|that is|the address is|my email is|their email is|email is)\s+", "", t,
+               flags=re.I)
+    m = re.search(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", t)
+    if m:
+        return m.group(0).lower()
+    if not re.search(r"\b(?:at|at sign|at symbol)\b", t, re.I):
+        return ""
+    s = t.lower()
+    for pattern, sym in _SAID_SYMBOLS:
+        s = re.sub(pattern, sym, s)
+    s = re.sub(r"\s+", "", s).strip(".")
+    s = re.sub(r"\.{2,}", ".", s)
+    return s if re.fullmatch(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", s) and s.count("@") == 1 else ""
+
+
+def _is_email(step) -> bool:
+    return step.kind == "ask" and (step.var.endswith("email") or "email address" in step.text.lower())
+
+
 def _tidy(text: str) -> str:
     """As said, minus "hey SAINT, please" and end punctuation. Case, URLs and
     addresses are kept ("go to https://mail.google.com/mail/u/0/#inbox")."""
@@ -675,6 +704,8 @@ class LessonManager:
                 return Reply(f"Got it — “{m.group('a')}” means {m.group('b')}. What's next?", expects_reply=True)
         if _CHATTY.match(said) and not said.startswith(("go ", "do ")):
             return None                          # a question in passing: answered as usual, lesson stays open
+        if self._aside(t.task, text):
+            return None                          # "skip this song" mid-lesson: done as usual, not a lesson step
 
         # A command: do it now, keep it if it works.
         reply, steps = self._do_new(text)
@@ -948,6 +979,11 @@ class LessonManager:
                         continue
                     q = fill(st.text, r.vals)
                     kept = answers.get(q) if st.once else ""
+                    if kept and _is_email(st):
+                        fixed = spoken_email(kept)      # saved before addresses were understood ("X at Y.net")
+                        if fixed and fixed != kept:
+                            answers.put(q, fixed)
+                        kept = fixed
                     if kept:
                         r.vals[st.var] = kept
                         r.i += 1
@@ -1002,9 +1038,33 @@ class LessonManager:
         r.touched = time.time()
         said = _clean(text)
         st = r.steps[r.i] if r.i < len(r.steps) else None
+        if r.waiting == "check_email" and st is not None:
+            # "I've got j.norton@essextech.net — is that right?"
+            verdict = classify_reply(said)
+            addr = spoken_email(_tidy(text))
+            if addr and verdict is not True:
+                r.vals[st.var] = addr
+                return Reply(f"So it's {addr}?", expects_reply=True)
+            if verdict is True:
+                if st.once:
+                    answers.put(fill(st.text, r.vals), r.vals[st.var])     # remembered for next time
+                r.i += 1
+                r.waiting = ""
+                return self._advance()
+            r.waiting = "ask"
+            return Reply("Okay — what's the right address? You can spell the tricky part.", expects_reply=True)
         if r.waiting == "ask" and st is not None:
             answer = _tidy(text)
             r.vals[st.var] = self._value_for(st, answer)
+            if _is_email(st):
+                addr = spoken_email(r.vals[st.var])
+                if addr and addr != r.vals[st.var].strip().lower():
+                    # Worked out from speech ("J. Norton at EssexTech.net"): check before it's kept.
+                    r.vals[st.var] = addr
+                    r.waiting = "check_email"
+                    return Reply(f"I've got {addr} — is that right?", expects_reply=True)
+                if addr:
+                    r.vals[st.var] = addr
             if st.once:
                 answers.put(fill(st.text, r.vals), r.vals[st.var])
             r.i += 1
@@ -1177,6 +1237,23 @@ class LessonManager:
         except Exception:
             log.exception("lesson.step_crashed %r", command)
             return Reply(f"Something went wrong doing “{command}”.", ok=False)
+
+    @staticmethod
+    def _aside(task: str, text: str) -> bool:
+        """Music and SAINT's own windows aren't steps of a lesson about something else: an open
+        "write an email" lesson swallowed "play the album X" and "move the mini player" and
+        answered each with "What's next?" (2026-10-05)."""
+        if re.search(r"\b(?:music|song|spotify|playlist|album|track|mini ?player|overlay|lyrics)\b", task or "", re.I):
+            return False
+        try:
+            from modules.agent.router import route
+            it = route(text)
+        except Exception:
+            return False
+        name = getattr(it, "name", "") or ""
+        return name.startswith("spotify.") or name in (
+            "ui.place", "ui.nudge", "ui.mini_player", "ui.lyrics", "ui.halo", "ui.overlay", "ui.game_mode",
+            "ui.theme")
 
     def _do_new(self, text: str):
         """A step said aloud while teaching or repairing: (reply, steps that did it)."""

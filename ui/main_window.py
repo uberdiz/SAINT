@@ -9,7 +9,8 @@ global hotkey, the command palette, toasts and demo mode.
 import logging
 
 from PySide6.QtCore import QEvent, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtGui import (QAction, QColor, QFont, QGuiApplication, QIcon, QKeySequence, QPainter, QPixmap,
+                           QShortcut)
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel, QMainWindow, QMenu,
                                QPushButton, QStackedWidget, QSystemTrayIcon, QVBoxLayout, QWidget)
 
@@ -539,18 +540,28 @@ class MainWindow(QMainWindow):
             log.info("ui.moved_off_game %s -> screen %d", moved, placement.screen_number(target))
         return f"monitor {placement.screen_number(target)}" if moved else ""
 
-    def place_window(self, what: str, monitor) -> str:
-        """"Move the mini player to my second monitor" (voice / menus)."""
+    def place_window(self, what: str, monitor, corner: str = "", dx: int = 0, dy: int = 0) -> str:
+        """"Move the mini player to my second monitor" / "... to the top left of my second
+        screen" / "right a bit" (voice / menus). Moving the mini player never hides it."""
         from ui import placement
-        target = placement.screen_for(monitor)
-        if target is None:
-            raise ValueError(f"I can't find monitor {monitor}.")
         widget = {"mini_player": self.widget, "overlay": self.overlay}.get(what, self)
         if widget is self.widget and not self.widget.isVisible():
             self.set_widget(True)
         if widget is self and (not self.isVisible() or self.isMinimized()):
             self.show_normal()
-        placement.move_to_screen(widget, target, "bottom-right" if widget is self.widget else "")
+        if dx or dy:
+            target = widget.screen() or QGuiApplication.primaryScreen()
+            placement.nudge(widget, int(dx), int(dy))
+        else:
+            target = placement.screen_for(monitor) if monitor else (widget.screen() or
+                                                                    QGuiApplication.primaryScreen())
+            if target is None:
+                raise ValueError(f"I can't find monitor {monitor}.")
+            if not corner and widget is self.widget:
+                corner = "bottom-right"
+            # The mini player's frame includes its transparent shadow: inset the card itself ~12 px.
+            inset = 0 if widget is self.widget else 12
+            placement.move_to_screen(widget, target, corner, inset=inset)
         if widget is self.widget:
             self.widget.remember_position()
         return f"monitor {placement.screen_number(target)}"
@@ -685,7 +696,12 @@ class MainWindow(QMainWindow):
                         value = "light" if dark else "dark"
                     self._set_theme(value.capitalize())
             elif cmd == "place":
-                message = self.place_window(args.get("what", "saint"), args.get("monitor", "other"))
+                message = self.place_window(args.get("what", "saint"), args.get("monitor", "other"),
+                                            args.get("corner", ""), args.get("dx", 0), args.get("dy", 0))
+            elif cmd == "mini_size":
+                if not self.widget.isVisible():
+                    self.set_widget(True)
+                self.widget.voice_size(args.get("size", "normal"))
             elif cmd == "gaming_workspace":
                 message = self.move_off_game()
             elif cmd == "window":

@@ -984,6 +984,12 @@ class SpotifyTools:
         logger.info("spotify.play kind=%s name=%r artist=%r query=%r", ent["kind"], ent.get("name"),
                     ent.get("artist"), query)
         radio = False
+        if ent["kind"] == "album" and config.get("spotify.album_repeat", True):
+            # "Play the album X": the whole album, round again when it ends (shuffle stays as you set it).
+            try:
+                self._with_device(lambda d: self.client.repeat("context", device_id=d))
+            except SpotifyAPIError as e:
+                logger.info("spotify.album_repeat_failed %s", e)
         if ent["kind"] == "track" and ent.get("item") and self._autoqueue_on():
             # One song on its own stops when it ends: keep going with songs like it.
             self._radio_start(seed_track=ent["item"], played_id=ent.get("id"))

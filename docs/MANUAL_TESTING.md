@@ -1,70 +1,81 @@
 # SAINT manual testing — what's left
 
-Everything you marked **Y** before 2026-10-05 is confirmed and has been removed. What's here is untested,
-fixed since your last pass (re-check), or still broken. Tick an item only after you've seen it work on the
-real machine or phone, and add notes the same way as before (`[N — what happened]`).
+Everything you marked **Y** up to 2026-10-05 is confirmed and has been removed (installer + Kokoro voice,
+misheard app names, skip N, scene stop, Ollama auto-start, task resume, hover, Gmail lesson by demonstration).
+What's here is fixed since your last pass (re-check), still open, or never tested. Tick an item only after
+you've seen it work on the real machine or phone, and add notes the same way as before (`[N — what happened]`).
 
 **Test without your real data:** `run.bat --profile clean` (fresh install) or `run.bat --profile demo` (sample
 scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-…` tests on a copy of your data.
 
-## 1. Installer and voice (new this round)
+## 1. Fixed after your 2026-10-05 notes — re-check
 
-- [ ] Build: `.venv\Scripts\python packaging\windows\build.py` ends with “Kokoro voice packages bundled.” and
-      “No user data in the bundle.”, and makes `build\windows\SAINT-Setup.exe`.
-- [ ] Clean install (rename `%LOCALAPPDATA%\SAINT\tts` first): the installer shows “Downloading SAINT's voice”,
-      then SAINT's first reply is the Kokoro voice, not the Windows (robotic) one.
-- [ ] Reinstall over it: no voice download this time (already there).
-- [ ] Install with the network off: setup says the voice couldn't be downloaded and still finishes; SAINT
-      speaks with the Windows voice, says Kokoro is downloading, and switches once you're back online.
-- [ ] Uninstall: the app is gone; `%LOCALAPPDATA%\SAINT` (data + voice) stays.
-- [ ] A clean install has none of your data (no memories, scenes, history, Spotify login).
-- [ ] From source (`run.bat`): replies are in the Kokoro voice (GPU). Log: `Kokoro TTS` loaded, no “Windows voice”.
-- [ ] Settings → Voice → Volume at 40 %: the next reply is quieter; Spotify and Windows volume unchanged.
-      “Talk louder” / “voice volume 120” work.
+**Mini player**
+- [ ] Drag any edge or corner: it resizes up/down *and* side to side, and keeps that size after a restart.
+- [ ] Make it small or square: only the album art shows. Hovering shows title, progress, play/skip and volume;
+      a new track shows its name for a few seconds.
+- [ ] Right-click → Size presets (Album art, Compact, Normal, Wide, Large) and the Lyrics toggle work.
+- [ ] “Make the mini player smaller” / “bigger” / “just show the album art” / “normal size”.
+- [ ] Track, progress bar and lyrics change on their own — no clicking or moving it — on the desktop and in a game
+      (turn it on by voice while the game runs: it appears and is the right size straight away).
+- [ ] Volume: the slider and mute button change Spotify's volume; with a YouTube video playing they change the
+      browser's volume. Scrolling over the player changes volume; ctrl+scroll still fades it.
+- [ ] “Move the mini player to the top left of my second screen”, then “right a bit” and “down a couple pixels”:
+      it moves each time and never turns off.
 
-## 2. Fixed after your last notes — re-check
+**Voice and language**
+- [ ] “Make a new folder in my Downloads and add a text file to it”: the reply says “Downloads”, not
+      `C:\Users\…`, in SAINT's normal (not French) accent.
+- [ ] “Open this "C:\…\Antigravity IDE.lnk" for Antigravity” gets an English reply; “Open Antigravity” opens
+      Antigravity IDE.
+- [ ] “Stop speaking, friend!” while SAINT talks: it stops talking and the mic stays on.
+- [ ] “Hey SAINT” alone (no wake chime) → “I'm here — what do you need?”.
 
-- [ ] **Email scene asks first.** Run “write me an email”: it asks which account, who, their address (only the
-      first time per person) and what about *before* opening anything; opens Gmail as that account; reads the
-      subject and body back; stops at “Should I send it?”.
-- [ ] “Write me an email to Sam about Friday” runs the same scene without asking who/what.
-- [ ] The scene from Automations → Run asks its questions in the chat.
-- [ ] “Make it more formal” while it reads the draft back rewrites it.
-- [ ] “Stop” during the scene stops it; the next sentence is a normal request.
-- [ ] **Misheard app names.** “Open clad” / “open clawed” → Claude. “Open cloud” asks “Claude or iCloud?”, and
-      after you pick Claude, “open cloud” opens Claude directly. “Open a rocket leak” → Rocket League.
-- [ ] Try a few names that used to be misheard (apps, games, slang) and note any that still fail.
-- [ ] **“Open Antigravity”** opens Antigravity IDE — never “you cancelled the action”.
-- [ ] A quick “Nope, open Claude” right after a reply isn't dropped.
-- [ ] **Skip N.** “Skip 3 songs” / “skip the next two” (music playing, no wake word).
-- [ ] **Queue replaced.** “Play something chill”, then “play something energetic”: none of the chill songs play
-      first; a song you queued yourself stays.
-- [ ] **Mini player in a game.** Gaming Mode turned off by voice while the game runs, then turn the mini player
-      on: it stays visible and changes with the track.
+**Email and typing**
+- [ ] “Hey SAINT, write an email to Mr Norton about Friday” in one breath runs the email scene without asking
+      who or what.
+- [ ] Say a new person's address (“J. Norton at EssexTech.net”): SAINT says “I've got j.norton@essextech.net —
+      is that right?”; after “yes” the next email to them doesn't ask again.
+- [ ] An email body of 600+ characters goes in complete (no 500-character error).
+- [ ] “Type out a summary of what SAINT is” in Notepad: clean text, no “pppp gggg”; what you'd copied before is
+      still on the clipboard afterwards.
 
-## 3. Still broken from your notes (not fixed yet — test again after the fix)
+**Spotify**
+- [ ] “Play the album, Fancy That”: the whole album plays (not one song), on repeat, shuffle as you had it.
+- [ ] “This is not the kind of song I was talking about” skips the song and steers away from it.
+- [ ] With an unfinished lesson open (e.g. after “I haven't learned how to …”), “play …”, “skip” and “move the
+      mini player …” just happen — no “What's next?” after each.
 
-- [ ] Mood/genre queue: songs don't match the mood; “not this kind of song” isn't understood; removing a song
-      from the queue fails. (Spotify's API can't remove queue items — SAINT should say so and skip instead.)
-- [ ] “Play the album X” plays one song, says it'll play more like it, and keeps the old queue.
-- [ ] “Hover over …” created a reminder instead of hovering.
-- [ ] Mini player: smallest size barely smaller; wanted free resizing in both directions — square shows just
-      the album art, hover shows title, progress bar and controls.
-- [ ] Mini player lyrics don't update until the window is moved; add volume control to it.
-- [ ] Move the mini player by voice: “top left of my second screen” (inset from the edge), “right a bit”,
-      “down a couple pixels”.
-- [ ] Start Ollama automatically when SAINT starts (and check it's answering).
-- [ ] “Make a new folder in downloads” then “add a text file in that folder”: spoke code instead of doing it.
-- [ ] “Type out a summary of what SAINT is” in Notepad typed “a sssss…”.
-- [ ] Middle step of a multi-step task fails, then “where were we?” / “continue what we were doing”.
-- [ ] Start a new request before the previous one finishes: the old task stops at a safe point.
-- [ ] iPhone + AirPods: audio switches to call quality; the audio-route UI is static and too big; output should
-      follow the phone (speaker for Spotify, Bluetooth mic for input).
-- [ ] iPhone “Sync now” crashed the app, and the PC then said you were on a call.
-- [ ] iPhone: the keyboard's Send key doesn't send.
-- [ ] iPhone: text too large on some screens; check every supported iPhone size.
+## 2. Still open (not fixed yet)
 
-## 4. Never tested yet
+- [ ] “Make it shorter” / “reduce the character count” while SAINT reads a draft back rewrites it (only worked on
+      pasted text).
+- [ ] Mood mixes match the mood (“play something hype” played “RUN” by Brahman); the new mix replaces the whole
+      old queue.
+- [ ] “Make a new folder in Downloads”, then “put that text file in the new folder” moves the file.
+- [ ] Replies after a multi-step task are short (it read out every step and path).
+- [ ] The email scene asked “What's Personal's email address?” — the account name was taken as the recipient.
+- [ ] “When I say John I mean Gian”, then “open my messages with John” opens the Instagram chat with Gian (it
+      looked for an app called “messages with john”).
+- [ ] iPhone + AirPods: audio stays out of call quality; the audio-route UI is compact; output follows the phone
+      (speaker for Spotify, Bluetooth mic for input).
+- [ ] iPhone “Sync now” doesn't crash, and the PC doesn't then say you're on a call.
+- [ ] iPhone: the keyboard's Send key sends.
+- [ ] iPhone: text fits on every supported iPhone size.
+
+## 3. Never tested yet
+
+**SAINT Link (PC ↔ PC, phone)**
+- [ ] PC ↔ PC on the same Wi-Fi: only the 8-character code is needed to pair.
+- [ ] PC ↔ PC over Tailscale only (different networks): the code alone pairs.
+- [ ] First Link start: one admin prompt for the firewall; afterwards the phone connects over Tailscale away
+      from home.
+- [ ] Devices → a disconnected device → “Check connection” names each address and what's blocking it.
+- [ ] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
+- [ ] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
+- [ ] Ollama stopped on the PC: the iPhone answers with Claude / its own model instead of reading the error.
+- [ ] A command on PC A shows in PC B's History (“Other PC”) and the iPhone's Activity tab; an “ask once” answer
+      taught on A is known on B.
 
 **Watching and notifications**
 - [ ] “Tell me when Claude finishes.”
@@ -76,43 +87,26 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 - [ ] Important notifications are read aloud.
 - [ ] An update dialog is handled only after you confirm.
 
-**Lessons and email**
-- [ ] Teach a step SAINT can't do: it asks you to do that step.
-- [ ] Teach the Gmail email by demonstration: the read-back lists the steps and asks who / about / what.
-
-**Instagram**
+**Instagram and MCP**
 - [ ] “Open what Gian sent me on Instagram” — with Instagram open, and with the browser fallback.
-- [ ] SAINT never claims it found a message it didn't.
-
-**SAINT Link and sync**
-- [ ] PC ↔ PC on the same Wi-Fi: only the 8-character code is needed to pair.
-- [ ] PC ↔ PC over Tailscale only (different networks): the code alone pairs.
-- [ ] First Link start: one admin prompt for the firewall; afterwards the phone connects over Tailscale away from home.
-- [ ] Devices → a disconnected device → “Check connection” names each address and what's blocking it.
-- [ ] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
-- [ ] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
-- [ ] Ollama stopped on the PC: the iPhone answers with Claude / its own model instead of reading the error.
-- [ ] A command on PC A shows in PC B's History (“Other PC”) and the iPhone's Activity tab; an “ask once”
-      answer taught on A is known on B.
-
-**MCP**
 - [ ] Settings → MCP: add a filesystem or notes server, Save & connect, use one of its tools by voice; a tool
       that changes things asks first.
 
-## 5. Release gate
+## 4. Release gate
 
-- [ ] Core voice / wake / STT pass on real hardware.
+- [ ] The release installer (`SAINT-Setup.exe` from the GitHub release) installs and runs on a clean Windows
+      user: Kokoro voice downloads, no personal data included.
+- [ ] Section 1 passes.
 - [ ] iPhone + AirPods tests pass.
-- [ ] Section 1 passes on a clean Windows user.
 - [ ] Final manual run on the exact commit being released.
 
 ## Test record
 
 | Date | Commit | Area | Result | Notes |
 |---|---|---|---|---|
-| | | Installer / voice | | |
-| | | Scenes / email | | |
-| | | Names / apps | | |
-| | | Spotify | | |
+| 2026-10-05 | v0.3 | Installer / voice | Pass | Build, clean install, offline install, uninstall, voice volume |
 | | | Mini player | | |
+| | | Voice / language | | |
+| | | Email / typing | | |
+| | | Spotify | | |
 | | | Link / iPhone | | |

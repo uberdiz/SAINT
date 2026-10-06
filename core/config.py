@@ -279,7 +279,8 @@ DEFAULT_CONFIG = {
         "multi_window_policy": "smart",
         "recent_focus_sec": 600,          # "smart": how recently a window must have been used
         "preferred_browser": None,        # the browser window picked last time (kept until it closes)
-        "max_type_length": 500,
+        "max_type_length": 500,           # SAINT Link: long prompts are typed in pieces this size
+        "paste_over": 60,                 # paste text longer than this (typing long text garbles in some apps)
         "apps": {},                       # custom "name": "path or URI" launch aliases
     },
 

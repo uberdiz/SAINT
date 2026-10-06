@@ -92,6 +92,24 @@ def transport(action: str, on_error=None):
     run_async(go, None, lambda e: on_error and on_error(str(e)))
 
 
+def app_stem(np: dict) -> str:
+    """The name Windows' volume mixer knows a media session's app by
+    ("Spotify.exe" -> "spotify", "OperaSoftware.OperaWebBrowser.17…" -> "opera")."""
+    from modules.desktop.media import app_label
+    label = str(np.get("app") or app_label(str(np.get("app_id") or ""))).strip().lower()
+    stem = label.split()[0] if label else ""
+    return {"edge": "msedge", "media": ""}.get(stem, stem)
+
+
+def app_volume(app: str, percent=None, on_done=None, on_error=None):
+    """Read (``percent`` None) or set one app's Windows volume, off the GUI thread.
+    ``on_done`` gets the app's volume 0-100 afterwards."""
+    def go():
+        from modules.desktop.system_controls import app_volume as set_app
+        return (set_app(app, percent=percent) or {}).get("percent")
+    run_async(go, on_done, lambda e: on_error and on_error(str(e)))
+
+
 def hotwords_on() -> bool:
     return bool(config.get("voice.music_hotwords", True))
 

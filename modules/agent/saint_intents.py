@@ -128,6 +128,8 @@ def parse_saint_ui(text: str) -> Optional[Intent]:
     if re.search(r"\bmini ?player\b|\bnow playing widget\b|\bmusic widget\b|\bspotify widget\b", t):
         if re.search(r"\b(youtube|video|clip)\b", t):
             return None
+        if re.search(r"\b(?:move|put(?!\s+up)|place|position|drag|nudge|shift|snap|send|resize|bigger|smaller)\b", t):
+            return None            # placing / sizing it (task_intents) — never a toggle that hides it
         if not own:
             try:
                 from modules.desktop import youtube

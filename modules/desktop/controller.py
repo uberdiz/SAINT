@@ -851,10 +851,9 @@ class DesktopController:
     # ------------------------------------------------------------------ #
     def type_text(self, text: str, target: Optional[str] = None, press_enter: bool = False) -> dict:
         _require("allow_keyboard", "Keyboard control")
-        limit = int(config.get("desktop.max_type_length", 500))
-        if len(text) > limit:
-            raise ToolError(f"That's {len(text)} characters; the limit is {limit} (Settings > Desktop Control).",
-                            "TOO_LONG")
+        text = (text or "").replace("\r\n", "\n")
+        if len(text) > MAX_INPUT_TEXT:
+            raise ToolError(f"That's {len(text)} characters — too much to put in one field.", "TOO_LONG")
         win = self._input_target()
         _game_guard()
         focused = None
@@ -862,10 +861,24 @@ class DesktopController:
             from modules.desktop import uia
             focused = uia.focus_input(target)
             time.sleep(0.05)
+        # Short text is typed; longer text (an e-mail body, a summary) is pasted — any length,
+        # instantly, and exactly. "Paste text longer than" (Settings > Desktop Control) sets where.
+        try:
+            paste_over = int(config.get("desktop.paste_over", 60))
+        except (TypeError, ValueError):
+            paste_over = 60
+        pasted = False
+        if os.name == "nt" and len(text) > paste_over:
+            try:
+                from modules.desktop import clipboard
+                clipboard.paste_text(text, lambda: _send_combo(0x11, 0x56))      # ctrl+v
+                pasted = True
+            except Exception as e:
+                log.info("type_text.paste_failed %s — typing instead", e)
         # Typed in chunks so "stop" interrupts long text part-way.
         from core.cancel import cancel
         tok = cancel.token()
-        for i in range(0, len(text), 40):
+        for i in range(0, 0 if pasted else len(text), 40):
             if tok.cancelled:
                 raise ToolError(f"Stopped typing after {i} characters.", "CANCELLED")
             _send_unicode(text[i:i + 40])
@@ -1067,6 +1080,22 @@ if os.name == "nt":
 
     class _INPUT(ctypes.Structure):
         _fields_ = [("type", wintypes.DWORD), ("u", _INPUTUNION)]
+
+
+MAX_INPUT_TEXT = 100_000          # one field; anything longer is a mistake, not an e-mail
+
+
+def _send_combo(*vks: int):
+    """Press virtual keys down in order and release them in reverse (ctrl+v = 0x11, 0x56)."""
+    if os.name != "nt":
+        import pyautogui
+        pyautogui.hotkey("ctrl", "v")
+        return
+    KEYEVENTF_KEYUP = 0x0002
+    seq = [(vk, 0) for vk in vks] + [(vk, KEYEVENTF_KEYUP) for vk in reversed(vks)]
+    arr = (_INPUT * len(seq))(*[_INPUT(1, _INPUTUNION(ki=_KEYBDINPUT(vk, 0, f, 0, 0))) for vk, f in seq])
+    if ctypes.windll.user32.SendInput(len(seq), arr, ctypes.sizeof(_INPUT)) != len(seq):
+        raise ToolError("Windows blocked the keyboard input (is an admin window focused?).", "INPUT_BLOCKED")
 
 
 def _send_unicode(text: str):

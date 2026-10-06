@@ -36,6 +36,11 @@ _SCRIPTS = (
 # Said in every language, so they say nothing about which one.
 NEUTRAL = frozenset({"ok", "okay", "hmm", "hm", "uh", "um", "eh", "ah", "oh", "hey", "hi", "yeah", "wow"})
 MIXED_SHARE = 0.25          # a second language needs this share of the votes to make a sentence "mixed"
+# Paths, links, e-mail addresses and file names aren't in any language: "C:\Users\..." made
+# "open this C:\...\Antigravity IDE.lnk" French (2026-10-05) and the reply came back in French.
+_NOT_WORDS = re.compile(r"\b[A-Za-z]:\\[^\"“”<>|\n]*|\bhttps?://\S+|\bwww\.\S+|\S+@\S+\.\w+|"
+                        r"\b[\w-]+\.(?:lnk|exe|txt|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|mp[34]|zip|json|py|html?)\b",
+                        re.I)
 
 
 @dataclass
@@ -66,7 +71,7 @@ def _script_counts(text: str) -> Dict[str, int]:
 def detect(text: str, hint: str = "", prefer: Sequence[str] = (), sticky: str = "") -> Detection:
     """``hint``: the speech recogniser's guess. ``prefer``: the user's languages,
     most likely first. ``sticky``: the language of the conversation so far."""
-    text = text or ""
+    text = _NOT_WORDS.sub(" ", text or "")
     det = Detection()
     words = _WORD.findall(text)
     letters = sum(len(w) for w in words)

@@ -43,7 +43,7 @@ log = logging.getLogger("saint.conversation")
 
 # Stop/override phrases that tell SAINT to cease speaking without starting a new turn
 STOP_PHRASES = {
-    "stop talking", "stop saying", "be quiet", "shut up", "hold on",
+    "stop talking", "stop speaking", "stop saying", "be quiet", "shut up", "hold on",
     "wait wait", "that's enough", "that is enough", "never mind",
     "nevermind", "forget it", "forget about it", "im done",
     "i m done", "im finished", "i m finished", "i am done",

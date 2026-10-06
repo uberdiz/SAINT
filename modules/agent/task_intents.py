@@ -52,6 +52,64 @@ _PLACE = re.compile(
     r"(?:to|on|onto)\s+(?:my\s+|the\s+)?(?P<mon>main|primary|first|second|third|other|left|right|\d)\s*"
     r"(?:monitor|screen|display)?[.!]?$", re.I)
 
+_WHAT = (r"(?P<what>mini\s*player|music\s+player|now\s+playing\s+widget|(?:the\s+)?saint(?:'s)?\s+(?:window|ui|app)|"
+         r"saint|yourself|your\s+window|the\s+overlay|overlay)")
+_MON = r"(?P<mon>main|primary|first|second|third|other|left|right|\d)\s*(?:monitor|screen|display)"
+# "move the mini player to the top left of my second screen", "put the mini player in the bottom right corner"
+_CORNER = re.compile(
+    rf"^(?:move|put|send|place|snap|stick|drag)\s+(?:the\s+|my\s+|your\s+)?{_WHAT}\s+"
+    r"(?:to|in|into|on|onto|at)\s+(?:the\s+)?"
+    r"(?P<corner>(?:(?:top|upper|bottom|lower)(?:[\s-]*(?:left|right))?|left|right|middle|cent(?:er|re))"
+    r"(?:\s+(?:corner|side|edge))?)"
+    rf"(?:\s+(?:of|on|in)\s+(?:my\s+|the\s+|this\s+)?(?:{_MON}|screen|monitor|display))?[.!]?$", re.I)
+# "right a bit", "move it down a couple pixels", "nudge the mini player left 20 pixels"
+_NUDGE = re.compile(
+    r"^(?:(?:move|nudge|shift|push|scoot|bump)\s+(?:it|that|the\s+mini\s*player|the\s+overlay|saint|yourself)?\s*)?"
+    r"(?:(?P<pre>a\s+(?:bit|little(?:\s+bit)?|tad|touch|lot|smidge)|(?:by\s+)?(?:a\s+)?(?:couple|few|\d+)"
+    r"(?:\s+of)?\s+(?:more\s+)?(?:pixels?|px))\s+)?"
+    r"(?P<dir>left|right|up|down|higher|lower)"
+    r"(?:\s+(?P<post>a\s+(?:bit|little(?:\s+bit)?|tad|touch|lot|smidge)(?:\s+more)?|(?:by\s+)?(?:a\s+)?(?:couple|few|\d+)"
+    r"(?:\s+of)?\s+(?:more\s+)?(?:pixels?|px)|more))?(?:\s+please)?[.!]?$", re.I)
+# "make the mini player bigger", "shrink the mini player", "just show the album art", "full size mini player"
+_MINI_SIZE = re.compile(
+    r"^(?:(?:make|set|turn|switch|change)\s+(?:the\s+)?mini\s*player\s+(?:a\s+(?:bit|little|lot)\s+)?(?:to\s+)?"
+    r"(?P<a>bigger|larger|smaller|tiny|small|big|large|normal(?:\s+size)?|full(?:\s+size)?|album\s+art(?:\s+only)?)"
+    r"|(?P<b>shrink|grow|enlarge|expand)\s+(?:the\s+)?mini\s*player"
+    r"|(?:(?:just|only)\s+)?show\s+(?:just\s+|only\s+)?(?:the\s+)?(?P<c>album\s+(?:art|cover))(?:\s+only)?"
+    r"(?:\s+(?:in|on)\s+the\s+mini\s*player)?)(?:\s+please)?[.!]?$", re.I)
+_last_placed = {"what": "", "at": 0.0}       # "right a bit" right after a move nudges the same window
+
+
+def _amount(words: str) -> int:
+    w = (words or "").lower()
+    n = re.search(r"\d+", w)
+    if n:
+        return max(1, min(2000, int(n.group())))
+    if "couple" in w:
+        return 6
+    if "few" in w:
+        return 12
+    if "lot" in w:
+        return 160
+    if "tad" in w or "touch" in w or "smidge" in w:
+        return 15
+    return 40                                 # "a bit", "a little", or just "left"
+
+
+def _which(what: str) -> str:
+    what = (what or "").lower()
+    return "mini_player" if "player" in what or "widget" in what else "overlay" if "overlay" in what else "saint"
+
+
+def _corner(words: str) -> str:
+    w = words.lower().replace("upper", "top").replace("lower", "bottom")
+    if re.search(r"middle|cent(?:er|re)", w):
+        return "center"
+    v = "top" if "top" in w else "bottom" if "bottom" in w else ""
+    h = "left" if "left" in w else "right" if "right" in w else ""
+    return "-".join(p for p in (v, h) if p)
+
+
 _AUTO = re.compile(r"^(?:turn\s+|switch\s+)?(?P<v1>on|off)?\s*auto(?:matic)?\s+gam(?:e|ing)\s+mode"
                    r"(?:\s+(?P<v2>on|off))?[.!]?$", re.I)
 
@@ -81,6 +139,30 @@ def parse_task(text: str) -> Optional[Intent]:
         what = m.group("what").lower()
         what = "mini_player" if "player" in what else "overlay" if "overlay" in what else "saint"
         return Intent("ui.place", lambda: _place(what, m.group("mon").lower()), "ui")
+    m = _MINI_SIZE.match(t)
+    if m:
+        word = (m.group("a") or m.group("b") or m.group("c") or "").lower()
+        size = ("art" if "album" in word or word == "tiny" else
+                "bigger" if word in ("bigger", "larger", "big", "large", "grow", "enlarge", "expand") else
+                "smaller" if word in ("smaller", "small", "shrink") else "normal")
+        return Intent("ui.mini_size", lambda: _mini_size(size), "ui")
+    m = _CORNER.match(t)
+    if m:
+        what, corner = _which(m.group("what")), _corner(m.group("corner"))
+        mon = (m.group("mon") or "").lower()
+        return Intent("ui.place", lambda: _place(what, mon, corner=corner), "ui")
+    m = _NUDGE.match(t)
+    if m:
+        named = re.search(r"mini\s*player|overlay|saint|yourself", t, re.I)
+        recent = time.time() - _last_placed["at"] < 300
+        # A bare "right a bit" only means the window right after SAINT moved one.
+        if named or (recent and _last_placed["what"]):
+            what = _which(named.group()) if named else _last_placed["what"]
+            n = _amount(m.group("pre") or m.group("post") or "")
+            d = m.group("dir").lower()
+            dx = -n if d == "left" else n if d == "right" else 0
+            dy = -n if d in ("up", "higher") else n if d in ("down", "lower") else 0
+            return Intent("ui.nudge", lambda: _place(what, "", dx=dx, dy=dy), "ui")
     m = _AUTO.match(t)
     if m and (m.group("v1") or m.group("v2")):
         return Intent("ui.auto_gaming_mode", lambda: _auto(m.group("v1") or m.group("v2")), "ui")
@@ -196,12 +278,27 @@ def _ui(cmd: str, **args):
     return ui_link.send(cmd, timeout=3.0, **args)
 
 
-def _place(what: str, monitor: str) -> Reply:
-    ok, msg = _ui("place", what=what, monitor=monitor)
+def _place(what: str, monitor: str, corner: str = "", dx: int = 0, dy: int = 0) -> Reply:
+    ok, msg = _ui("place", what=what, monitor=monitor, corner=corner, dx=dx, dy=dy)
     name = {"mini_player": "The mini player", "overlay": "The overlay"}.get(what, "SAINT")
     if not ok:
         return Reply(msg or "SAINT's window isn't responding.", ok=False)
+    _last_placed.update(what=what, at=time.time())
+    if dx or dy:
+        return Reply("Moved it.")
+    where = {"center": "in the middle", "": ""}.get(corner, f"in the {corner.replace('-', ' ')} corner"
+                                                    if "-" in corner else f"on the {corner}")
+    if corner:
+        return Reply(f"{name} is {where}" + (f" of {msg}." if monitor and msg else "."))
     return Reply(f"{name} is on {msg or 'that monitor'} now.")
+
+
+def _mini_size(size: str) -> Reply:
+    ok, msg = _ui("mini_size", size=size)
+    if not ok:
+        return Reply(msg or "SAINT's window isn't responding.", ok=False)
+    return Reply({"art": "Just the album art now — hover over it for the controls.",
+                  "normal": "The mini player is back to its normal size."}.get(size, "Done."))
 
 
 def _auto(value: str) -> Reply:
