@@ -100,7 +100,13 @@ def main():
     parser.add_argument("--background", action="store_true", help="start hidden in the system tray")
     parser.add_argument("--profile", default="", help="test on a separate data folder: clean, demo, or a "
                                                       "snapshot made with tools/profiles.py (your data is untouched)")
+    parser.add_argument("--selftest", nargs="?", const="-", default=None, metavar="REPORT.json",
+                        help="check this SAINT (libraries, models, UI, voice round trip) without starting it, "
+                             "write the results as JSON and exit (core/selftest.py)")
     args = parser.parse_args()
+    if args.selftest is not None:
+        from core import selftest
+        return selftest.run("" if args.selftest == "-" else args.selftest)
 
     from PySide6.QtCore import QLockFile, QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox

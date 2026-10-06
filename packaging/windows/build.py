@@ -74,40 +74,6 @@ def pyinstaller():
     subprocess.run(cmd, check=True, cwd=str(ROOT), env=env)
 
 
-def hf_cache() -> Path:
-    if os.environ.get("HF_HUB_CACHE"):
-        return Path(os.environ["HF_HUB_CACHE"])
-    home = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
-    return home / "hub"
-
-
-def bundle_models(stt: str):
-    """Copy the speech models into SAINT/models/hf/hub in the Hugging Face cache layout."""
-    src_root, dst_root = hf_cache(), APP / "models" / "hf" / "hub"
-    for repo, keep in MODELS.items():
-        repo = repo.format(stt=stt)
-        name = "models--" + repo.replace("/", "--")
-        src = src_root / name
-        refs = src / "refs" / "main"
-        if not refs.exists():
-            print(f"!! {repo} isn't in the Hugging Face cache ({src}); SAINT will download it on first use.")
-            continue
-        commit = refs.read_text().strip()
-        snap = src / "snapshots" / commit
-        dst = dst_root / name
-        (dst / "refs").mkdir(parents=True, exist_ok=True)
-        (dst / "refs" / "main").write_text(commit)
-        for f in snap.rglob("*"):
-            rel = f.relative_to(snap).as_posix()
-            if f.is_dir() or (keep and not any(rel == k or (k.endswith("/") and rel.startswith(k)) for k in keep)):
-                continue
-            out = dst / "snapshots" / commit / rel
-            out.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f.resolve(), out)                # real files, not cache symlinks
-        print(f"bundled {repo} @ {commit[:8]}")
-
-
-
 def ensure_supported_python():
     """The native Windows dependency stack is released against Python 3.12."""
     if sys.version_info[:2] != (3, 12):
@@ -275,6 +241,33 @@ def check_no_user_data():
     print("No user data in the bundle.", flush=True)
 
 
+def packaged_selftest(voice: bool = False) -> dict:
+    """Run build/windows/SAINT/SAINT.exe --selftest the way a user's PC would: its own folder as the
+    working directory, a fresh data folder, and no Python anywhere on PATH. Fails the build when a
+    required check fails (a missing library, model file, DLL or resource path)."""
+    import json
+    import tempfile
+    exe = APP / "SAINT.exe"
+    data = Path(tempfile.mkdtemp(prefix="saint-selftest-"))
+    report = data / "selftest.json"
+    path = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
+                           if p and "python" not in p.lower() and ".venv" not in p.lower())
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("PYTHON", "VIRTUAL_ENV", "CONDA"))}
+    env.update(PATH=path, SAINT_DATA_DIR=str(data / "SAINT"), QT_QPA_PLATFORM="offscreen")
+    if not voice:
+        env["SAINT_SELFTEST_NO_VOICE"] = "1"
+    print("+ SAINT.exe --selftest (isolated data, no Python on PATH)", flush=True)
+    proc = subprocess.run([str(exe), "--selftest", str(report)], cwd=str(APP), env=env, timeout=1800)
+    result = json.loads(report.read_text(encoding="utf-8")) if report.exists() else {"passed": False, "checks": []}
+    for c in result.get("checks", []):
+        mark = "ok  " if c["ok"] else ("FAIL" if c["required"] else "warn")
+        print(f"  {mark} {c['name']}: {str(c['detail'])[:160]}", flush=True)
+    if proc.returncode != 0 or not result.get("passed"):
+        raise SystemExit(f"The packaged SAINT.exe failed its self-test (exit {proc.returncode}); see above.")
+    shutil.rmtree(data, ignore_errors=True)
+    return result
+
+
 def main():
     ensure_supported_python()
     ensure_build_environment()
@@ -282,12 +275,17 @@ def main():
     ap.add_argument("--no-installer", action="store_true")
     ap.add_argument("--no-models", action="store_true", help="do not bundle large speech models (default for releases)")
     ap.add_argument("--stt-model", default="base.en")
+    ap.add_argument("--no-selftest", action="store_true", help="skip running the packaged SAINT.exe --selftest")
+    ap.add_argument("--selftest-voice", action="store_true",
+                    help="include the voice round trip in the self-test (downloads the models into a temp folder)")
     args = ap.parse_args()
     make_icon()
     make_version_file()
     pyinstaller()
     check_voice_bundle()
     check_no_user_data()
+    if not args.no_selftest:
+        packaged_selftest(voice=args.selftest_voice)
     # Models are intentionally not bundled into the installer. They are published
     # as separate GitHub Release assets and downloaded into the user's data folder.
     if not args.no_installer:
