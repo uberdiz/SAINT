@@ -1736,8 +1736,13 @@ def parse_extras(text: str) -> Optional[Intent]:
     return parse(text)
 
 
-_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_web, parse_youtube, parse_steam, parse_files, parse_taskmgr,
-                   parse_winctl, parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
+def parse_dev(text: str) -> Optional[Intent]:
+    from modules.agent.dev_intents import parse_dev as parse
+    return parse(text)
+
+
+_SINGLE_PARSERS = [parse_system, parse_saint_ui, parse_dev, parse_web, parse_youtube, parse_steam, parse_files,
+                   parse_taskmgr, parse_winctl, parse_spotify, parse_extras, parse_desktop_nl, parse_desktop]
 
 
 _OPEN_PATH = re.compile(r"^(?:(?:hey\s+)?saint[,.!\s]+)?(?:open|launch|start|run)\s+(?:(?P<label>.+?)\s+"
