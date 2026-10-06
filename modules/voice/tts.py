@@ -190,8 +190,17 @@ class KokoroTTS(TTSEngine):
         from core.events import event_bus, EventType
 
         sample_rate = 24000
-        stream = sd.OutputStream(samplerate=sample_rate, channels=1)
-        stream.start()
+        try:
+            stream = sd.OutputStream(samplerate=sample_rate, channels=1)
+            stream.start()
+        except Exception as e:
+            # No speakers / headphones (unplugged, or a build machine): log it instead of the
+            # playback thread dying with a traceback; queued speech is dropped.
+            import logging
+            logging.getLogger("saint.tts").warning("tts.no_output_device %s", e)
+            self._currently_playing = False
+            self._playback_active = False
+            return
 
         try:
             while not self._closed:
