@@ -11,57 +11,57 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 ## 1. Fixed after your 2026-10-05 notes — re-check
 
 **Mini player**
-- [ ] Drag any edge or corner: it resizes up/down *and* side to side, and keeps that size after a restart.
-- [ ] Make it small or square: only the album art shows. Hovering shows title, progress, play/skip and volume;
+- [can still be dragged off screen adn the album cover size has a limit] Drag any edge or corner: it resizes up/down *and* side to side, and keeps that size after a restart.
+- [Y] Make it small or square: only the album art shows. Hovering shows title, progress, play/skip and volume;
       a new track shows its name for a few seconds.
-- [ ] Right-click → Size presets (Album art, Compact, Normal, Wide, Large) and the Lyrics toggle work.
-- [ ] “Make the mini player smaller” / “bigger” / “just show the album art” / “normal size”.
-- [ ] Track, progress bar and lyrics change on their own — no clicking or moving it — on the desktop and in a game
+- [Y] Right-click → Size presets (Album art, Compact, Normal, Wide, Large) and the Lyrics toggle work.
+- [Y] “Make the mini player smaller” / “bigger” / “just show the album art” / “normal size”.
+- [Y] Track, progress bar and lyrics change on their own — no clicking or moving it — on the desktop and in a game
       (turn it on by voice while the game runs: it appears and is the right size straight away).
-- [ ] Volume: the slider and mute button change Spotify's volume; with a YouTube video playing they change the
+- [isnt synced with spotify at all] Volume: the slider and mute button change Spotify's volume; with a YouTube video playing they change the
       browser's volume. Scrolling over the player changes volume; ctrl+scroll still fades it.
-- [ ] “Move the mini player to the top left of my second screen”, then “right a bit” and “down a couple pixels”:
+- [Y] “Move the mini player to the top left of my second screen”, then “right a bit” and “down a couple pixels”:
       it moves each time and never turns off.
 
 **Voice and language**
-- [ ] “Make a new folder in my Downloads and add a text file to it”: the reply says “Downloads”, not
+- [Y] “Make a new folder in my Downloads and add a text file to it”: the reply says “Downloads”, not
       `C:\Users\…`, in SAINT's normal (not French) accent.
-- [ ] “Open this "C:\…\Antigravity IDE.lnk" for Antigravity” gets an English reply; “Open Antigravity” opens
+- [Y] “Open this "C:\…\Antigravity IDE.lnk" for Antigravity” gets an English reply; “Open Antigravity” opens
       Antigravity IDE.
-- [ ] “Stop speaking, friend!” while SAINT talks: it stops talking and the mic stays on.
-- [ ] “Hey SAINT” alone (no wake chime) → “I'm here — what do you need?”.
+- [Y] “Stop speaking, friend!” while SAINT talks: it stops talking and the mic stays on.
+- [Y] “Hey SAINT” alone (no wake chime) → “I'm here — what do you need?”.
 
 **Email and typing**
-- [ ] “Hey SAINT, write an email to Mr Norton about Friday” in one breath runs the email scene without asking
+- [Y] “Hey SAINT, write an email to Mr Norton about Friday” in one breath runs the email scene without asking
       who or what.
 - [ ] Say a new person's address (“J. Norton at EssexTech.net”): SAINT says “I've got j.norton@essextech.net —
       is that right?”; after “yes” the next email to them doesn't ask again.
 - [ ] An email body of 600+ characters goes in complete (no 500-character error).
-- [ ] “Type out a summary of what SAINT is” in Notepad: clean text, no “pppp gggg”; what you'd copied before is
+- [Y] “Type out a summary of what SAINT is” in Notepad: clean text, no “pppp gggg”; what you'd copied before is
       still on the clipboard afterwards.
 
 **Spotify**
-- [ ] “Play the album, Fancy That”: the whole album plays (not one song), on repeat, shuffle as you had it.
-- [ ] “This is not the kind of song I was talking about” skips the song and steers away from it.
-- [ ] With an unfinished lesson open (e.g. after “I haven't learned how to …”), “play …”, “skip” and “move the
+- [N plays one song by the artist and queued other songs like it, it should play the entire album on repeat.] “Play the album, Fancy That”: the whole album plays (not one song), on repeat, shuffle as you had it.
+- [it replied "it did not like that." when i said thats not the type of music i said and when it did work when i pasted that response it skipped but i liked the song that was playing it just wasnt the vibe i asked for.] “This is not the kind of song I was talking about” skips the song and steers away from it.
+- [Y] With an unfinished lesson open (e.g. after “I haven't learned how to …”), “play …”, “skip” and “move the
       mini player …” just happen — no “What's next?” after each.
 
 ## 2. Still open (not fixed yet)
 
-- [ ] “Make it shorter” / “reduce the character count” while SAINT reads a draft back rewrites it (only worked on
+- [Y] “Make it shorter” / “reduce the character count” while SAINT reads a draft back rewrites it (only worked on
       pasted text).
-- [ ] Mood mixes match the mood (“play something hype” played “RUN” by Brahman); the new mix replaces the whole
+- [kinda works but some songs arent the mood i asked for and it doesnt listen to that very well.] Mood mixes match the mood (“play something hype” played “RUN” by Brahman); the new mix replaces the whole
       old queue.
-- [ ] “Make a new folder in Downloads”, then “put that text file in the new folder” moves the file.
-- [ ] Replies after a multi-step task are short (it read out every step and path).
-- [ ] The email scene asked “What's Personal's email address?” — the account name was taken as the recipient.
-- [ ] “When I say John I mean Gian”, then “open my messages with John” opens the Instagram chat with Gian (it
+- [Y] “Make a new folder in Downloads”, then “put that text file in the new folder” moves the file.
+- [Y mostly works but one queiry didnt work for me] Replies after a multi-step task are short (it read out every step and path).
+- [cant change my email it doesnt know how.] The email scene asked “What's Personal's email address?” — the account name was taken as the recipient.
+- [i think i worked] “When I say John I mean Gian”, then “open my messages with John” opens the Instagram chat with Gian (it
       looked for an app called “messages with john”).
-- [ ] iPhone + AirPods: audio stays out of call quality; the audio-route UI is compact; output follows the phone
+- [on iphone it works fine but on pc the airpods connected the audio sucks] iPhone + AirPods: audio stays out of call quality; the audio-route UI is compact; output follows the phone
       (speaker for Spotify, Bluetooth mic for input).
-- [ ] iPhone “Sync now” doesn't crash, and the PC doesn't then say you're on a call.
-- [ ] iPhone: the keyboard's Send key sends.
-- [ ] iPhone: text fits on every supported iPhone size.
+- [button doesnt press] iPhone “Sync now” doesn't crash, and the PC doesn't then say you're on a call.
+- [Y] iPhone: the keyboard's Send key sends.
+- [Y] iPhone: text fits on every supported iPhone size.
 
 ## 3. Never tested yet
 
@@ -72,9 +72,9 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
       from home.
 - [ ] Devices → a disconnected device → “Check connection” names each address and what's blocking it.
 - [ ] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
-- [ ] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
-- [ ] Ollama stopped on the PC: the iPhone answers with Claude / its own model instead of reading the error.
-- [ ] A command on PC A shows in PC B's History (“Other PC”) and the iPhone's Activity tab; an “ask once” answer
+- [Y] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
+- [Y] Ollama stopped on the PC: the iPhone answers with Claude / its own model instead of reading the error.
+- [Y] A command on PC A shows in PC B's History (“Other PC”) and the iPhone's Activity tab; an “ask once” answer
       taught on A is known on B.
 
 **Watching and notifications**
@@ -94,10 +94,10 @@ scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-�
 
 ## 4. Release gate
 
-- [ ] The release installer (`SAINT-Setup.exe` from the GitHub release) installs and runs on a clean Windows
+- [Y] The release installer (`SAINT-Setup.exe` from the GitHub release) installs and runs on a clean Windows
       user: Kokoro voice downloads, no personal data included.
-- [ ] Section 1 passes.
-- [ ] iPhone + AirPods tests pass.
+- [Y] Section 1 passes.
+- [kinda iphone + airpods works but PC + airpods doesnt.] iPhone + AirPods tests pass.
 - [ ] Final manual run on the exact commit being released.
 
 ## Test record
