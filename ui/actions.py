@@ -75,7 +75,7 @@ def transport(action: str, on_error=None):
     """play_pause / next / previous on whatever the mini player is showing:
     Spotify through its API, anything else through Windows' media controls."""
     np = ui_bus.now_playing()
-    if np.get("source") == "spotify":
+    if str(np.get("source", "")).startswith("spotify"):
         if action == "play_pause":
             play_pause(on_error)
         else:
@@ -90,6 +90,24 @@ def transport(action: str, on_error=None):
         if not media.control(action, np.get("app_id", "")):
             raise RuntimeError(f"{np.get('app') or 'That app'} didn't accept that.")
     run_async(go, None, lambda e: on_error and on_error(str(e)))
+
+
+def app_stem(np: dict) -> str:
+    """The name Windows' volume mixer knows a media session's app by
+    ("Spotify.exe" -> "spotify", "OperaSoftware.OperaWebBrowser.17…" -> "opera")."""
+    from modules.desktop.media import app_label
+    label = str(np.get("app") or app_label(str(np.get("app_id") or ""))).strip().lower()
+    stem = label.split()[0] if label else ""
+    return {"edge": "msedge", "media": ""}.get(stem, stem)
+
+
+def app_volume(app: str, percent=None, on_done=None, on_error=None):
+    """Read (``percent`` None) or set one app's Windows volume, off the GUI thread.
+    ``on_done`` gets the app's volume 0-100 afterwards."""
+    def go():
+        from modules.desktop.system_controls import app_volume as set_app
+        return (set_app(app, percent=percent) or {}).get("percent")
+    run_async(go, on_done, lambda e: on_error and on_error(str(e)))
 
 
 def hotwords_on() -> bool:
@@ -133,6 +151,11 @@ def toggle_listening(done=None):
 # ---------------------------------------------------------------------- #
 def run_scene(scene, on_done=None):
     from modules.automation.scenes import scenes
+    if scenes.plan(scene).interactive and submit(f"run {scene.name}"):
+        # It asks questions ("which account?"): run it in the conversation, where they're answered.
+        if on_done:
+            on_done(["Started — answer SAINT's questions to continue."])
+        return
     scenes.run_in_background(scene, on_done=on_done)
 
 

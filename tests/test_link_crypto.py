@@ -197,6 +197,9 @@ def test_known_answers_primitives(vectors, monkeypatch):
     p = vectors["pairing_code"]
     assert encode_code(h(p["token"])) == p["code"] and decode_code(p["code"]) == h(p["token"])
     assert psk_for(h(p["token"])).hex() == p["psk"]
+    p = vectors["pairing_code_short"]
+    assert encode_code(h(p["token"])) == p["code"] and decode_code(p["code"]) == h(p["token"])
+    assert psk_for(h(p["token"])).hex() == p["psk"]
 
 
 def test_known_answers_handshakes(vectors, backend):
@@ -223,9 +226,21 @@ def test_pairing_codes_are_forgiving_and_strict():
     assert decode_code(code.lower()) == token
     assert decode_code(code.replace("-", " ")) == token
     with pytest.raises(ValueError):
-        decode_code("AAAA-BBBB")
+        decode_code("AAAA-BBB")                      # 4 bytes: neither a short nor a long code
     with pytest.raises(ValueError):
         decode_code("!!!!")
+
+
+def test_short_codes_are_eight_characters_and_stretched():
+    from modules.link.identity import PairingManager, SHORT_CODE_ITERATIONS, looks_like_code
+    import hashlib
+    offer = PairingManager().create("own")
+    assert len(offer.code) == 9 and offer.code.count("-") == 1          # ABCD-EFGH
+    assert decode_code(offer.code.lower().replace("-", "")) == offer.token
+    assert looks_like_code(offer.code) and not looks_like_code("192.168.1.20:8765")
+    assert offer.psk == hashlib.pbkdf2_hmac("sha256", offer.token, b"SAINT-LINK-PAIRING-SHORT",
+                                           SHORT_CODE_ITERATIONS, 32)
+    assert PairingManager().create("own", short=False).code.count("-") == 6
 
 
 def test_frames_reject_oversized_and_unknown_preamble():

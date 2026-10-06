@@ -242,6 +242,8 @@ class SpotifyTools:
             Tool("spotify.next", "Skip to the next track", {}, L, self.next,
                  parameters={"source": P("string", "who skipped", required=False, default="voice",
                                          enum=["voice", "ui"])}, llm_exposed=True),
+            Tool("spotify.skip", "Skip several tracks at once ('skip 3 songs')", {"count": "int"}, L, self.skip,
+                 parameters={"count": P("integer", "how many tracks to skip (1-10)")}, llm_exposed=True),
             Tool("spotify.ban_artist", "Stop recommending an artist ('no more of this artist')",
                  {"name": "string (optional)"}, L, self.ban_artist,
                  parameters={"name": P("string", "artist; blank = the one playing", required=False, default="")}),
@@ -890,15 +892,82 @@ class SpotifyTools:
     # ------------------------------------------------------------------ #
     def _play_entity(self, ent: Dict[str, Any]):
         # Whatever played before is replaced: so is its auto-queue.
-        self._radio_stop("new playback")
-        for u in ([ent.get("uri")] if not ent.get("context") else []) + list(ent.get("uris") or []):
-            self._radio_orphans.pop((u or "").split(":")[-1], None)     # asked for by name: never skip it
-        if ent.get("uris"):
-            self._with_device(lambda d: self.client.play(uris=ent["uris"], device_id=d))
-        elif ent.get("context"):
-            self._with_device(lambda d: self.client.play(context_uri=ent["uri"], device_id=d))
-        else:
-            self._with_device(lambda d: self.client.play(uris=[ent["uri"]], device_id=d))
+        keep = {(u or "").split(":")[-1] for u in ([ent.get("uri")] if not ent.get("context") else [])
+                + list(ent.get("uris") or [])}                         # asked for by name: never skip it
+        restore = self._replace_queue("new playback", keep=keep)
+        try:
+            if ent.get("uris"):
+                self._with_device(lambda d: self.client.play(uris=ent["uris"], device_id=d))
+            elif ent.get("context"):
+                self._with_device(lambda d: self.client.play(context_uri=ent["uri"], device_id=d))
+            else:
+                self._with_device(lambda d: self.client.play(uris=[ent["uri"]], device_id=d))
+        finally:
+            self._restore_volume(restore)
+
+    # ------------------------------------------------------------------ #
+    # Replacing the queue. Spotify's Web API can't clear the queue, so the
+    # songs SAINT queued for the music being replaced used to play anyway —
+    # each for a few seconds, until the poller noticed and skipped it. Now
+    # they're skipped past right away, with the volume down, before the new
+    # music starts. Only SAINT's own songs, and only the run of them at the
+    # front of the queue: anything the user queued stays.
+    # ------------------------------------------------------------------ #
+    def _replace_queue(self, why: str, keep=()) -> Optional[int]:
+        """Stop the auto-queue and clear its leftovers. Returns the volume to put
+        back once the new music plays (None: nothing to put back)."""
+        self._radio_stop(why)
+        with self._lock:
+            for tid in keep:
+                self._radio_orphans.pop(tid, None)
+            ids = set(self._radio_orphans)
+        if not ids or not config.get("spotify.clear_old_queue", True):
+            return None
+        try:
+            return self._flush_leftovers(ids)
+        except Exception as e:                  # the new music must start regardless
+            logger.info("spotify.queue_flush_failed %s", e)
+            return None
+
+    def _flush_leftovers(self, ids) -> Optional[int]:
+        q = (self.client.get_queue() or {}).get("queue") or []
+        n = 0
+        for t in q:
+            linked = (t or {}).get("linked_from") or {}
+            if t and (t.get("id") in ids or linked.get("id") in ids):
+                n += 1
+            else:
+                break
+        if not n:
+            return None
+        volume = None
+        try:
+            volume = self._state().get("volume")
+            if volume:
+                self._with_device(lambda d: self.client.volume(0, device_id=d))
+        except SpotifyAPIError:
+            volume = None                       # this device can't be muted: skip past them anyway
+        with self._lock:
+            self._skip_handled_id = None
+        self._saint_skip_at = time.time()       # not the user's skips
+        for _ in range(n):
+            self._with_device(lambda d: self.client.next(device_id=d))
+            time.sleep(0.15)
+        with self._lock:
+            for t in q[:n]:
+                self._radio_orphans.pop(t.get("id"), None)
+                self._radio_orphans.pop(((t.get("linked_from") or {}).get("id")), None)
+        logger.info("spotify.queue_flushed %d leftover song(s)", n)
+        self.invalidate_state_cache()
+        return volume or None
+
+    def _restore_volume(self, volume: Optional[int]):
+        if volume is None:
+            return
+        try:
+            self._with_device(lambda d: self.client.volume(int(volume), device_id=d))
+        except SpotifyAPIError as e:
+            logger.warning("spotify.volume_restore_failed %s", e)
 
     def play_query(self, query, kind="auto", own_only=False):
         ent = self.resolve(query, kind, own_only=bool(own_only))
@@ -915,6 +984,12 @@ class SpotifyTools:
         logger.info("spotify.play kind=%s name=%r artist=%r query=%r", ent["kind"], ent.get("name"),
                     ent.get("artist"), query)
         radio = False
+        if ent["kind"] == "album" and config.get("spotify.album_repeat", True):
+            # "Play the album X": the whole album, round again when it ends (shuffle stays as you set it).
+            try:
+                self._with_device(lambda d: self.client.repeat("context", device_id=d))
+            except SpotifyAPIError as e:
+                logger.info("spotify.album_repeat_failed %s", e)
         if ent["kind"] == "track" and ent.get("item") and self._autoqueue_on():
             # One song on its own stops when it ends: keep going with songs like it.
             self._radio_start(seed_track=ent["item"], played_id=ent.get("id"))
@@ -948,8 +1023,11 @@ class SpotifyTools:
             raise SpotifyAPIError("No liked songs.", status=404, code="NO_MATCH")
         if shuffle:
             random.shuffle(uris)
-        self._radio_stop("liked songs")
-        self._with_device(lambda d: self.client.play(uris=uris, device_id=d))
+        restore = self._replace_queue("liked songs")
+        try:
+            self._with_device(lambda d: self.client.play(uris=uris, device_id=d))
+        finally:
+            self._restore_volume(restore)
         self.memory.record_request("liked songs", "liked", "Liked Songs")
         self._refresh_soon()
         return {"success": True, "action": "play", "kind": "liked", "count": len(uris)}
@@ -979,6 +1057,21 @@ class SpotifyTools:
         self._with_device(lambda d: self.client.next(device_id=d))
         self._refresh_soon()
         return {"success": True, "action": "next"}
+
+    def skip(self, count=1, source="voice"):
+        """'Skip 3 songs': past the next ``count`` tracks. Only the song that was playing counts
+        as skipped — the ones jumped over were never heard, so they teach nothing."""
+        count = max(1, min(10, int(count or 1)))
+        self.next(source=source)
+        for _ in range(count - 1):
+            time.sleep(0.25)                   # let Spotify settle on each track before the next skip
+            with self._lock:
+                self._last = None              # the poller must not read these as skips you made
+            self._saint_skip_at = time.time()
+            self._with_device(lambda d: self.client.next(device_id=d))
+        self.invalidate_state_cache()
+        self._refresh_soon()
+        return {"success": True, "action": "next", "count": count}
 
     def previous(self):
         self._with_device(lambda d: self.client.previous(device_id=d))
@@ -1473,10 +1566,14 @@ class SpotifyTools:
                 raise SpotifyAPIError("Not enough listening history yet.", status=404, code="NO_HISTORY")
             raise SpotifyAPIError("No recommendations found.", status=404, code="NO_MATCH")
         first = recs[0]
-        self._radio_stop("new recommendation")
+        # The old auto-queue's songs are cleared out of the way first, so the new ones come next.
+        restore = self._replace_queue("new recommendation", keep={first["id"]})
         # Start the first song now; the next ones go straight into the queue and
         # the auto-queue keeps topping it up in the same spirit.
-        self._with_device(lambda d: self.client.play(uris=[first["uri"]], device_id=d))
+        try:
+            self._with_device(lambda d: self.client.play(uris=[first["uri"]], device_id=d))
+        finally:
+            self._restore_volume(restore)
         self._note_recs([first])
         queued = self._queue_now(recs[1:1 + RADIO_BATCH]) if self._autoqueue_on() else []
         if self._autoqueue_on():

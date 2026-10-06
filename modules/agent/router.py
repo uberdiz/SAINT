@@ -393,6 +393,12 @@ _REJECT_TRACK = re.compile(
     r"(?:this|it|this one|that|that one|this song|this track|the song)"
     r"|^(?:i\s+)?(?:don'?t|do not)\s+(?:want|wanna)\s+(?:to\s+)?(?:hear|listen to)\s+(?:this|it|that)(?:\s+(?:one|song|track))?"
     r"|^(?:this|that)\s+(?:song|track|one)\s+(?:is\s+)?(?:boring|bad|trash|annoying|not it)"
+    # "This is not the kind of song I was talking about" / "that's not what I meant" (2026-10-05)
+    r"|^(?:this|that|it)(?:'s|\s+is|\s+isn'?t)\s+(?:not\s+)?(?:the\s+|a\s+|my\s+)?(?:kind|sort|type|vibe|style)\s+"
+    r"(?:of\s+(?:song|track|music|thing|stuff|vibe)\s+)?(?:i\s+(?:was\s+)?(?:talking about|asked for|meant|wanted|"
+    r"had in mind|was going for|like)|i\s+want)"
+    r"|^(?:this|that)(?:'s|\s+is)\s+not\s+(?:very\s+)?(?:hype|chill|energetic|upbeat|sad|calm|relaxing|mellow)"
+    r"(?:\s+at\s+all)?"
     r"|^(?:ugh|nah|no),?\s+(?:skip|next|change)(?:\s+(?:it|this|this one))?$")
 _SIMILAR_TO = re.compile(
     r"^(?:(?:play|put on|give me|find|queue up|recommend|suggest|i want|i'd like|how about)\s+(?:me\s+)?)?"
@@ -442,6 +448,13 @@ _QUEUE_SIMILAR = re.compile(
     r"^(?:add|queue|cue)\s+(?:some\s+)?(?:similar|more)\s+(?:songs?|tracks?|music)(?:\s+(?:to|in)\s+(?:the |my )?queue)?$")
 _COUNT_WORDS = {"a few": 5, "a couple": 3, "a couple of": 3, "some": 5, "some more": 5, "three": 3, "four": 4,
                 "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+# "skip 3 songs" / "skip the next two" / "skip ahead four tracks" (never "skip ahead 30 seconds").
+_SKIP_COUNTS = {"one": 1, "two": 2, "a couple": 2, "a couple of": 2, "a few": 3, "three": 3, "four": 4, "five": 5,
+                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_SKIP_N = re.compile(
+    r"^(?:skip|next|go\s+forward|jump\s+ahead)\s+(?:ahead\s+|forward\s+|past\s+)?(?:the\s+next\s+)?"
+    r"(?P<n>\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|a couple(?: of)?|a few)"
+    r"(?:\s+(?:more\s+)?(?:songs?|tracks?|tunes?|ones?))?(?:\s+(?:on spotify|in the queue))?$")
 
 # Mood -> a queue built from scratch out of the user's own listening (spotify.play_recommended).
 _MOOD_SYNONYMS = {
@@ -570,6 +583,12 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
     watching = desktop_context.domain() == "browser"
 
     # --- change the track (a request, never a title) ------------------------
+    m = _SKIP_N.match(lower)
+    if m:
+        n = int(m.group("n")) if m.group("n").isdigit() else _SKIP_COUNTS.get(m.group("n"), 1)
+        n = max(1, min(10, n))
+        return SpotifyIntent("next", "spotify.next", {}) if n == 1 else \
+            SpotifyIntent("skip_n", "spotify.skip", {"count": n})
     if _REJECT_TRACK.search(lower):
         return SpotifyIntent("next_reject", "spotify.next", {})
     if _CHANGE_TRACK.match(lower):
@@ -800,7 +819,9 @@ def spotify_intent(text: str) -> Optional[SpotifyIntent]:
         if re.match(r"^my\s", q_orig, re.I):
             args["own_only"] = True            # "my X playlist" is one of the user's own
         return SpotifyIntent("play_playlist", "spotify.play_query", args)
-    am = re.match(r"^(?:the )?album (.+)$", q_orig, re.I) or re.match(r"^(.+?) (?:the )?album$", q_orig, re.I)
+    # "the album, Fancy That" (the recogniser adds commas), "the album called X", "X the album"
+    am = re.match(r"^(?:the |that |this |an? )?album[,:]?\s+(?:called |named |titled )?(.+)$", q_orig, re.I) \
+        or re.match(r"^(.+?),? (?:the |full |whole |entire )?album$", q_orig, re.I)
     if am:
         return SpotifyIntent("play_album", "spotify.play_query", {"query": am.group(1).strip(), "kind": "album"})
     ar = re.match(r"^(?:(?:some |more )?(?:songs|music|tracks|stuff) (?:by|from)|the artist|artist) (.+)$", q_orig, re.I)
@@ -874,6 +895,9 @@ def _spotify_reply(si: SpotifyIntent, r) -> str:
         return "Resuming."
     if k == "next":
         return "Skipped." if not r.get("track") else f"Skipped. Now playing {r['track']}."
+    if k == "skip_n":
+        n = r.get("count") or 0
+        return f"Skipped {n} songs." + (f" Now playing {r['track']}." if r.get("track") else "")
     if k == "next_reject":
         return "Got it, skipping that one — I'll play less like it."
     if k == "current_artist":
@@ -1027,13 +1051,13 @@ def parse_spotify(text: str) -> Optional[Intent]:
         if si.kind == "next_reject":
             call("spotify.feedback", signal=-0.7, reason="user rejected the track")
         res = call(si.tool, **si.kwargs)
-        if not res.success and si.kind in ("next", "next_reject") and res.error_code in (
+        if not res.success and si.kind in ("next", "next_reject", "skip_n") and res.error_code in (
                 "NO_PLAYBACK", "NO_ACTIVE_DEVICE", "NO_DEVICE"):
             # Nothing to skip: "play something different" means play something.
             res = call("spotify.play_recommended")
             if res.success:
                 return Reply(f"Nothing was playing, so I put on {res.result['name']} by {res.result['artist']}.")
-        if si.kind in ("next", "next_reject") and res.success:
+        if si.kind in ("next", "next_reject", "skip_n") and res.success:
             time.sleep(0.8)                    # verify: what's playing now?
             cur = call("spotify.current")
             if cur.success and cur.result.get("track"):
@@ -1165,6 +1189,14 @@ def parse_desktop(text: str) -> Optional[Intent]:
                 return f"Opened {r['app']}."
             return f"Launched {r['app']}; its window hasn't appeared yet."
 
+        def open_meant(other):
+            """The user picked what they meant ("clad" -> Claude): open it, and know it next time."""
+            r = run_tool("desktop.open_app", f"open {other}", ok, name=other)
+            if r.ok:
+                from modules.desktop.vocabulary import vocabulary
+                vocabulary.learn(name, other)
+            return r.text
+
         def run_open():
             reply = run_tool("desktop.open_app", f"open {name}", ok, name=name)
             many = re.search(r"Did you mean (.+,.+)\?$", reply.text) if not reply.ok else None
@@ -1172,18 +1204,15 @@ def parse_desktop(text: str) -> Optional[Intent]:
                 # "Did you mean Disk Cleanup, Windows Backup, Windows Security?" — "the first one" opens it.
                 from modules.agent.confirm import ChoiceOption, PendingChoice, choices
                 names = [n.strip() for n in re.split(r",\s*|\s+or\s+", many.group(1)) if n.strip()]
-                choices.ask(PendingChoice(reply.text, [ChoiceOption(n, n, n) for n in names],
-                                          lambda other: run_tool("desktop.open_app", f"open {other}", ok,
-                                                                 name=other).text))
+                choices.ask(PendingChoice(reply.text, [ChoiceOption(n, n, n) for n in names], open_meant))
                 reply.expects_reply = True
                 return reply
             guess = re.search(r"Did you mean ([^,?]+)\?$", reply.text) if not reply.ok else None
             if guess:
                 # "Did you mean Opera Browser?" is a question: "yes" opens it.
                 other = guess.group(1).strip()
-                confirmations.ask(PendingAction(
-                    f"open {other}", lambda: run_tool("desktop.open_app", f"open {other}", ok, name=other).text,
-                    tool="desktop.open_app"))
+                confirmations.ask(PendingAction(f"open {other}", lambda: open_meant(other),
+                                                tool="desktop.open_app"))
                 reply.expects_reply = True
             return reply
         return Intent("desktop.open_app", run_open, "desktop")
@@ -1290,6 +1319,20 @@ def parse_desktop(text: str) -> Optional[Intent]:
                     return Reply(f"Clicked {r2.result.get('clicked', name)}.")
             return Reply(res.error or f"I couldn't switch to {name}.", ok=False)
         return Intent("desktop.focus_window", run_focus, "desktop")
+
+    # type out / write a *description* of text ("a summary of what SAINT is"): write it, then type it.
+    # It used to type the words "a summary of what SAINT is" (2026-10-02).
+    m = re.match(r"^(?:type|write|enter|put|draft|compose)\s+(?:out\s+|up\s+|down\s+)?(?P<what>.+?)"
+                 r"(?:\s+(?:in|into|in the|into the)\s+(?:the\s+)?(?P<box>[\w ]{1,30}?\s+(?:box|field|bar)))?"
+                 r"(?P<enter>\s+and (?:press|hit) enter)?$", raw, re.I)
+    if m and t.split()[0] in ("type", "write", "enter", "put", "draft", "compose"):
+        from modules.agent.compose import describes_text
+        from modules.learning.lesson import canon, _MESSAGE_TASK
+        what = m.group("what").strip().strip('"“”').rstrip(".!")
+        if describes_text(what) and not _MESSAGE_TASK.match(canon(f"write {what}")):
+            box = (m.group("box") or "").strip()
+            press = bool(m.group("enter"))
+            return Intent("desktop.compose_type", lambda: _compose_and_type(what, box, press), "desktop")
 
     # type
     m = re.match(r"^(?:type|write|enter)\s+(?:out\s+)?(.+?)(?:\s+(?:in|into|in the|into the|on)\s+(?:the\s+)?(.+?))?"
@@ -1733,8 +1776,9 @@ def route(text: str) -> Optional[Intent]:
     # request, whatever words the prompt itself contains.
     # parse_task: "continue what we were doing", "do the same for Discord", "set up my gaming workspace".
     from modules.agent.task_intents import parse_task
-    for parser in (parse_link, parse_task, parse_open_path, parse_social, parse_web, parse_files_task, parse_refer,
-                   parse_automation, parse_taskmgr, parse_memory):
+    from modules.mcp.intents import parse_mcp
+    for parser in (parse_link, parse_task, parse_mcp, parse_open_path, parse_social, parse_web, parse_files_task,
+                   parse_refer, parse_automation, parse_taskmgr, parse_memory):
         try:
             intent = parser(text)
         except Exception:
@@ -1938,6 +1982,20 @@ def _route_composite(text: str) -> Optional[Intent]:
         task = task_memory.begin(text, [dict(src, label=step_label(it.name)) for it, src in zip(intents, sources)])
         return run_plan(intents, task=task)
     return Intent("composite:" + "+".join(i.name for i in intents), run, "composite")
+
+
+def _compose_and_type(description: str, box: str = "", press_enter: bool = False) -> "Reply":
+    from modules.agent.compose import write
+    desc = re.sub(r"^(?:out|up|down)\s+", "", description, flags=re.I)
+    text = write(desc)
+    if not text:
+        return Reply(f"I couldn't write {desc} — the language model didn't answer, so I didn't type anything.",
+                     ok=False)
+    kwargs = {"text": text, "press_enter": press_enter, **({"target": box} if box else {})}
+    where = f" into the {box}" if box else ""
+    short = desc if len(desc) <= 60 else desc[:57] + "…"
+    return run_tool("desktop.type_text", f"type {short}{where}", lambda _r: f"Wrote {short} and typed it{where}.",
+                    **kwargs)
 
 
 # "Write an email to Sam" / "write a reply" is a job to do, not the words "an email"

@@ -200,8 +200,17 @@ class AIModule(BaseModule):
             if self._cancel_flag.is_set() or info.get("expects_reply") or \
                     any(c.get("success") for c in info.get("tool_calls", [])) or not planner.worth_planning(prompt):
                 return ""
-            if not config.get("learning.watch_after_failure", True) or not demonstration.offer(prompt):
+            if not config.get("learning.watch_after_failure", True):
                 return ""
+            if not demonstration.offer(prompt):
+                from modules.learning.skills import skills
+                word = skills.pointing_word(prompt) if demonstration.can_watch() else ""
+                if not word:
+                    return ""
+                extra = (f" I don't know how to do that yet. Say it with the real name instead of “{word}” and I "
+                         f"can learn it.")
+                on_token(extra)
+                return extra
         except Exception:
             logging.getLogger("saint.ai").exception("ai.offer_to_learn_failed")
             return ""
@@ -258,6 +267,7 @@ class AIModule(BaseModule):
         self._turn_id = turn_id
         self._active_turn_id = turn_id
         self.expects_reply = False
+        self.model_failed = ""          # why the language model couldn't answer this turn ("" when it could)
         if not request_id:
             request_id = uuid.uuid4().hex[:12]
         stream_id = f"stream_{turn_id}_{uuid.uuid4().hex[:8]}"
@@ -476,6 +486,8 @@ class AIModule(BaseModule):
                 "error": str(e), "turn_id": turn_id, "request_id": request_id,
                 "provider": provider_name, "model": model})
             from modules.ai.providers import ModelNotFoundError, ConnectionError as _ConnErr
+            self.model_failed = "not_installed" if isinstance(e, ModelNotFoundError) else \
+                "unreachable" if isinstance(e, _ConnErr) else "error"
             if isinstance(e, ModelNotFoundError):
                 spoken = (f"I can't answer right now — the language model \"{model}\" isn't installed. "
                           f"Please pull it or pick another model in settings.")

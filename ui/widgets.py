@@ -840,6 +840,13 @@ class CoverArt(QWidget):
         self._anim.setDuration(motion.SLOW)
         self._anim.valueChanged.connect(self._set_mix)
 
+    def set_size(self, width: int, height: int = 0, radius: int = 0):
+        """Resize (the mini player's art grows with the window); square unless ``height`` is given."""
+        self.setFixedSize(int(width), int(height or width))
+        if radius:
+            self._radius = radius
+        self.update()
+
     def set_url(self, url: str):
         if url == self._url:
             return
@@ -888,7 +895,10 @@ class CoverArt(QWidget):
                 scaled = pm.scaled(self.size() * self.devicePixelRatioF(), Qt.KeepAspectRatioByExpanding,
                                    Qt.SmoothTransformation)
                 scaled.setDevicePixelRatio(self.devicePixelRatioF())
-                g.drawPixmap(0, 0, scaled)
+                # Centre the crop: a 16:9 video thumbnail shows its middle, not its left edge.
+                dpr = self.devicePixelRatioF()
+                g.drawPixmap(int((self.width() - scaled.width() / dpr) / 2),
+                             int((self.height() - scaled.height() / dpr) / 2), scaled)
         g.setOpacity(1.0)
         g.setClipping(False)
         g.setPen(QPen(with_alpha("#ffffff" if p.dark else "#000000", 22), 1))

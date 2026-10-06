@@ -1208,6 +1208,7 @@ class VoiceModule(BaseModule):
     # whole utterance must be one of these, so lyrics and chatter don't count.
     _MUSIC_HOTWORD = re.compile(
         r"^(?:skip(?:\s+(?:it|this|that|song|track|(?:this|that|the)\s+(?:song|track|one)))?|next(?:\s+(?:song|track))?|"
+        r"skip\s+(?:the\s+next\s+)?(?:\d{1,2}|two|three|four|five|a\s+couple(?:\s+of)?|a\s+few)\s+(?:songs?|tracks?)|"
         r"go\s+back|previous\s+(?:song|track)|last\s+song|"
         r"pause(?:\s+(?:it|music|the\s+music|spotify))?|resume(?:\s+(?:the\s+)?music)?|unpause|"
         r"(?:play|keep\s+playing)\s+(?:the\s+)?music|"

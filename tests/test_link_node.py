@@ -97,12 +97,42 @@ def test_nobody_can_pair_without_an_open_window(pair):
     assert a.peers.all() == []
 
 
-def test_role_mismatch_between_code_and_joiner_is_refused(pair):
+def test_role_mismatch_pairs_as_friends_on_both_sides(pair):
+    """A friend picking "my own device" on a friend code (or the reverse) used to fail as a "wrong
+    code" — the friend → me direction broke while me → friend worked. Now it pairs, and neither side
+    is ever upgraded: both keep the stricter role."""
     a, b = pair
     offer = a.pairing.create(COLLABORATOR)
-    with pytest.raises(LinkError):
-        b.pair("127.0.0.1", a.port_, offer.code, OWN)
-    assert a.peers.all() == []
+    peer = b.pair("127.0.0.1", a.port_, offer.code, OWN)
+    assert peer.role == COLLABORATOR
+    assert a.peers.get(b.identity.device_id).role == COLLABORATOR
+    offer = a.pairing.create(OWN)
+    b.peers.remove(peer.id)
+    peer = b.pair("127.0.0.1", a.port_, offer.code, COLLABORATOR)
+    assert peer.role == COLLABORATOR and a.peers.get(b.identity.device_id).role == COLLABORATOR
+
+
+def test_dialling_tries_every_address_at_once(pair):
+    """A dead home address no longer holds up the one that works (Tailscale away from home)."""
+    from modules.link.node import dial_first
+    a, b = pair
+    t0 = time.time()
+    sock, host = dial_first(["10.255.255.1", "127.0.0.1"], a.port_, 3.0)
+    sock.close()
+    assert host == "127.0.0.1" and time.time() - t0 < 2.0
+    peer = paired(a, b)
+    b.close_peer(peer.id)
+    time.sleep(0.2)
+    b.peers.update(peer.id, host="10.255.255.1", addrs=["127.0.0.1"])
+    b.connect(b.peers.get(peer.id), timeout=3.0)
+    assert b.peers.get(peer.id).host == "127.0.0.1"
+
+
+def test_paired_devices_learn_each_others_addresses(pair):
+    a, b = pair
+    peer = paired(a, b)
+    assert isinstance(b.peers.get(peer.id).addrs, list)
+    assert isinstance(a.peers.get(b.identity.device_id).addrs, list)
 
 
 def test_reconnect_and_revocation(pair):

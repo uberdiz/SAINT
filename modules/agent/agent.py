@@ -36,6 +36,8 @@ from modules.agent.router import route, Reply
 
 log = logging.getLogger("saint.agent")
 
+_GREETED_WAKE = re.compile(r"^\s*(?:hey|hi|ok(?:ay)?|yo)[\s,.!]+(?:saint|sant)\b[\s,.:;!?-]*", re.I)
+
 # Failures worth trying another way ("I couldn't find a window for all my
 # windows") — not ones another attempt can't fix ("Spotify isn't connected").
 _TRY_HARDER = re.compile(r"couldn'?t find|can'?t see|isn'?t a key|isn'?t visible|no such|didn'?t recogni|"
@@ -63,6 +65,14 @@ class Agent:
     def handle(self, text: str) -> Optional[AgentResult]:
         if not config.get("agent.enabled", True):
             return None
+        # "Hey SAINT, write an email to Mr Norton" heard without the wake detector (a barge-in,
+        # a follow-up, typed) kept its greeting and became "I haven't learned how to hey saint
+        # write an email..." (2026-10-05). Only a greeted name is stripped: "Saint Louis weather" stays.
+        stripped = _GREETED_WAKE.sub("", text or "", count=1).strip()
+        if stripped != (text or "").strip():
+            if not stripped.strip(" .!?,"):
+                return AgentResult("I'm here — what do you need?", "meta.wake", expects_reply=True)
+            text = stripped
         t0 = time.perf_counter()
         from core.focus_guard import focus_guard
         literal = getattr(self._literal, "on", False)
@@ -197,6 +207,9 @@ class Agent:
         from modules.automation.scenes import scenes
         scene = scenes.match(text)
         if scene is not None:
+            plan = scenes.plan(scene)
+            if plan.interactive:
+                return self._run_interactive_scene(scene, plan, text, t0)
             # Runs on its own thread: steps re-enter handle(), which holds _lock.
             scenes.run_in_background(scene, self.run_command)
             log.info("agent.intent scene.run name=%r", scene.name)
@@ -275,6 +288,31 @@ class Agent:
                 and not intent.name.startswith("composite"):
             return self._try_harder(text, reply.text, t0, first=intent.name)
         return self._finish(text, intent.name, reply, t0)
+
+    def _run_interactive_scene(self, scene, plan, text: str, t0: float) -> AgentResult:
+        """A scene with questions in it ("ask which account", "ask what to write about"): every
+        question is asked and answered before the first step runs, drafts are read out for
+        changes, and nothing after a "confirm" runs without a yes (modules/automation/scene_plan.py)."""
+        from modules.automation.scenes import scenes
+        from modules.learning.lesson import lessons
+        log.info("agent.intent scene.run name=%r interactive steps=%r", scene.name, plan.lines)
+        event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "scene.run", "text": text[:80],
+                                                      "steps": plan.lines})
+        with self._lock:
+            try:
+                reply = lessons.run(scenes.interactive_run(scene, plan.lines), text)
+            except Exception:
+                log.exception("agent.scene_run_failed %r", scene.name)
+                lessons.stop()
+                reply = Reply(f"Something went wrong starting {scene.name}, so I stopped.", ok=False)
+        lead = ""
+        if plan.notes and scene.explained != scenes.steps_hash(scene):
+            lead = " ".join(plan.notes)                 # said once per version of the steps
+            scenes.mark_explained(scene)
+        if reply.expects_reply:
+            lead = f"{lead} Before I start —".strip()
+        return self._lesson_result(text, Reply(f"{lead} {reply.text}".strip(), ok=reply.ok,
+                                               expects_reply=reply.expects_reply), t0, emit=False)
 
     # ------------------------------------------------------------------ #
     # Learning
@@ -384,7 +422,7 @@ class Agent:
     # Intents never started from speech SAINT wasn't addressed with: song lyrics
     # like "my name is ..." or "type ..." must not be saved or typed.
     _UNADDRESSED_BLOCKED = ("memory.remember", "memory.forget", "memory.forget_all", "desktop.type_text",
-                            "automation.schedule_command")
+                            "desktop.compose_type", "automation.schedule_command")
 
     def accepts_followup(self, text: str) -> bool:
         """Would ``text`` do something if it were a command? Used by the voice

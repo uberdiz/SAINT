@@ -8,7 +8,7 @@ player reused by Home, the overlay and the floating widget.
 
 import time
 
-from PySide6.QtCore import QRectF, Qt, QTimer, QVariantAnimation
+from PySide6.QtCore import QRectF, Qt, QTimer, QVariantAnimation, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QRadialGradient
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget,
                                QListWidgetItem, QPushButton, QSlider, QVBoxLayout, QWidget)
@@ -31,18 +31,26 @@ class NowPlaying(QWidget):
     """Cover + title + artist + progress + controls, live from ui_bus.
 
     ``any_media``: show whatever is playing on the PC (a YouTube video, VLC,
-    ...), not only Spotify — the controls then follow that app."""
+    ...), not only Spotify — the controls then follow that app.
+    ``volume``: a compact volume slider in the small layout (the mini player) —
+    Spotify's own volume, or the playing app's Windows volume for anything else."""
+
+    rendered = Signal()            # what's shown changed (track, play state, progress tick, error)
 
     def __init__(self, cover: int = 64, big: bool = False, show_hint: bool = True,
-                 hint: str = "Say “skip” — no wake word", parent=None, any_media: bool = False):
+                 hint: str = "Say “skip” — no wake word", parent=None, any_media: bool = False,
+                 volume: bool = False):
         super().__init__(parent)
         self._big, self._show_hint, self._hint_text = big, show_hint, hint
         self._any, self._sp_ok, self._source = any_media, False, "spotify"
+        self._app_vol = ""             # the app whose Windows volume the slider shows ("" = Spotify's)
+        self._muted_from = None        # volume before the speaker button muted it
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(28 if big else 14)
         self.cover = CoverArt(cover, radius=14 if big else max(8, cover // 7))
         lay.addWidget(self.cover, 0, Qt.AlignTop if not big else Qt.AlignVCenter)
+        self._lay = lay
 
         col = QVBoxLayout()
         col.setSpacing(4 if not big else 6)
@@ -118,6 +126,8 @@ class NowPlaying(QWidget):
         self.vol_label = QLabel("—")
         self.vol_label.setObjectName("Faint")
         self.vol_label.setFixedWidth(34)
+        self.vol_icon = IconButton("volume", "Mute", size)
+        self.vol_icon.clicked.connect(self._toggle_mute)
         self._vol_hold = 0.0              # don't jump back while Spotify catches up
         self._controls = [self.shuffle, self.prev, self.play, self.next, self.like, self.vol_down, self.vol_up,
                           self.vol]
@@ -138,8 +148,18 @@ class NowPlaying(QWidget):
             ctl.addWidget(self.vol, 0, Qt.AlignVCenter)
             ctl.addWidget(self.vol_up)
             ctl.addWidget(self.vol_label, 0, Qt.AlignVCenter)
+            self.vol_icon.hide()
+        elif volume:
+            self.vol.setMinimumWidth(44)
+            self.vol.setMaximumWidth(120)
+            self.vol.valueChanged.connect(lambda v: self.vol.setToolTip(f"Volume {v}%"))
+            ctl.addWidget(self.vol_icon, 0, Qt.AlignVCenter)
+            ctl.addWidget(self.vol, 1, Qt.AlignVCenter)
+            self._controls.append(self.vol_icon)
+            for w in (self.shuffle, self.like, self.vol_down, self.vol_up, self.vol_label):
+                w.hide()
         else:
-            for w in (self.shuffle, self.like, self.vol_down, self.vol_up, self.vol, self.vol_label):
+            for w in (self.shuffle, self.like, self.vol_down, self.vol_up, self.vol, self.vol_label, self.vol_icon):
                 w.hide()
         col.addLayout(ctl)
         self.status = QLabel("")
@@ -149,6 +169,8 @@ class NowPlaying(QWidget):
         col.addWidget(self.status)
         if not big:
             col.addStretch()
+            if volume:
+                col.insertStretch(0)        # the mini player centres the text beside its (resizable) art
 
         self._timer = QTimer(self)
         self._timer.setInterval(500)
@@ -213,19 +235,55 @@ class NowPlaying(QWidget):
         self.hint.setVisible(self._show_hint and playing and actions.hotwords_on())
         self._tick()
 
-    def _show_volume(self, st):
+    def _show_volume(self, st, force: bool = False):
         v = st.get("volume")
         if v is None or self.vol.isSliderDown() or time.time() < self._vol_hold:
             return
+        if self._app_vol and not force:
+            return                       # the slider shows another app's Windows volume right now
         self.vol.blockSignals(True)
         self.vol.setValue(int(v))
         self.vol.blockSignals(False)
         self.vol_label.setText(f"{int(v)}%")
+        self.vol_icon.set_icon("volume-x" if int(v) == 0 else "volume")
 
     def _set_volume(self, percent: int):
         self._vol_hold = time.time() + 3
         self.vol_label.setText(f"{int(percent)}%")
-        actions.spotify("spotify.volume", self._err, percent=int(percent))
+        self.vol_icon.set_icon("volume-x" if int(percent) == 0 else "volume")
+        if self._app_vol:
+            actions.app_volume(self._app_vol, int(percent), on_error=self._err)
+        else:
+            actions.spotify("spotify.volume", self._err, percent=int(percent))
+
+    def _toggle_mute(self):
+        if self.vol.value() > 0:
+            self._muted_from = self.vol.value()
+            new = 0
+        else:
+            new = self._muted_from or 50
+            self._muted_from = None
+        self.vol.blockSignals(True)
+        self.vol.setValue(new)
+        self.vol.blockSignals(False)
+        self._set_volume(new)
+
+    def _follow_volume(self, np: dict):
+        """Point the mini player's slider at what's playing: Spotify's volume through its
+        API when it's connected, else that app's own Windows volume (read off the GUI thread)."""
+        if self.vol_icon.isHidden():
+            return
+        app = "" if str(np.get("source", "")).startswith("spotify") and self._sp_ok else actions.app_stem(np)
+        if app == self._app_vol:
+            return
+        self._app_vol = app
+        if app:
+            self.vol.setToolTip(f"{np.get('app') or app} volume")
+            actions.app_volume(app, on_done=lambda pct, a=app: a == self._app_vol and self._show_volume(
+                {"volume": pct}, force=True))
+        else:
+            self.vol.setToolTip("Spotify volume")
+            self._show_volume(ui_bus.spotify)
 
     def _nudge_volume(self, delta: int):
         cur = ui_bus.spotify.get("volume")
@@ -239,6 +297,7 @@ class NowPlaying(QWidget):
     def render_any(self):
         """Any-media mode: the video / app / song Windows says is playing."""
         np = ui_bus.now_playing()
+        self._shown = (np.get("title", ""), bool(np.get("is_playing")))       # what _tick checks against
         if not np or (np["source"] == "spotify" and not self._sp_ok):
             np = ui_bus._from_media(ui_bus.media) if ui_bus.media.get("title") else {}
         self._source = np.get("source", "")
@@ -254,6 +313,7 @@ class NowPlaying(QWidget):
             self.hint.hide()
             self._tick()
             return
+        self._follow_volume(np)
         if np["source"] == "spotify":
             self.render(ui_bus.spotify)
             return
@@ -273,7 +333,18 @@ class NowPlaying(QWidget):
         self._tick()
 
     def _tick(self):
-        if self._any and self._source == "media":
+        if self._any and not getattr(self, "_healing", False):
+            # Self-healing: whatever the events did (a busy GUI thread during a game, an update
+            # that arrived while hidden), the card catches up with what's really playing.
+            np = ui_bus.now_playing()
+            if (np.get("title", ""), bool(np.get("is_playing"))) != getattr(self, "_shown", None):
+                self._healing = True
+                try:
+                    self.render_any()
+                finally:
+                    self._healing = False
+                return
+        if self._any and self._source in ("media", "spotify_media"):
             np = ui_bus.now_playing() or ui_bus._from_media(ui_bus.media)
             frac, dur = ui_bus.progress_of(np), np.get("duration_ms") or 0
         else:
@@ -281,10 +352,20 @@ class NowPlaying(QWidget):
         self.progress.set_value(frac)
         self.pos_label.setText(_mmss(frac * dur))
         self.dur_label.setText(_mmss(dur))
+        self.rendered.emit()
+
+    def set_cover_size(self, size: int):
+        """The mini player's art follows its height; the text column centres beside it."""
+        size = int(size)
+        if size == self.cover.width():
+            return
+        self.cover.set_size(size, radius=max(8, size // 7))
+        self._lay.setAlignment(self.cover, Qt.AlignVCenter)
 
     def _err(self, msg):
         self.status.setText(msg or "")
         self.status.setVisible(bool(msg))
+        self.rendered.emit()
 
     def _like(self):
         actions.spotify("spotify.feedback", self._err, signal=1, reason="liked in SAINT")

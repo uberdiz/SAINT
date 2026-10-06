@@ -22,10 +22,14 @@ soundfile>=0.12.1
 onnxruntime>=1.16.0          # runs the hey_saint.onnx wake-word model (CPU)
 faster-whisper>=1.0.3        # speech-to-text (CTranslate2; bundles its own CUDA runtime)
 
-# Speech output
+# Speech output — Kokoro. SAINT.exe runs it on onnxruntime (kokoro-onnx); source runs use PyTorch when it loads.
+# Install requirements WITHOUT --upgrade: that replaces the CUDA torch wheel with PyPI's CPU one and leaves
+# torchaudio on the old version, which breaks `import kokoro` (libtorchaudio.pyd won't load).
+kokoro-onnx>=0.4.9           # the voice in SAINT.exe (no PyTorch); model: tools/get_kokoro_onnx.py
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 torch>=2.2.0
 kokoro>=0.7.0
-misaki[en]>=0.7.0
+misaki[en]>=0.7.0            # text -> phonemes (needs en_core_web_sm above; it can't download it inside SAINT.exe)
 espeakng_loader>=0.2.4       # espeak-ng for out-of-dictionary words (e.g. names)
 phonemizer>=3.2.0
 

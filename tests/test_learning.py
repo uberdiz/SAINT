@@ -563,10 +563,15 @@ def test_no_plan_hands_over_to_the_model_then_offers_to_learn(monkeypatch):
     monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_after_failure", True)
     monkeypatch.setitem(config._data.setdefault("learning", {}), "watch_and_learn", True)
     monkeypatch.setattr(demonstration, "watch_for", lambda p: True)
-    extra = ai._offer_to_learn("add this song to my party playlist", {"tool_calls": []}, said.append)
+    extra = ai._offer_to_learn("add the current song to my party playlist", {"tool_calls": []}, said.append)
     assert "Want to show me?" in extra and said == [extra] and ai.expects_reply
     from modules.agent.confirm import confirmations
     confirmations.clear()
+    # "this song" points at something different each time: no watching, ask for the real name instead.
+    monkeypatch.setattr(demonstration, "can_watch", lambda: True)
+    said.clear()
+    extra = ai._offer_to_learn("add this song to my party playlist", {"tool_calls": []}, said.append)
+    assert "real name" in extra and "“this”" in extra and confirmations.pending is None
     assert ai._offer_to_learn("add this song to my party playlist",
                               {"tool_calls": [{"tool": "spotify.add_current_to_playlist", "success": True}]},
                               said.append) == ""

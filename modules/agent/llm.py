@@ -63,9 +63,20 @@ _REQUEST = re.compile(r"^\s*(?:(?:hey\s+)?saint[,\s]+)?(?:can|could|would|will) 
 
 def might_need_tool(text: str) -> bool:
     t = text or ""
+    if _mcp_relevant(t):
+        return True               # a connected MCP server's tools fit this request ("what's on my GitHub?")
     if _QUESTION.match(t) and not _REQUEST.match(t):
         return False
     return bool(_ACTION_HINT.search(t))
+
+
+def _mcp_relevant(text: str) -> List[str]:
+    try:
+        from modules.mcp.manager import mcp_manager
+        return mcp_manager.relevant(text) if mcp_manager.connected() else []
+    except Exception:
+        log.debug("llm.mcp_relevant_failed", exc_info=True)
+        return []
 
 
 def model_supports_tools(model: str, base_url: str) -> bool:
@@ -89,15 +100,16 @@ def run_with_tools(messages: List[Dict], model: str, base_url: str, temperature:
     from modules.ai.providers import ProviderError, ModelNotFoundError, ConnectionError as ProvConnErr
 
     registry = get_tool_registry()
-    tools = registry.llm_tools()
-    schemas = [t.to_llm_schema() for t in tools]
     msgs = [dict(m) for m in messages]
+    user_text = next((m.get("content", "") for m in reversed(msgs) if m.get("role") == "user"), "")
+    # MCP servers can bring dozens of tools: only the ones that fit this request are shown.
+    wanted_mcp = set(_mcp_relevant(user_text))
+    tools = [t for t in registry.llm_tools() if t.category != "mcp" or t.name in wanted_mcp]
+    schemas = [t.to_llm_schema() for t in tools]
     if msgs and msgs[0]["role"] == "system":
         msgs[0]["content"] = msgs[0]["content"] + "\n\n" + _TOOL_SYSTEM
     else:
         msgs.insert(0, {"role": "system", "content": _TOOL_SYSTEM})
-
-    user_text = next((m.get("content", "") for m in reversed(msgs) if m.get("role") == "user"), "")
     url = base_url.replace("localhost", "127.0.0.1").rstrip("/") + "/api/chat"
     max_steps = int(config.get("ai.max_tool_steps", 4))
     spoken: List[str] = []
@@ -292,6 +304,19 @@ def complete(prompt: str, system: str = "", timeout: float = 45.0, max_tokens: i
     code). Returns '' on failure; the output is cleaned of any internal markup."""
     from modules.ai.module import AIModule
     base = config.get("ai.base_url", "http://localhost:11434")
+    provider = config.get("ai.provider", "ollama")
+    if provider not in ("ollama",):
+        # OpenAI-compatible / other providers: the same one-shot answer through the provider itself.
+        try:
+            from modules.ai.providers import get_provider
+            msgs = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": prompt}]
+            out = get_provider(provider).send(messages=msgs, model=config.get("ai.model", ""),
+                                              api_key=config.get("ai.api_key", ""), base_url=base,
+                                              temperature=0.3, timeout=timeout)
+            return clean_reply(out or "", prompt)
+        except Exception as e:
+            log.warning("llm.complete_failed %s", e)
+            return ""
     try:
         model, _ = AIModule._resolve_model(None, "ollama", base, config.get("ai.model", ""))
         opts = {"temperature": 0.3}

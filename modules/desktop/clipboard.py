@@ -43,6 +43,40 @@ def read_text() -> str:
         cb.CloseClipboard()
 
 
+def read_plain_text():
+    """The clipboard's text, or None when it holds something else (an image, files) or nothing."""
+    cb = _open()
+    try:
+        if cb.IsClipboardFormatAvailable(cb.CF_UNICODETEXT):
+            return cb.GetClipboardData(cb.CF_UNICODETEXT) or ""
+        return None
+    finally:
+        cb.CloseClipboard()
+
+
+def paste_text(text: str, send_paste, restore_after: float = 0.8):
+    """Put ``text`` in the focused field through the clipboard (``send_paste`` presses
+    ctrl+v), then put back the text that was on the clipboard before. Long text typed as
+    keystrokes was garbled by Windows 11 Notepad ("pppp gggg", 2026-10-05) and was slow."""
+    import threading
+    try:
+        saved = read_plain_text()
+    except ToolError:
+        saved = None
+    write_text(text)
+    time.sleep(0.03)
+    send_paste()
+    time.sleep(0.15)
+
+    def restore():
+        try:
+            if saved is not None and read_plain_text() == text:     # you haven't copied anything since
+                write_text(saved)
+        except Exception:
+            pass
+    threading.Timer(restore_after, restore).start()
+
+
 def write_text(text: str):
     cb = _open()
     try:

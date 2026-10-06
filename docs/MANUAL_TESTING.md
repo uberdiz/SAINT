@@ -1,295 +1,112 @@
-# SAINT Manual Testing — Remaining Work
+# SAINT manual testing — what's left
 
-Branch: `unified-release`
+Everything you marked **Y** up to 2026-10-05 is confirmed and has been removed (installer + Kokoro voice,
+misheard app names, skip N, scene stop, Ollama auto-start, task resume, hover, Gmail lesson by demonstration).
+What's here is fixed since your last pass (re-check), still open, or never tested. Tick an item only after
+you've seen it work on the real machine or phone, and add notes the same way as before (`[N — what happened]`).
 
-This checklist contains only tests that still need verification, fixes, or a real-device/manual pass. Working items from the previous checklist have been removed.
+**Test without your real data:** `run.bat --profile clean` (fresh install) or `run.bat --profile demo` (sample
+scenes). `python tools\profiles.py snapshot` then `run.bat --profile snapshot-…` tests on a copy of your data.
 
-**Rule:** Do not mark an item complete because the code looks correct. Mark it complete only after the behavior is observed manually on the target machine/device.
+## 1. Fixed after your 2026-10-05 notes — re-check
 
-## 1. Windows desktop launch / packaging
+**Mini player**
+- [ ] Drag any edge or corner: it resizes up/down *and* side to side, and keeps that size after a restart.
+- [ ] Make it small or square: only the album art shows. Hovering shows title, progress, play/skip and volume;
+      a new track shows its name for a few seconds.
+- [ ] Right-click → Size presets (Album art, Compact, Normal, Wide, Large) and the Lyrics toggle work.
+- [ ] “Make the mini player smaller” / “bigger” / “just show the album art” / “normal size”.
+- [ ] Track, progress bar and lyrics change on their own — no clicking or moving it — on the desktop and in a game
+      (turn it on by voice while the game runs: it appears and is the right size straight away).
+- [ ] Volume: the slider and mute button change Spotify's volume; with a YouTube video playing they change the
+      browser's volume. Scrolling over the player changes volume; ctrl+scroll still fades it.
+- [ ] “Move the mini player to the top left of my second screen”, then “right a bit” and “down a couple pixels”:
+      it moves each time and never turns off.
 
-- [ ] Build the Windows installer successfully from a clean checkout.
-- [ ] Build the standalone SAINT executable successfully.
-- [ ] Resolve the current packaging/build failure if the build script still fails under the installed Python environment.
-- [ ] Launch SAINT from the generated EXE with no terminal window.
-- [ ] Confirm the EXE starts the correct application entry point.
-- [ ] Confirm the SAINT icon appears correctly in the taskbar, Start Menu, shortcut, and installer.
-- [ ] Install to a clean Windows user/profile and launch successfully.
-- [ ] Uninstall and confirm SAINT is removed cleanly.
-- [ ] Reinstall without leaving a broken configuration behind.
-- [ ] Confirm required model/config/data directories are created correctly.
-- [ ] Confirm an installed build can start without the source repository being present.
+**Voice and language**
+- [ ] “Make a new folder in my Downloads and add a text file to it”: the reply says “Downloads”, not
+      `C:\Users\…`, in SAINT's normal (not French) accent.
+- [ ] “Open this "C:\…\Antigravity IDE.lnk" for Antigravity” gets an English reply; “Open Antigravity” opens
+      Antigravity IDE.
+- [ ] “Stop speaking, friend!” while SAINT talks: it stops talking and the mic stays on.
+- [ ] “Hey SAINT” alone (no wake chime) → “I'm here — what do you need?”.
 
-## 2. First launch / configuration
+**Email and typing**
+- [ ] “Hey SAINT, write an email to Mr Norton about Friday” in one breath runs the email scene without asking
+      who or what.
+- [ ] Say a new person's address (“J. Norton at EssexTech.net”): SAINT says “I've got j.norton@essextech.net —
+      is that right?”; after “yes” the next email to them doesn't ask again.
+- [ ] An email body of 600+ characters goes in complete (no 500-character error).
+- [ ] “Type out a summary of what SAINT is” in Notepad: clean text, no “pppp gggg”; what you'd copied before is
+      still on the clipboard afterwards.
 
-- [ ] Start SAINT on a clean configuration.
-- [ ] Confirm all required dependencies/models report their real status.
-- [ ] Confirm missing optional components produce a useful message instead of a crash.
-- [ ] Open every Settings page and verify there are no UI exceptions.
-- [ ] Change important settings, restart SAINT, and confirm they persist.
-- [ ] Confirm sensitive configuration values are not exposed in normal UI/log output.
+**Spotify**
+- [ ] “Play the album, Fancy That”: the whole album plays (not one song), on repeat, shuffle as you had it.
+- [ ] “This is not the kind of song I was talking about” skips the song and steers away from it.
+- [ ] With an unfinished lesson open (e.g. after “I haven't learned how to …”), “play …”, “skip” and “move the
+      mini player …” just happen — no “What's next?” after each.
 
-## 3. Voice activation
+## 2. Still open (not fixed yet)
 
-- [ ] Test “SAINT” from normal speaking distance at least 10 times.
-- [ ] Test “Hey SAINT” at least 10 times.
-- [ ] Test wake detection with normal background music.
-- [ ] Test wake detection while a game is running.
-- [ ] Test normal speech without the wake word for several minutes and confirm SAINT does not react unexpectedly.
-- [ ] Test one-word commands while a conversation window is active: “pause”, “skip”, “yes”, “no”, “cancel”.
-- [ ] Test a one-word confirmation immediately after SAINT asks a question.
-- [ ] Test a confirmation after approximately 15 seconds.
-- [ ] Test a short/quiet response and confirm SAINT reports that it did not catch it instead of silently failing.
-- [ ] Test interruption while SAINT is speaking.
-- [ ] Confirm SAINT never responds to its own TTS output.
-- [ ] Confirm silence/background noise does not repeatedly end or restart conversation mode.
-- [ ] Confirm conversation mode does not require the wake word for every follow-up.
-- [ ] Test natural pauses between words and multi-step commands.
-- [ ] Test filler words such as “uh”, “yeah”, and “okay so”.
-- [ ] Test follow-ups such as “my gym playlist”, “smaller”, and “close, close, CS2”.
-- [ ] Confirm unrelated room conversation is ignored.
+- [ ] “Make it shorter” / “reduce the character count” while SAINT reads a draft back rewrites it (only worked on
+      pasted text).
+- [ ] Mood mixes match the mood (“play something hype” played “RUN” by Brahman); the new mix replaces the whole
+      old queue.
+- [ ] “Make a new folder in Downloads”, then “put that text file in the new folder” moves the file.
+- [ ] Replies after a multi-step task are short (it read out every step and path).
+- [ ] The email scene asked “What's Personal's email address?” — the account name was taken as the recipient.
+- [ ] “When I say John I mean Gian”, then “open my messages with John” opens the Instagram chat with Gian (it
+      looked for an app called “messages with john”).
+- [ ] iPhone + AirPods: audio stays out of call quality; the audio-route UI is compact; output follows the phone
+      (speaker for Spotify, Bluetooth mic for input).
+- [ ] iPhone “Sync now” doesn't crash, and the PC doesn't then say you're on a call.
+- [ ] iPhone: the keyboard's Send key sends.
+- [ ] iPhone: text fits on every supported iPhone size.
 
-## 4. Speech-to-text quality
+## 3. Never tested yet
 
-- [ ] Test normal speech at the normal microphone distance.
-- [ ] Test quiet speech.
-- [ ] Test speech while music is playing.
-- [ ] Test speech while a game is playing.
-- [ ] Test names of apps, games, songs, playlists, and websites.
-- [ ] Test numbers and percentages.
-- [ ] Test short confirmations: “yes”, “no”, “yep”, “cancel”.
-- [ ] Record repeated misrecognitions and add them to regression cases.
-- [ ] Confirm STT latency is acceptable during a real conversation.
+**SAINT Link (PC ↔ PC, phone)**
+- [ ] PC ↔ PC on the same Wi-Fi: only the 8-character code is needed to pair.
+- [ ] PC ↔ PC over Tailscale only (different networks): the code alone pairs.
+- [ ] First Link start: one admin prompt for the firewall; afterwards the phone connects over Tailscale away
+      from home.
+- [ ] Devices → a disconnected device → “Check connection” names each address and what's blocking it.
+- [ ] A friend's phone joins with “A friend's SAINT” on their own code (and the reverse): Friend on both sides.
+- [ ] iPhone away from home (cellular + Tailscale) answers open questions with the PC's model within a few seconds.
+- [ ] Ollama stopped on the PC: the iPhone answers with Claude / its own model instead of reading the error.
+- [ ] A command on PC A shows in PC B's History (“Other PC”) and the iPhone's Activity tab; an “ask once” answer
+      taught on A is known on B.
 
-## 5. Spotify
+**Watching and notifications**
+- [ ] “Tell me when Claude finishes.”
+- [ ] A download finishing gives a notification.
+- [ ] Away for 2+ minutes, then “what changed while I was away?”
+- [ ] “Watch my right screen”, then “use all screens”.
+- [ ] Save and restore a two-monitor workspace; “gaming mode” / “I'm done gaming” restores it.
+- [ ] Summarize copied text; fix copied code and paste it; open the file from a copied traceback.
+- [ ] Important notifications are read aloud.
+- [ ] An update dialog is handled only after you confirm.
 
-- [ ] Confirm Spotify connects automatically after SAINT restarts.
-- [ ] Test pause/resume/skip/back.
-- [ ] Test volume commands.
-- [ ] Test playing an artist, album, track, and personal playlist.
-- [ ] Test “play something like this” against the currently playing song.
-- [ ] Test personalized recommendations based on listening history.
-- [ ] Test “search Spotify for X” followed by “play the second one”.
-- [ ] Test playlist disambiguation when multiple playlists could match.
-- [ ] Test a nonexistent personal playlist.
-- [ ] Test mood/language/genre requests that should produce a playlist or queue rather than a single random track.
-- [ ] Test queueing similar songs without skipping the current song.
-- [ ] Test Smart Shuffle.
-- [ ] Test lyrics display/hide in the mini player if enabled.
-- [ ] Confirm song lyrics are not interpreted as voice commands.
-- [ ] Test Spotify controls while a game is focused.
-- [ ] Verify the Spotify tab, Now Playing panel, queue, album art, and mini player stay synchronized.
-- [ ] Confirm a new generated queue replaces/clears the old queue appropriately instead of simply skipping through stale queued songs.
-- [ ] Verify album requests actually play the requested album, not merely one matching track.
-- [ ] Verify Spotify skip tracking does not accidentally skip songs that SAINT did not command to skip.
-- [ ] Verify repeated skipping/removal behavior matches the intended learning rules.
+**Instagram and MCP**
+- [ ] “Open what Gian sent me on Instagram” — with Instagram open, and with the browser fallback.
+- [ ] Settings → MCP: add a filesystem or notes server, Save & connect, use one of its tools by voice; a tool
+      that changes things asks first.
 
-## 6. Desktop screen / vision
+## 4. Release gate
 
-- [ ] Test “what is this error?” with a real error dialog visible.
-- [ ] Test FLUX vision with weights missing and verify the setup message is actionable.
-- [ ] Test FLUX vision with weights installed.
-- [ ] Test Ollama vision with a vision model pulled.
-- [ ] Confirm vision uses the explicitly requested physical monitor rather than only the active window.
-- [ ] Confirm vision never invents UI elements that are not visible.
-
-## 7. Mouse / keyboard / desktop control
-
-- [ ] Test corner-relative commands such as “click the X in the top right”.
-- [ ] Confirm right-click/hover always targets the currently intended window.
-- [ ] Confirm actions on a named monitor never fall through to another monitor.
-- [ ] Confirm SAINT verifies important actions after performing them.
-
-## 8. Windows / application management
-
-- [ ] Test “close that window” immediately after SAINT opens an application.
-- [ ] Test several similarly named windows and verify the correct one is selected.
-- [ ] Test moving/resizing windows across both monitors during a long task.
-- [ ] Test app reuse after SAINT restarts.
-
-## 9. Browser automation
-
-- [ ] Test an existing browser window with YouTube already open.
-- [ ] Test multiple browser windows and explicit window selection.
-- [ ] Test browser automation while music is playing.
-- [ ] Test a multi-step browser task in one spoken request.
-- [ ] Confirm failed browser actions are reported honestly.
-
-## 10. Multi-step agent behavior
-
-- [ ] Test a 3-step request.
-- [ ] Test a 5+ step request.
-- [ ] Test a request spoken naturally with pauses.
-- [ ] Test the same request spoken quickly in one breath.
-- [ ] Confirm steps execute sequentially and are verified.
-- [ ] Interrupt a multi-step task and confirm it stops safely.
-- [ ] Ask “what are you doing?” during a long task.
-- [ ] Confirm one failed step does not produce a false success message.
-- [ ] Test a failed middle step followed by “where were we?” and “continue what we were doing”.
-- [ ] Start a new request before the previous one finishes and confirm the old task stops at a safe boundary.
-
-## 11. Game Mode / Gaming Mode
-
-- [ ] Test Auto Gaming Mode off with a supported single-player game.
-- [ ] Test “Gaming mode on” with two monitors.
-- [ ] Confirm SAINT and the mini player move to the monitor without the game.
-- [ ] Confirm screen capture/vision is disabled in Gaming Mode where intended.
-- [ ] Test Gaming Mode spoken replies off.
-- [ ] Test Minimal notification mode.
-- [ ] Test “Set up my gaming workspace”.
-- [ ] Test mini player right-click controls, opacity, size, monitor movement, edge dragging, and ctrl+scroll.
-- [ ] Confirm Gaming Mode does not interfere with anti-cheat-protected games.
-- [ ] Confirm Gaming Mode exits/restores state correctly after the game closes.
-
-## 12. Interface / mini player
-
-- [ ] Test mini player controls independently of YouTube's mini player.
-- [ ] Test mini player opacity, size, monitor movement, and resizing.
-- [ ] Verify the mini player is present in the final desktop build.
-- [ ] Verify lyrics UI works in the final desktop build.
-- [ ] Test Start with Windows from a clean login.
-- [ ] Confirm Task Manager > Startup Apps shows SAINT with the correct icon.
-- [ ] Test the app on a second monitor.
-
-## 13. Memory / learning
-
-- [ ] Teach SAINT a new simple action and confirm it can repeat it later.
-- [ ] Confirm SAINT does not record unrelated actions during a demonstration.
-- [ ] Confirm long demonstrations are summarized/reviewed before being saved.
-- [ ] Test “no, I didn't ask for that” after an unwanted learned action.
-- [ ] Confirm the unwanted skill is removed from Learned.
-- [ ] Confirm the complaint is written to the learning journal.
-- [ ] Test saving a successful action as a named automation.
-- [ ] Restart SAINT and verify intended learned data persists.
-
-## 14. Storage / files
-
-- [ ] Test “clean up my D drive” followed by “what did you find?”, “is that safe?”, and “delete it”.
-- [ ] Test Storage → Check for junk if enabled.
-- [ ] Confirm destructive actions always request confirmation where required.
-
-## 15. Windows audio controls
-
-- [ ] Verify per-app volume changes affect only the intended application.
-- [ ] Verify Spotify volume commands do not accidentally change Windows/global volume.
-- [ ] Verify global volume commands do not accidentally change Spotify's own volume.
-- [ ] Test audio-device switching in the final build.
-
-## 16. Current information / web
-
-- [ ] Provider disabled: ask for current information and confirm SAINT explains that web search is unavailable without unexpectedly opening a browser.
-- [ ] Provider enabled: verify a current-information answer actually uses the configured provider.
-- [ ] Confirm SAINT does not claim current information when no current source was used.
-
-## 17. Watching / workspace / notifications
-
-- [ ] Ask SAINT to notify you when Claude finishes.
-- [ ] Test download-completion notification.
-- [ ] Step away for at least two minutes and test “what changed while I was away?”.
-- [ ] Test “watch my right screen” then “use all screens”.
-- [ ] Save and restore a two-monitor workspace.
-- [ ] Test “Gaming mode” / “I'm done gaming” workspace save/restore.
-- [ ] Summarize copied text.
-- [ ] Fix copied code and paste it.
-- [ ] Read important notifications aloud.
-- [ ] Open the file causing a copied traceback.
-- [ ] Test handling an update dialog with confirmation.
-
-## 18. Email / demonstration learning
-
-- [ ] Walk SAINT through the complete “write an email” lesson and confirm every step happens only when requested.
-- [ ] Test “send an email to <someone> about <topic>” and confirm SAINT asks for the account, generates subject/body, and stops before Send.
-- [ ] Test rewriting the generated email with “make it more formal”.
-- [ ] Test an impossible demonstration step and verify SAINT asks the user to perform it.
-- [ ] Test “stop” during a lesson.
-- [ ] Confirm the next sentence after stopping is treated as a normal request.
-
-## 19. Instagram / social app control
-
-- [ ] Test “Open what Gian sent me on Instagram”.
-- [ ] Test when Instagram is already open on the desktop.
-- [ ] Test the browser fallback if supported.
-- [ ] Confirm SAINT does not claim it found the message if it did not.
-
-## 20. Mobile / iOS
-
-- [ ] Build the iOS app from the unified repo.
-- [ ] Produce a fresh IPA successfully.
-- [ ] Install the IPA on the test iPhone.
-- [ ] Confirm the app launches without crashes.
-- [ ] Test wake-word detection on iPhone.
-- [ ] Test wake-word detection with AirPods.
-- [ ] Fix/verify the AirPods microphone route does not sound like a phone call.
-- [ ] Test iPhone speech recognition in a quiet room.
-- [ ] Test iPhone speech recognition with music/background noise.
-- [ ] Test one-word commands and short confirmations.
-- [ ] Test voice control while the app is backgrounded/locked where iOS permits it.
-- [ ] Verify Spotify authentication/connection.
-- [ ] Resolve/verify the “no matching configuration” Spotify connection issue.
-- [ ] Test mobile Spotify play/pause/skip/search/recommendation commands.
-- [ ] Confirm mobile Spotify behavior matches desktop intent behavior where applicable.
-- [ ] Test the iPhone → PC link when the PC is online.
-- [ ] Test the iPhone fallback when the PC is offline.
-- [ ] Test “Sync now” and its status messages.
-- [ ] Confirm a song request can route playback through the PC when phone Spotify is not signed in.
-- [ ] Confirm mobile UI works across supported iPhone sizes.
-
-## 21. Cross-platform consistency
-
-- [ ] Run the same basic commands on desktop and mobile.
-- [ ] Compare interpretation of identical Spotify requests.
-- [ ] Compare short conversational follow-ups.
-- [ ] Confirm mobile-specific limitations are communicated rather than silently producing different behavior.
-- [ ] Confirm desktop changes do not break the mobile project.
-
-## 22. Reliability / failure states
-
-- [ ] Restart SAINT after Spotify is connected.
-- [ ] Restart SAINT during/after a voice conversation.
-- [ ] Restart SAINT after changing settings.
-- [ ] Restart SAINT with the mini player enabled.
-- [ ] Restart SAINT with multiple monitors connected.
-- [ ] Restart SAINT while a game is running.
-- [ ] Start SAINT with Spotify closed.
-- [ ] Stop Ollama, start SAINT, and verify the Startup/System page shows the AI model as failed with a Retry action.
-- [ ] Start Ollama and use Retry; verify the model returns to Running.
-- [ ] Start SAINT with optional model files missing.
-- [ ] Confirm failures are isolated and SAINT still launches when optional components are unavailable.
-
-## 23. Final release gate
-
-Do not consider `unified-release` ready until:
-
-- [ ] Automated tests pass.
-- [ ] Windows EXE/installer builds successfully.
-- [ ] Windows clean-install test passes.
-- [ ] Core voice/wake/STT tests pass on real hardware.
-- [ ] Spotify tests pass, including queue replacement and album playback.
-- [ ] Two-monitor screen/action tests pass.
-- [ ] Gaming Mode tests pass.
-- [ ] Browser and multi-step tests pass.
-- [ ] Learning/memory tests pass.
-- [ ] iOS app builds and installs.
-- [ ] IPA build succeeds.
-- [ ] iPhone wake/STT tests pass.
+- [ ] The release installer (`SAINT-Setup.exe` from the GitHub release) installs and runs on a clean Windows
+      user: Kokoro voice downloads, no personal data included.
+- [ ] Section 1 passes.
 - [ ] iPhone + AirPods tests pass.
-- [ ] Mobile Spotify connection works.
-- [ ] No release-blocking crash remains.
-- [ ] README/setup instructions match the actual unified-release build.
-- [ ] Final manual test run is performed against the exact commit being released.
+- [ ] Final manual run on the exact commit being released.
 
 ## Test record
 
 | Date | Commit | Area | Result | Notes |
 |---|---|---|---|---|
-| | | Windows packaging | | |
-| | | Voice / wake / STT | | |
+| 2026-10-05 | v0.3 | Installer / voice | Pass | Build, clean install, offline install, uninstall, voice volume |
+| | | Mini player | | |
+| | | Voice / language | | |
+| | | Email / typing | | |
 | | | Spotify | | |
-| | | Screen / vision | | |
-| | | Desktop control | | |
-| | | Browser / multi-step | | |
-| | | Gaming Mode | | |
-| | | UI / mini player | | |
-| | | Learning / memory | | |
-| | | Mobile / iOS | | |
-| | | Release build | | |
+| | | Link / iPhone | | |

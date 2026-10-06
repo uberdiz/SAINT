@@ -9,7 +9,7 @@ from __future__ import annotations
 import io, logging, shutil, tempfile, zipfile
 from pathlib import Path
 from urllib.request import Request, urlopen
-from core.paths import data_dir
+from core.paths import models_dir as data_dir   # shared by every profile (core/paths.py)
 
 log = logging.getLogger("saint.model_assets")
 RELEASE_TAG = "unified-latest"

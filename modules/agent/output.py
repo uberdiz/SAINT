@@ -23,6 +23,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 # Text that starts like one of these is held until we know what it is.
 _SUSPECT_START = re.compile(r"^\s*(?:\{|\[|```|`?[a-z_]+__[a-z_]+|<\|?(?:tool|function|python)|functions?\.|"
+                            r"os\.(?:system|popen|makedirs|mkdir)\s*\(|subprocess\.|the (?:command|code) you'?re looking|"
+                            r"(?:touch|mkdir|echo|rm|del|New-Item|Set-Content)\s+\S|"
                             r"\b(?:tool_call|function_call)\b|[a-z_]+__[a-z_]+\s*\(|here'?s how you (?:could|can) "
                             r"ask|here(?:'s| is) (?:the |some |an? )?(?:example )?(?:python |json )?(?:code|function "
                             r"call|json|snippet|implementation)|(?:python|json)\s*\n)", re.I)
@@ -34,6 +36,15 @@ _CODE_DUMP = re.compile(r"^\s*here(?:'s| is) (?:the |some |an? )?(?:example )?(?
 _CODE_CALL = re.compile(r"\b([a-z][a-z0-9_]*__[a-z0-9_]+)\s*\(([^()]*)\)", re.I)
 _KWARG = re.compile(r"(\w+)\s*=\s*(\"[^\"]*\"|'[^']*'|-?\d+(?:\.\d+)?|true|false|none)", re.I)
 _TOOLISH_NAME = re.compile(r"^[a-z][a-z0-9_]*(?:__|\.)[a-z0-9_]+$")
+# A shell / Python command offered instead of doing the thing: "os.system('echo hi > new.txt')",
+# "The command you're looking for is: touch filename.txt" (2026-10-02). Never spoken unless code was asked for.
+_SHELL = re.compile(r"\bos\.(?:system|popen|makedirs|mkdir|remove)\s*\(|\bsubprocess\.\w+\s*\(|"
+                    r"\bopen\([^)]*,\s*['\"][wa]|"
+                    r"^\W*(?:\$|>|PS>)?\s*(?:touch|mkdir|md|echo|rm|del|rmdir|cd|ls|dir|type nul|New-Item|Set-Content|"
+                    r"Out-File|sudo|chmod|copy|move|xcopy)\s+\S*(?:[>|]|\.\w{1,4}\b|\s-{1,2}\w|\\|/)|"
+                    r"\bthe (?:command|code|syntax) (?:you(?:'re| are) looking for|to (?:do|use|run) (?:this|that|it))\b|"
+                    r"\b(?:you can|you could|simply) (?:use|run|type) (?:the )?(?:following|this) (?:command|code)\b",
+                    re.I | re.M)
 _CODE_REQUEST = re.compile(r"\b(code|script|program|python|javascript|json|function|regex|snippet|"
                            r"class|html|css|sql|powershell|bash|command line)\b", re.I)
 
@@ -127,6 +138,11 @@ def clean_reply(text: str, user_text: str = "") -> str:
     wants_code = bool(_CODE_REQUEST.search(user_text or ""))
     if not wants_code and _CODE_DUMP.search(t) and not pseudo_answer_in(t):
         return ""
+    if not wants_code and _SHELL.search(t):
+        kept = [ln for ln in re.split(r"\n+", t) if ln.strip() and not _SHELL.search(ln)]
+        t = " ".join(kept).strip()
+        if not t:
+            return ""
     # A reply that is only a pseudo call wrapping an answer -> the answer.
     objs = _json_objects(_strip_fences(t))
     if objs and not wants_code:
@@ -301,8 +317,8 @@ class ReplyGuard:
         if self._wants_code:
             self._emit(sentence + gap)
             return
-        if _INTERNAL_BITS.search(sentence):
-            return                         # a tool name / call spelled out: never spoken
+        if _INTERNAL_BITS.search(sentence) or _SHELL.search(sentence):
+            return                         # a tool name / call / shell command spelled out: never spoken
         out = clean_reply(sentence, self._user_text)
         if out:
             lead = sentence[:len(sentence) - len(sentence.lstrip())]

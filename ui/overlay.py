@@ -418,6 +418,15 @@ class Overlay(QWidget):
         self.open_app.setObjectName("Primary")
         self.open_app.clicked.connect(self._open_app)
         bottom.addWidget(self.open_app)
+        bottom.addSpacing(8)
+        # Shut SAINT down from anywhere. One click arms it, a second within 4 s quits — so a stray click
+        # never closes SAINT.
+        self.shutdown = QPushButton(" Shut down")
+        self.shutdown.setObjectName("Danger")
+        self.shutdown.setToolTip("Quit SAINT completely (click twice)")
+        self.shutdown.clicked.connect(self._shutdown_clicked)
+        self._shutdown_armed = False
+        bottom.addWidget(self.shutdown)
         self.bottom_band = _centred(root, bottom)
 
         self._cards = [self.np_card, self.live_card, self.chat_card, self.next_card]
@@ -432,6 +441,7 @@ class Overlay(QWidget):
         from ui.main_window import logo_pixmap
         self.logo.setPixmap(logo_pixmap(26))
         self.t_demo.setIcon(icons.icon("demo", p.text, 16))
+        self.shutdown.setIcon(icons.icon("power", p.text, 16))
         self.reset_layout.setIcon(icons.icon("layout", p.text, 16))
         for c in self.canvas.cards.values():
             c.apply_theme()
@@ -483,6 +493,20 @@ class Overlay(QWidget):
     def _open_app(self):
         self.close_overlay()
         self.shell.show_normal()
+
+    def _shutdown_clicked(self):
+        if not self._shutdown_armed:
+            self._shutdown_armed = True
+            self.shutdown.setText(" Click again to quit")
+            QTimer.singleShot(4000, self._disarm_shutdown)
+            return
+        self._shutdown_armed = False
+        self.close_overlay()
+        QTimer.singleShot(250, self.shell.quit)
+
+    def _disarm_shutdown(self):
+        self._shutdown_armed = False
+        self.shutdown.setText(" Shut down")
 
     # ------------------------------------------------------------------ #
     def paintEvent(self, _):
@@ -568,7 +592,7 @@ class Overlay(QWidget):
         elif t == EventType.SPOTIFY_PLAYBACK_CHANGED and p.get("id") != self._queue_track:
             QTimer.singleShot(600, self._refresh_queue)      # the queue moved on with the track
         elif t == EventType.MEDIA_CHANGED:
-            self._show_queue(ui_bus.now_playing().get("source", "spotify") == "spotify")
+            self._show_queue(str(ui_bus.now_playing().get("source", "spotify")).startswith("spotify"))
 
     def _demo_changed(self, on):
         if not on:
@@ -609,7 +633,7 @@ class Overlay(QWidget):
                     by.setObjectName("Faint")
                     row.addWidget(by, 2)
                     self.queue_list.addLayout(row)
-            self._show_queue(ui_bus.now_playing().get("source", "spotify") == "spotify")
+            self._show_queue(str(ui_bus.now_playing().get("source", "spotify")).startswith("spotify"))
 
         def load():
             try:

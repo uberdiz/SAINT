@@ -30,8 +30,12 @@ APP = OUT / "SAINT"
 
 from core.version import VERSION, VERSION_TUPLE  # noqa: E402
 
-# Large voice models are release assets, not part of the Windows installer.
-# The installed app downloads them from the rolling GitHub release on first use.
+# Large voice models are release assets, not part of SAINT.exe: the installer downloads the Kokoro voice
+# (SAINT.iss) and the app downloads anything still missing from the rolling GitHub release on first use.
+
+# What Kokoro needs inside SAINT.exe. Without any of these it speaks with the Windows voice instead
+# (kokoro_onnx missing from requirements.txt is why 2026-10 builds sounded robotic).
+VOICE_PACKAGES = ("kokoro_onnx", "misaki", "en_core_web_sm", "espeakng_loader", "onnxruntime")
 
 
 def make_icon():
@@ -150,13 +154,14 @@ def ensure_build_environment():
                 "torch", "torchaudio",
             ])
 
-        run_checked([py, "-m", "pip", "install", "--upgrade", "-r", str(ROOT / "requirements.txt")])
+        # No --upgrade: it would swap the CUDA torch above for PyPI's CPU wheel and leave torchaudio behind.
+        run_checked([py, "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
 
         print("Re-launching build.py inside .venv...", flush=True)
         run_checked([py, str(Path(__file__).resolve()), *sys.argv[1:]])
         raise SystemExit(0)
 
-    checks = ["PIL", "PyInstaller", "requests", "PySide6"]
+    checks = ["PIL", "PyInstaller", "requests", "PySide6"] + list(VOICE_PACKAGES)
     missing = []
     for name in checks:
         try:
@@ -166,7 +171,7 @@ def ensure_build_environment():
 
     if missing:
         print("Missing build dependencies:", ", ".join(missing), flush=True)
-        run_checked([sys.executable, "-m", "pip", "install", "--upgrade", "-r", str(ROOT / "requirements.txt")])
+        run_checked([sys.executable, "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")])
 
 
 def find_iscc() -> Path:
@@ -221,6 +226,55 @@ def installer():
     subprocess.run(cmd, check=True, cwd=str(ROOT))
 
 
+_SHIPPED_SOURCE = ("app.py", "core", "modules", "ui")
+
+
+def _personal_strings() -> set:
+    """Email addresses from the builder's own SAINT data (scenes, saved answers, settings)."""
+    import re
+    from core.paths import base_data_dir
+    found = set()
+    for name in ("scenes.json", "lesson_answers.json", "config.json", "skills.json"):
+        try:
+            text = (base_data_dir() / name).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        found |= {a.lower() for a in re.findall(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", text)}
+    return {a for a in found if not a.endswith(("@example.com", "@example.org"))}
+
+
+def check_voice_bundle():
+    """Fail the build when Kokoro couldn't run in the frozen app (it would fall back to the Windows voice)."""
+    internal = APP / "_internal"
+    missing = [p for p in VOICE_PACKAGES if not (internal / p).is_dir()]
+    if missing:
+        raise SystemExit("SAINT.exe would have no Kokoro voice — missing from the bundle: " + ", ".join(missing)
+                         + "\nInstall requirements.txt into the build environment and build again.")
+    print("Kokoro voice packages bundled.", flush=True)
+
+
+def check_no_user_data():
+    """A release ships without anyone's data: no memory, history, settings, logins or the
+    builder's own addresses. Fails the build instead of shipping them."""
+    from core.profiles import USER_DATA_FILES, USER_DATA_SUFFIXES, user_data_in
+    problems = []
+    data = APP / "_internal" / "data"
+    if data.is_dir():
+        problems += [f"_internal/data/{h}" for h in user_data_in(data)]
+    problems += [f.name for f in APP.iterdir() if f.is_file() and f.name in USER_DATA_FILES]
+    problems += [str(f.relative_to(APP)) for f in APP.rglob("*")
+                 if f.is_file() and f.name.lower().endswith(USER_DATA_SUFFIXES)]
+    personal = _personal_strings()
+    if personal:
+        for top in _SHIPPED_SOURCE:
+            for f in ([ROOT / top] if top.endswith(".py") else (ROOT / top).rglob("*.py")):
+                text = f.read_text(encoding="utf-8", errors="ignore").lower()
+                problems += [f"{f.relative_to(ROOT)} contains {a}" for a in personal if a in text]
+    if problems:
+        raise SystemExit("Refusing to package personal data:\n  " + "\n  ".join(sorted(set(problems))))
+    print("No user data in the bundle.", flush=True)
+
+
 def main():
     ensure_supported_python()
     ensure_build_environment()
@@ -232,6 +286,8 @@ def main():
     make_icon()
     make_version_file()
     pyinstaller()
+    check_voice_bundle()
+    check_no_user_data()
     # Models are intentionally not bundled into the installer. They are published
     # as separate GitHub Release assets and downloaded into the user's data folder.
     if not args.no_installer:

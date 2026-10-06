@@ -17,12 +17,21 @@ the source run uses the installed app's data too, so however SAINT is started
 it's one SAINT (one memory, one history, and one copy running: the lock file is
 there). Two data folders made it look as if everything had been deleted.
 
+Profiles (testing without your real data — ``run.bat --profile demo``,
+tools/profiles.py): a profile is a separate data folder under
+%LOCALAPPDATA%/SAINT-profiles/<name>, outside the project and outside any build,
+with its own memory, history, scenes, settings and its own Windows Credential
+Manager entries (Spotify login, Link key). Only the large model files are shared
+with the real data folder, so a profile doesn't download them again.
+
 Environment overrides:
     SAINT_DATA_DIR   - store runtime data somewhere other than <project>/data
                        (the test-suite uses this to isolate itself).
+    SAINT_PROFILE    - use the named profile's data folder (set by ``--profile``).
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -46,7 +55,8 @@ def installed_exe() -> Optional[Path]:
     return exe if exe.exists() else None
 
 
-def data_dir() -> Path:
+def base_data_dir() -> Path:
+    """The real data folder (no profile): where the big model files live for every profile."""
     override = os.environ.get("SAINT_DATA_DIR", "").strip()
     if override:
         path = Path(override)
@@ -56,6 +66,37 @@ def data_dir() -> Path:
         path = PROJECT_ROOT / "data"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def profile_name() -> str:
+    """The active test profile ("" = your real data)."""
+    if os.environ.get("SAINT_DATA_DIR", "").strip():
+        return ""                                  # an explicit folder (tests) wins
+    return re.sub(r"[^\w.-]", "-", os.environ.get("SAINT_PROFILE", "").strip())[:40]
+
+
+def profiles_root() -> Path:
+    return _local_app_data() / "SAINT-profiles"
+
+
+def data_dir() -> Path:
+    name = profile_name()
+    if not name:
+        return base_data_dir()
+    path = profiles_root() / name
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def models_dir() -> Path:
+    """Large downloaded models (Whisper, Kokoro): shared by every profile."""
+    return base_data_dir()
+
+
+def keyring_service() -> str:
+    """Credential Manager service for secrets (Spotify login, Link key): one per profile."""
+    name = profile_name()
+    return f"SAINT-profile-{name}" if name else "SAINT"
 
 
 def resource_path(*parts: str) -> Path:
@@ -85,8 +126,12 @@ def resolve_project_path(value: str) -> Path:
     if p.parts and p.parts[0].lower() == "data":
         user = data_dir().joinpath(*p.parts[1:])
         shipped = resource_path(*p.parts)
-        if len(p.parts) > 1 and p.parts[1].lower() in _SHIPPED_DATA and not user.exists() and shipped.exists():
-            return shipped
+        if len(p.parts) > 1 and p.parts[1].lower() in _SHIPPED_DATA and not user.exists():
+            shared = models_dir().joinpath(*p.parts[1:])         # a profile uses the real folder's models
+            if shared.exists():
+                return shared
+            if shipped.exists():
+                return shipped
         return user
     return resource_path(*p.parts)
 

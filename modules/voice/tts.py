@@ -171,11 +171,18 @@ class KokoroTTS(TTSEngine):
         self._load_error: Optional[Exception] = None
         self._load_attempted = False
         self._active_turn_id: int = -1
+        self._closed = False
 
         import queue
         self._audio_queue = queue.Queue()
         self._playback_thread = threading.Thread(target=self._playback_loop, daemon=True)
         self._playback_thread.start()
+
+    def close(self):
+        """Stop the playback thread and release the audio stream (an engine that
+        failed to load, or one being replaced)."""
+        self._closed = True
+        self._interrupt_event.set()
 
     def _playback_loop(self):
         import sounddevice as sd
@@ -187,7 +194,7 @@ class KokoroTTS(TTSEngine):
         stream.start()
 
         try:
-            while True:
+            while not self._closed:
                 if self._interrupt_event.is_set():
                     while not self._audio_queue.empty():
                         try:
@@ -227,6 +234,8 @@ class KokoroTTS(TTSEngine):
                 gain = output_policy.gain()
                 if gain != 1.0:
                     samples = samples * gain
+                    if gain > 1.0:
+                        samples = np.clip(samples, -1.0, 1.0)
                 # Write blocks in smaller chunks to allow quick cancellation
                 chunk_size = sample_rate // 10  # 100ms chunks
                 for i in range(0, len(samples), chunk_size):
@@ -912,7 +921,7 @@ class QwenTTS(TTSEngine):
                 gain = output_policy.gain()
                 if gain != 1.0:
                     samples = samples * gain
-                    samples_int16 = (samples_int16.astype(np.float32) * gain).astype(np.int16)
+                    samples_int16 = np.clip(samples_int16.astype(np.float32) * gain, -32768, 32767).astype(np.int16)
                 playback_monitor.note_block(float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0,
                                             duration)
                 sd.play(samples_int16, sample_rate)

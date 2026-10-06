@@ -118,6 +118,9 @@ DEFAULT_CONFIG = {
         "tts_allow_cpu_fallback": True,
         "tts_require_cuda": False,
         "tts_speed": 1.0,
+        "volume": 100,                    # SAINT's own voice, 0-150 % (not Spotify / Windows)
+        "sapi_voice": "",                 # Windows voice used while Kokoro can't load ("zira", "david", ...)
+        "auto_download_models": True,     # fetch the Kokoro / Whisper models on first use
 
         # Qwen TTS specific
         "tts_qwen_model": "Qwen/Qwen3-TTS",
@@ -276,7 +279,8 @@ DEFAULT_CONFIG = {
         "multi_window_policy": "smart",
         "recent_focus_sec": 600,          # "smart": how recently a window must have been used
         "preferred_browser": None,        # the browser window picked last time (kept until it closes)
-        "max_type_length": 500,
+        "max_type_length": 500,           # SAINT Link: long prompts are typed in pieces this size
+        "paste_over": 60,                 # paste text longer than this (typing long text garbles in some apps)
         "apps": {},                       # custom "name": "path or URI" launch aliases
     },
 
@@ -470,10 +474,17 @@ DEFAULT_CONFIG = {
         "announce": True,                 # speak "Gian sent you a file" and friends
         "approval_timeout_sec": 60,       # how long a collaborator's request waits for your yes
         "max_file_mb": 1024,
+        "manage_firewall": True,          # ask once to let SAINT Link's port through Windows Firewall
         "max_prompt_chars": 2000,
         "inbox_dir": "",                  # blank = data/link/inbox
         "prompt_targets": {},             # extra apps for "send this prompt to ... on <app>"
         "shared_scenes": [],              # scenes collaborators may run
+    },
+    "mcp": {
+        "enabled": True,                  # connect the MCP servers set up in Settings → MCP / data/mcp.json
+        "servers": {},                    # {"name": {"command": ..., "args": [...]} or {"url": ..., "headers": {...}}}
+        "connect_timeout_sec": 60,
+        "call_timeout_sec": 120,
     },
 
     # ------------------------------------------------------------------

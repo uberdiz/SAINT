@@ -430,8 +430,14 @@ final class AppModel: ObservableObject {
     }
 
     func pair(address: String, code: String, role: String) async -> String? {
-        let target = Pairing.parse(address: address)
         do {
+            if address.trimmingCharacters(in: .whitespaces).isEmpty {
+                // Only the code: the PCs Bonjour found on this Wi-Fi.
+                try await link.pair(code: code, nearby: nearby.map { ($0.host, $0.port) }, role: role)
+                peers = link.peers
+                return nil
+            }
+            let target = Pairing.parse(address: address)
             try await link.pair(host: target.host, port: target.port, code: code, role: role)
             peers = link.peers
             return nil

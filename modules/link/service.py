@@ -6,7 +6,8 @@ SAINT Link for this PC: the one object the rest of SAINT talks to.
     link = get_link()
     link.start()                    # when Settings -> Devices -> "Connect my devices" is on
     link.offer("own")               # a code + QR for a phone or another PC of yours
-    link.pair("saint://pair?...")   # or "192.168.1.20:8765 ABCD-EFGH-..."
+    link.pair("saint://pair?...")   # or "192.168.1.20:8765 ABCD-EFGH", or just "ABCD-EFGH"
+                                    # (finds the SAINT with that window open on this network or Tailscale)
     link.run_remote(peer, "send_prompt", {"target": "claude", "prompt": "..."})
 
 It owns the node (modules/link/node.py), registers what a paired device may ask
@@ -22,6 +23,7 @@ Nothing here starts on import, and nothing listens unless ``link.enabled`` is on
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -34,8 +36,8 @@ from modules.link import automations
 from modules.link.approvals import ApprovalQueue
 from modules.link.context_feed import context_feed
 from modules.link.identity import (ALLOW, COLLABORATOR, DENY, OWN, PERMISSIONS, Identity, PairingManager, Peer,
-                                   PeerStore, parse_address, parse_pair_uri)
-from modules.link.node import DEFAULT_PORT, LinkNode, lan_addresses
+                                   PeerStore, decode_code, looks_like_code, parse_address, parse_pair_uri)
+from modules.link.node import DEFAULT_PORT, LinkNode, dial_first, is_tailscale, lan_addresses
 from modules.link.sync import SyncEngine
 from modules.link.wire import LinkError
 
@@ -176,8 +178,11 @@ class LinkService:
             self._stop.clear()
             if config.get("link.discoverable", True):
                 from modules.link.discovery import Discovery
-                self._discovery = Discovery(self.identity.device_id, self.identity.name, self._found)
+                self._discovery = Discovery(self.identity.device_id, self.identity.name, self._found,
+                                            pairing_open=lambda: (self.pairing.current.role
+                                                                  if self.pairing.current else ""))
                 self._discovery.start(port)
+            threading.Thread(target=ensure_firewall_rule, args=(port,), daemon=True, name="link-firewall").start()
             if not self._subscribed:
                 event_bus.subscribe(self._on_event)
                 self._subscribed = True
@@ -224,33 +229,128 @@ class LinkService:
         offer = self.pairing.create(role, label)
         addrs = lan_addresses()
         host = addrs[0] if addrs else "127.0.0.1"
-        uri = offer.uri(host, self.node.port, self.identity.name, alternates=addrs[1:])
+        ts = tailscale_status()
+        alternates = addrs[1:] + [a for a in (ts.get("dns"),) if a]
+        uri = offer.uri(host, self.node.port, self.identity.name, alternates=alternates)
+        if self._discovery is not None:
+            self._discovery.announce_now()          # PCs nearby see the open window straight away
         return {"code": offer.code, "uri": uri, "port": self.node.port, "addresses": addrs, "role": role,
                 "expires": offer.expires, "matrix": qr_matrix(uri), "name": self.identity.name,
-                "tailscale": tailscale_address(addrs)}
+                "tailscale": tailscale_address(addrs) or ts.get("ip", ""), "tailscale_name": ts.get("dns", "")}
 
     def pair(self, text: str, role: Optional[str] = None) -> Peer:
         """Join another device's pairing window. ``text`` is the ``saint://pair?...``
-        link (what the QR code holds), or ``ip:port`` followed by the code."""
+        link (what the QR code holds), ``ip:port`` followed by the code, or just the
+        code — then the SAINT with that window open is found on this network (or
+        among your Tailscale devices)."""
         text = (text or "").strip()
         if not self.node.running:
             self.node.start("0.0.0.0", int(config.get("link.port", DEFAULT_PORT))) if self.enabled else None
         if text.lower().startswith("saint://"):
             info = parse_pair_uri(text)
-            last = None
-            for host in [info["host"]] + info.get("alternates", []):     # home address first, then Tailscale
-                try:
-                    return self.node.pair(host, info["port"], info["token"], role or info["role"])
-                except LinkError as e:
-                    if e.code not in ("unreachable", "timeout", "closed"):
-                        raise
-                    last = e
-            raise last or LinkError("Couldn't reach that device.", "unreachable")
+            # every address at once: the home one, then Tailscale (whichever answers first)
+            return self.node.pair([info["host"]] + info.get("alternates", []), info["port"], info["token"],
+                                  role or info["role"])
         parts = text.replace(",", " ").split()
+        if parts and looks_like_code("".join(parts)) and not any(c in parts[0] for c in ".:[") :
+            return self._pair_by_code("".join(parts), role or OWN)
         if len(parts) < 2:
-            raise LinkError("Give me the address and the code, like “192.168.1.20:8765 ABCD-EFGH-…”.", "bad_args")
+            raise LinkError("Type the code the other device shows (like “ABCD-EFGH”), or its address and the code.",
+                            "bad_args")
         host, port = parse_address(parts[0])
         return self.node.pair(host, port, "".join(parts[1:]), role or OWN)
+
+    def _pair_by_code(self, code: str, role: str) -> Peer:
+        """Only a code: try the SAINTs that say they have a window open (UDP beacon), then the
+        ones on your Tailscale network that answer on SAINT's port."""
+        token = decode_code(code)
+        port = int(config.get("link.port", DEFAULT_PORT))
+        tried = set()
+        d = self._discovery
+        if d is not None:
+            d.probe()
+            deadline = time.time() + 2.5
+            while time.time() < deadline and not d.nearby(pairing_only=True):
+                time.sleep(0.2)
+            for found in d.nearby(pairing_only=True):
+                tried.add(found["host"])
+                try:
+                    return self.node.pair(found["host"], found["port"], token, role)
+                except LinkError as e:
+                    if e.code not in ("unreachable", "timeout", "closed", "pair_failed", "handshake"):
+                        raise
+        hosts = [h for h in tailscale_status().get("peers", []) if h not in tried]
+        if hosts:
+            live = []
+            lock = threading.Lock()
+
+            def probe(h):
+                try:
+                    sock, _ = dial_first([h], port, 2.0)
+                    sock.close()
+                    with lock:
+                        live.append(h)
+                except LinkError:
+                    pass
+            threads = [threading.Thread(target=probe, args=(h,), daemon=True) for h in hosts[:64]]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(3.0)
+            for h in live:
+                try:
+                    return self.node.pair(h, port, token, role)
+                except LinkError as e:
+                    if e.code not in ("unreachable", "timeout", "closed", "pair_failed", "handshake"):
+                        raise
+        if tried or hosts:
+            raise LinkError("I found SAINT nearby, but that code didn't work. Check it, or make a new one on the "
+                            "other PC (codes last five minutes).", "pair_failed")
+        raise LinkError("I couldn't find a SAINT with a pairing window open. On the other PC open Devices → Pair "
+                        "another PC, and make sure both have SAINT Link on (same Wi-Fi, or both on Tailscale) — "
+                        "or type its address before the code.", "not_found")
+
+    def nearby(self) -> List[dict]:
+        """SAINTs heard on this network (paired or not)."""
+        if self._discovery is None:
+            return []
+        paired = {p.id for p in self.peers.all()}
+        return [dict(d, paired=d["id"] in paired) for d in self._discovery.nearby()]
+
+    def check(self, peer_id: str) -> List[str]:
+        """Why can't I reach it? One line per address tried, in plain words."""
+        peer = self.peers.get(peer_id)
+        if peer is None:
+            return ["That device isn't paired any more."]
+        if not self.node.running:
+            return ["SAINT Link is off on this PC — turn it on in Devices."]
+        hint = self.node.address_hints.get(peer.id)
+        port = (hint[1] if hint else 0) or peer.port
+        out = []
+        if self.node.session_for(peer.id) is not None:
+            out.append(f"Connected to {peer.name} right now.")
+        hosts = self.node.candidates(peer)
+        if not hosts or not port:
+            return out + [f"I don't have an address for {peer.name} yet. Open SAINT on it (its Link must be on) or "
+                          f"pair again."]
+        for h in hosts:
+            label = f"{h}:{port}" + (" (Tailscale)" if is_tailscale(h) or h.endswith(".ts.net") else "")
+            try:
+                sock, _ = dial_first([h], port, 3.0)
+                sock.close()
+                out.append(f"{label}: SAINT answers.")
+            except LinkError:
+                why = ("not reachable — is Tailscale on (and logged in to the same account) on both devices?"
+                       if is_tailscale(h) or h.endswith(".ts.net") else
+                       "not reachable — different network, the device is asleep, or its firewall blocks SAINT's port")
+                out.append(f"{label}: {why}")
+        ts = tailscale_status()
+        if ts.get("installed") and not ts.get("ip"):
+            out.append("Tailscale is installed here but not connected — open it and log in.")
+        if peer.platform in ("windows", "") and not any("answers" in o for o in out):
+            out.append("If the other PC is on, allow SAINT through its firewall: on that PC open Devices, press "
+                       "“Check connection” on this device and accept the Windows prompt.")
+        return out
 
     # ------------------------------------------------------------------ #
     # Devices
@@ -434,9 +534,12 @@ class LinkService:
                              language=language, source=source)
             expects = bool(getattr(ai, "expects_reply", False))
             lang = getattr(ai, "last_language", "") or language
+            failed = str(getattr(ai, "model_failed", "") or "")
         reply = "".join(parts).strip()
         context_feed.add(f"{source} (asked this PC)", text, reply)
-        return {"text": reply, "expects_reply": expects, "lang": lang}
+        # "ok": false tells the phone the PC's model couldn't answer (Ollama stopped, model not
+        # installed), so it answers with its own model instead of reading the error out.
+        return {"text": reply, "expects_reply": expects, "lang": lang, "ok": not failed, "model_error": failed}
 
     def _h_sync_manifest(self, ctx, data: dict) -> dict:
         ctx.require("sync")
@@ -540,6 +643,97 @@ class SharedInbox:
 
 _link: Optional[LinkService] = None
 _link_lock = threading.Lock()
+
+
+_ts_cache = {"at": 0.0, "value": {}}
+
+
+def tailscale_status(max_age: float = 60.0) -> dict:
+    """This PC's Tailscale state from the ``tailscale`` command, if it's installed:
+    {"installed", "ip", "dns" (MagicDNS name), "peers": [online peers' 100.x addresses]}.
+    Cached for a minute; {} when Tailscale isn't installed."""
+    now = time.time()
+    if now - _ts_cache["at"] < max_age:
+        return _ts_cache["value"]
+    import shutil
+    import subprocess
+    exe = shutil.which("tailscale")
+    if exe is None and os.name == "nt":
+        for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", "")):
+            cand = os.path.join(base, "Tailscale", "tailscale.exe") if base else ""
+            if cand and os.path.isfile(cand):
+                exe = cand
+                break
+    value: dict = {}
+    if exe:
+        value = {"installed": True, "ip": "", "dns": "", "peers": []}
+        try:
+            kw = {"creationflags": 0x08000000} if os.name == "nt" else {}       # no console window
+            out = subprocess.run([exe, "status", "--json"], capture_output=True, timeout=4, **kw)
+            data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
+            me = data.get("Self") or {}
+            value["ip"] = next((a for a in me.get("TailscaleIPs") or [] if is_tailscale(a)), "")
+            value["dns"] = str(me.get("DNSName") or "").rstrip(".")
+            for p in (data.get("Peer") or {}).values():
+                if p.get("Online"):
+                    ip = next((a for a in p.get("TailscaleIPs") or [] if is_tailscale(a)), "")
+                    if ip:
+                        value["peers"].append(ip)
+        except Exception:
+            log.debug("link.tailscale_status_failed", exc_info=True)
+    _ts_cache.update(at=now, value=value)
+    return value
+
+
+def rule_tcp_ports(netsh_output: str) -> set:
+    """The local ports of the TCP entries in `netsh advfirewall firewall show rule` output
+    (one block per entry; labels are localized, so match any "...port..." / "Proto..." label)."""
+    ports = set()
+    for block in re.split(r"\r?\n\s*\r?\n", netsh_output or ""):
+        proto = re.search(r"^\s*proto\w*\s*:\s*(\w+)", block, re.I | re.M)
+        if proto and proto.group(1).upper() != "TCP":
+            continue
+        for m in re.finditer(r"^[^\n:]*(?:port|puerto|porta)[^\n:]*:\s*([\d,\s-]+)$", block, re.I | re.M):
+            for part in m.group(1).split(","):
+                part = part.strip()
+                if part.isdigit():
+                    ports.add(int(part))
+    return ports
+
+
+def ensure_firewall_rule(port: int, udp_port: int = 8766, force: bool = False):
+    """Windows Firewall blocks SAINT Link's port by default on networks Windows calls "public" —
+    and a dismissed "allow access?" prompt blocks it everywhere. That's the usual reason two devices
+    "both connected in Tailscale" still can't reach SAINT. Add an inbound rule limited to the local
+    network and Tailscale's range (once; it asks for admin rights the first time)."""
+    if os.name != "nt" or not config.get("link.manage_firewall", True):
+        return
+    import subprocess
+    name = "SAINT Link"
+    kw = {"creationflags": 0x08000000, "capture_output": True, "timeout": 10}
+    try:
+        shown = subprocess.run(["netsh", "advfirewall", "firewall", "show", "rule", f"name={name}"], **kw)
+        tcp_ports = rule_tcp_ports(shown.stdout.decode("utf-8", "ignore")) if shown.returncode == 0 else set()
+        if port in tcp_ports:
+            return
+        # The rule exists but for another port (an old port setting — or a test run, 2026-10-06, which
+        # left it on 53430 while SAINT listened on 8765 and PCs couldn't connect over Tailscale): fix it
+        # even though we asked before. A rule that's missing after we asked means you said no: don't nag.
+        stale = bool(tcp_ports)
+        if config.get("link.firewall_asked_port", 0) == port and not force and not stale:
+            return                                   # asked once already; don't keep prompting
+        config.set("link.firewall_asked_port", port)
+        remote = "localsubnet,100.64.0.0/10"
+        script = (f'netsh advfirewall firewall delete rule name="{name}" & '
+                  f'netsh advfirewall firewall add rule name="{name}" dir=in action=allow protocol=TCP '
+                  f'localport={port} remoteip={remote} profile=any & '
+                  f'netsh advfirewall firewall add rule name="{name}" dir=in action=allow protocol=UDP '
+                  f'localport={udp_port} remoteip=localsubnet profile=any')
+        import ctypes
+        rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c {script}', None, 0)
+        log.info("link.firewall_rule_requested port=%d rc=%s", port, rc)
+    except Exception:
+        log.warning("link.firewall_rule_failed", exc_info=True)
 
 
 def tailscale_address(addrs: List[str]) -> str:

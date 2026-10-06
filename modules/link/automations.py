@@ -153,6 +153,9 @@ def _scene_run(args: dict, ctx) -> dict:
     scene = next((s for s in scenes.all() if _norm(s.name) == name or s.id == args["scene"]), None)
     if scene is None or (_norm(scene.name) not in shared and scene.id not in shared):
         raise LinkError("That scene isn't shared with you.", "not_shared")
+    if scenes.plan(scene).interactive:
+        # Its questions ("which account?") are asked and answered at the PC; never run it blind.
+        raise LinkError(f"{scene.name} asks questions while it runs, so start it at the PC.", "interactive")
     scenes.run_in_background(scene)
     return {"text": f"Running {scene.name}."}
 

@@ -80,9 +80,9 @@ def test_desktop_key_validation(monkeypatch):
             d.press_keys("alt+f4")
         with pytest.raises(ToolError):
             d.press_keys("ctrl+notakey")
-        config.set("desktop.max_type_length", 5, persist=False)
+        from modules.desktop.controller import MAX_INPUT_TEXT
         with pytest.raises(ToolError):
-            d.type_text("way too long")
+            d.type_text("x" * (MAX_INPUT_TEXT + 1))            # long text is pasted, but not without limit
         with pytest.raises(ToolError):
             d.mouse_move(10 ** 6, 10 ** 6)
     finally:

@@ -345,7 +345,9 @@ final class BrainTests: XCTestCase {
     func testNoPCNoModelSaysSo() async {
         let r = rig()
         let reply = await r.brain.handle("why is the sky blue")
-        XCTAssertEqual(reply.text, "I don't know how to do that yet.")
+        // says what's missing and how to fix it, instead of a bare "I don't know how to do that yet."
+        XCTAssertTrue(reply.text.contains("no language model"), reply.text)
+        XCTAssertTrue(reply.text.contains("Claude"), reply.text)
         XCTAssertFalse(reply.ok)
     }
 

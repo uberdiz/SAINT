@@ -55,3 +55,7 @@ Thumbs.db
 # Windows build output (packaging/windows/build.py)
 build/
 dist/
+
+# Windows build output (packaging/windows/build.py)
+build/
+dist/

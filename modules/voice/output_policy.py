@@ -86,18 +86,38 @@ class OutputPolicy:
         return 0 < rms < floor
 
     def gain(self) -> float:
-        """Volume multiplier for the reply being spoken now."""
+        """Volume multiplier for the reply being spoken now: SAINT's voice volume
+        (Settings › Voice), lowered further when the request was whispered."""
+        base = voice_volume()
         if not config.get("voice.whisper_replies", True):
-            return 1.0
+            return base
         with self._lock:
             rms, at = self._last_input_rms, self._last_input_at
             whisper = self._is_whisper(rms)
         # Only the reply to the utterance just heard is quieter.
         if not rms or time.time() - at > 60:
-            return 1.0
+            return base
         if whisper:
-            return max(0.1, min(1.0, float(config.get("voice.whisper_gain", 0.45))))
-        return 1.0
+            return base * max(0.1, min(1.0, float(config.get("voice.whisper_gain", 0.45))))
+        return base
+
+
+VOLUME_MAX = 150          # percent: above 100 boosts a quiet voice (peaks are clipped)
+
+
+def voice_volume() -> float:
+    """SAINT's own voice volume as a multiplier (voice.volume, 0-150 %, default 100)."""
+    try:
+        percent = float(config.get("voice.volume", 100))
+    except (TypeError, ValueError):
+        percent = 100.0
+    return max(0.0, min(VOLUME_MAX, percent)) / 100.0
+
+
+def set_voice_volume(percent: float) -> int:
+    percent = int(round(max(0.0, min(VOLUME_MAX, float(percent)))))
+    config.set("voice.volume", percent)
+    return percent
 
 
 output_policy = OutputPolicy()

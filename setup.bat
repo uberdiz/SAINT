@@ -63,7 +63,7 @@ if %ERRORLEVEL% NEQ 0 (
 )
 
 echo [4/7] Installing all SAINT dependencies...
-"%PY%" -m pip install --upgrade -r requirements.txt
+"%PY%" -m pip install -r requirements.txt
 if %ERRORLEVEL% NEQ 0 (
     echo ERROR: dependency installation failed.
     echo The environment was not marked as ready.
@@ -86,6 +86,18 @@ if %ERRORLEVEL% NEQ 0 (
     echo Run setup.bat again to repair the environment.
     pause
     exit /b 1
+)
+
+"%PY%" -c "import kokoro_onnx, misaki, en_core_web_sm, espeakng_loader; print('Kokoro voice packages: OK')"
+if %ERRORLEVEL% NEQ 0 (
+    echo ERROR: the Kokoro voice packages are missing - SAINT would fall back to the Windows voice.
+    pause
+    exit /b 1
+)
+echo Downloading the Kokoro voice model (about 350 MB, once)...
+"%PY%" tools\get_kokoro_onnx.py
+if %ERRORLEVEL% NEQ 0 (
+    echo WARNING: the Kokoro model download failed. Run: "%PY%" tools\get_kokoro_onnx.py
 )
 
 "%PY%" -c "import PyInstaller; print('PyInstaller:', PyInstaller.__version__)"

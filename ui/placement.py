@@ -86,9 +86,10 @@ def gaming_screen(game_rect) -> Optional[QScreen]:
     return max(others, key=lambda s: s.geometry().width() * s.geometry().height())
 
 
-def move_to_screen(widget, screen: Optional[QScreen], corner: str = "") -> bool:
+def move_to_screen(widget, screen: Optional[QScreen], corner: str = "", inset: int = 12) -> bool:
     """Move a top-level widget onto ``screen``, keeping its relative spot
-    (or into a corner: "bottom-right", "top-right", ...). Returns True if it moved."""
+    (or into a corner: "bottom-right", "top-left", "left", "top", "center", ...),
+    ``inset`` px from the edges. Returns True if it moved."""
     if screen is None or widget is None:
         return False
     area = screen.availableGeometry()
@@ -96,8 +97,9 @@ def move_to_screen(widget, screen: Optional[QScreen], corner: str = "") -> bool:
     geo = widget.frameGeometry()
     w, h = min(geo.width(), area.width()), min(geo.height(), area.height())
     if corner:
-        x = area.right() - w - 12 if "right" in corner else area.left() + 12
-        y = area.bottom() - h - 12 if "bottom" in corner else area.top() + 12
+        cx, cy = area.left() + (area.width() - w) // 2, area.top() + (area.height() - h) // 2
+        x = area.right() + 1 - w - inset if "right" in corner else area.left() + inset if "left" in corner else cx
+        y = area.bottom() + 1 - h - inset if "bottom" in corner else area.top() + inset if "top" in corner else cy
     elif cur is not None and cur is not screen:
         src = cur.availableGeometry()
         fx = (geo.left() - src.left()) / max(1, src.width() - geo.width())
@@ -114,6 +116,21 @@ def move_to_screen(widget, screen: Optional[QScreen], corner: str = "") -> bool:
         return False
     if widget.isMaximized():
         widget.showNormal()
+    widget.move(x, y)
+    return True
+
+
+def nudge(widget, dx: int, dy: int) -> bool:
+    """Move a window by (dx, dy) px ("right a bit"), kept on the screen it's on."""
+    if widget is None or not (dx or dy):
+        return False
+    geo = widget.frameGeometry()
+    screen = QGuiApplication.screenAt(geo.center()) or QGuiApplication.primaryScreen()
+    area = screen.availableGeometry()
+    x = max(area.left(), min(geo.left() + dx, area.right() + 1 - geo.width()))
+    y = max(area.top(), min(geo.top() + dy, area.bottom() + 1 - geo.height()))
+    if (x, y) == (geo.left(), geo.top()):
+        return False
     widget.move(x, y)
     return True
 

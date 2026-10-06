@@ -2,7 +2,8 @@
 ui/pages/devices.py
 
 Devices: your phone, your other PCs and other people's SAINTs, connected over
-your network (modules/link). Pair with a QR code or an IP:port and a code,
+your network (modules/link). Pair with a QR code, or type the short code alone
+(another PC on the same Wi-Fi or Tailscale finds it), or an IP:port and the code,
 choose what each device may do, send a file, say yes or no when a friend's SAINT
 asks for something, and keep what they shared.
 
@@ -171,7 +172,7 @@ class DevicesPage(Page):
 
         join = QHBoxLayout()
         self.join_text = QLineEdit()
-        self.join_text.setPlaceholderText("Join another SAINT: paste its saint:// link, or “192.168.1.20:8765 ABCD-EFGH-…”")
+        self.join_text.setPlaceholderText("Join another SAINT: type the code it shows (ABCD-EFGH), or paste its saint:// link")
         join_btn = QPushButton("Join")
         join_btn.clicked.connect(self._join)
         self.join_text.returnPressed.connect(self._join)
@@ -274,8 +275,9 @@ class DevicesPage(Page):
                     "\nTo reach this PC away from home, install Tailscale on this PC and your phone, then show "
                     "the code again.")
             qr = "" if info.get("matrix") else "\n(The QR code needs the segno package — type the address instead.)"
-            self.how.setText(f"On {who}, open SAINT → Devices and scan this code, or type the address and code "
-                             f"below.\n\nAddress: {addr}:{info['port']}{away}{qr}")
+            self.how.setText(f"On {who}, open SAINT → Devices and scan this code — or on another PC just type the "
+                             f"code below into “Join” (same Wi-Fi or Tailscale: no address needed).\n\n"
+                             f"Address, if it asks: {addr}:{info['port']}{away}{qr}")
             self.code.setText(info["code"])
             self.offer_box.setVisible(True)
             self.enable.setChecked(True)
@@ -381,6 +383,11 @@ class DevicesPage(Page):
                 h.addWidget(chip({"ios": "iPhone", "windows": "Windows", "mac": "Mac"}.get(d["platform"], d["platform"])))
             h.addWidget(chip("Connected" if d["connected"] else "Offline", "ok" if d["connected"] else "warn"))
             h.addStretch()
+            if not d["connected"]:
+                b = QPushButton("Check connection")
+                b.setToolTip("Try every address SAINT knows for it and say what's in the way")
+                b.clicked.connect(lambda _=False, i=d["id"]: self._check(i))
+                h.addWidget(b)
             if d["connected"] and d["role"] == "own":
                 b = QPushButton("Sync now")
                 b.clicked.connect(lambda _=False, i=d["id"]: self._sync(i))
@@ -402,6 +409,19 @@ class DevicesPage(Page):
             self.devices_box.addWidget(row)
 
     # ------------------------------------------------------------------ #
+    def _check(self, peer_id):
+        self._say("Checking…")
+
+        def run():
+            from modules.link.service import ensure_firewall_rule
+            lines = _link().check(peer_id)
+            if not any("answers" in ln or "Connected" in ln for ln in lines):
+                ensure_firewall_rule(_link().node.port or int(config.get("link.port", 8765)), force=True)
+            return lines
+        run_async(run, lambda lines: self._say("\n".join(lines), not any("answers" in ln or "Connected" in ln
+                                                                          for ln in lines)),
+                  lambda e: self._say(str(e), True))
+
     def _sync(self, peer_id):
         self._say("Syncing…")
         run_async(lambda: _link().sync_with(peer_id),

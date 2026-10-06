@@ -2,10 +2,15 @@ import Foundation
 
 /// Pairing codes and links (see modules/link/identity.py).
 ///
-/// A pairing code is 16 random bytes shown as 26 base32 characters in groups of four. It is the
-/// pre-shared key of the pairing handshake, so it must be guessed in full — there is no short PIN.
+/// A pairing code is random bytes shown as base32 characters in groups of four. It is the pre-shared key of
+/// the pairing handshake, so it must be guessed in full. Codes made since desktop 2.3 are short (5 bytes:
+/// `ABCD-EFGH`), and their key is stretched with PBKDF2 so the one-time code can't be brute-forced offline in
+/// the five minutes it lives; the original 26-character codes (16 bytes, HKDF) still work.
 public enum Pairing {
     private static let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567".utf8)
+    public static let shortTokenBytes = 5
+    public static let longTokenBytes = 16
+    public static let shortCodeIterations = 20000
 
     public enum PairingError: Error, Equatable, LocalizedError {
         case badCharacters
@@ -89,13 +94,24 @@ public enum Pairing {
         guard !cleaned.isEmpty, cleaned.utf8.allSatisfy({ alphabet.contains($0) }) else {
             throw PairingError.badCharacters
         }
-        guard let token = base32Decode(cleaned), token.count == 16 else { throw PairingError.wrongLength }
+        guard let token = base32Decode(cleaned), token.count == shortTokenBytes || token.count == longTokenBytes else {
+            throw PairingError.wrongLength
+        }
         return token
     }
 
-    /// The pre-shared key of the pairing handshake.
+    /// Whether ``text`` is a pairing code on its own (and not an address).
+    public static func looksLikeCode(_ text: String) -> Bool {
+        (try? decodeCode(text)) != nil
+    }
+
+    /// The pre-shared key of the pairing handshake (see modules/link/identity.py `psk_for`).
     public static func psk(forToken token: Data) -> Data {
-        SaintCrypto.hkdf(ikm: token, salt: Data("SAINT-LINK-PAIRING".utf8), info: Data("psk".utf8), length: 32)
+        if token.count == longTokenBytes {
+            return SaintCrypto.hkdf(ikm: token, salt: Data("SAINT-LINK-PAIRING".utf8), info: Data("psk".utf8), length: 32)
+        }
+        return SaintCrypto.pbkdf2SHA256(password: token, salt: Data("SAINT-LINK-PAIRING-SHORT".utf8),
+                                        iterations: shortCodeIterations, length: 32)
     }
 
     // MARK: links and addresses

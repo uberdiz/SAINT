@@ -92,6 +92,32 @@ public enum SaintCrypto {
         return output.prefix(length)
     }
 
+    /// RFC 8018 PBKDF2 with HMAC-SHA256 (what Python's `hashlib.pbkdf2_hmac("sha256", ...)` computes).
+    public static func pbkdf2SHA256(password: Data, salt: Data, iterations: Int, length: Int) -> Data {
+        let key = SymmetricKey(data: password)
+        var output = Data()
+        var blockIndex: UInt32 = 1
+        while output.count < length {
+            var first = salt
+            withUnsafeBytes(of: blockIndex.bigEndian) { first.append(contentsOf: $0) }
+            var u = Data(HMAC<SHA256>.authenticationCode(for: first, using: key))
+            var t = [UInt8](u)
+            if iterations > 1 {
+                for _ in 1..<iterations {
+                    u = Data(HMAC<SHA256>.authenticationCode(for: u, using: key))
+                    var j = 0
+                    for byte in u {
+                        t[j] ^= byte
+                        j += 1
+                    }
+                }
+            }
+            output.append(contentsOf: t)
+            blockIndex += 1
+        }
+        return output.prefix(length)
+    }
+
     // MARK: ChaCha20-Poly1305
 
     /// ciphertext || 16-byte tag

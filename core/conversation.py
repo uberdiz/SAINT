@@ -43,7 +43,7 @@ log = logging.getLogger("saint.conversation")
 
 # Stop/override phrases that tell SAINT to cease speaking without starting a new turn
 STOP_PHRASES = {
-    "stop talking", "stop saying", "be quiet", "shut up", "hold on",
+    "stop talking", "stop speaking", "stop saying", "be quiet", "shut up", "hold on",
     "wait wait", "that's enough", "that is enough", "never mind",
     "nevermind", "forget it", "forget about it", "im done",
     "i m done", "im finished", "i m finished", "i am done",
@@ -586,6 +586,7 @@ class ConversationController:
                     event_bus.emit_event(EventType.LATENCY_TTS_INFERENCE, {
                         "ms": round((time.perf_counter() - _start) * 1000, 1)})
 
+                ok = None
                 try:
                     self._voice.set_tts_playback_active(True)
                     ok = self._tts.speak(text, turn_id=turn_id, on_chunk_start=on_chunk_start)
@@ -605,7 +606,10 @@ class ConversationController:
                     while self._tts.is_speaking() or getattr(self._tts, 'playback_active', False):
                         time.sleep(0.01)
                     self._voice.set_tts_playback_active(False)
-                    self._last_tts_end_time = time.perf_counter()
+                    if ok is not False:
+                        # Only audio that really played can be heard back: with TTS failing, the
+                        # echo window dropped real commands ("Nope. Open Claude." — 2026-10-05).
+                        self._last_tts_end_time = time.perf_counter()
                     self._voice.set_saint_speaking(False)
                 event_bus.emit_event(EventType.TTS_GENERATION_END, {
                     "turn_id": turn_id, "stream_id": stream_id,

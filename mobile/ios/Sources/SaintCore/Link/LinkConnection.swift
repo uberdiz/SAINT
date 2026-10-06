@@ -17,6 +17,8 @@ public final class LinkConnection {
     public let peerName: String
     public let peerRole: String
     public private(set) var lastReceived = Date()
+    /// The addresses the other device listed about itself in the handshake (its Wi-Fi and Tailscale addresses).
+    public internal(set) var remoteAddrs: [String] = []
 
     public var onNotification: ((String, JSONObject) -> Void)?
     public var onRequest: ((String, JSONObject) async throws -> JSONObject)?
@@ -263,8 +265,10 @@ public final class LinkConnection {
             let step = try handshake.receive(frame: frames[0])
             guard case .ready(let channel, let hello) = step else { throw LinkError.handshake("unexpected handshake step") }
             if let id = hello?["id"] as? String, id != peer.id { throw LinkError.handshake("That isn't the device I paired with.") }
-            return LinkConnection(peerID: peer.id, peerName: peer.name, peerRole: peer.role, transport: transport,
-                                  channel: channel, decoder: decoder, earlyFrames: Array(frames.dropFirst()))
+            let connection = LinkConnection(peerID: peer.id, peerName: peer.name, peerRole: peer.role, transport: transport,
+                                            channel: channel, decoder: decoder, earlyFrames: Array(frames.dropFirst()))
+            connection.remoteAddrs = LinkConnection.addresses(in: hello)
+            return connection
         }
     }
 
@@ -312,12 +316,25 @@ public final class LinkConnection {
             let name = String(((theirHello["name"] as? String) ?? "Device").prefix(40))
             let platform = String(((theirHello["platform"] as? String) ?? "").prefix(16))
             let thePort = (theirHello["port"] as? NSNumber)?.intValue ?? port
-            let peer = LinkPeer(id: theirID, name: name, publicKey: channel.remoteStatic.hex, role: role, platform: platform,
+            // The code's owner chose the role; if this phone picked differently, both sides keep the stricter one
+            // (a friend choosing "my own device" used to fail as a wrong code).
+            let theirRole = (body["role"] as? String) ?? role
+            let agreed = (role == "own" && theirRole == "own") ? "own" : "collaborator"
+            let peer = LinkPeer(id: theirID, name: name, publicKey: channel.remoteStatic.hex, role: agreed, platform: platform,
                                 host: host, port: thePort > 0 && thePort < 65536 ? thePort : port)
-            let connection = LinkConnection(peerID: peer.id, peerName: peer.name, peerRole: role, transport: transport,
+            let connection = LinkConnection(peerID: peer.id, peerName: peer.name, peerRole: agreed, transport: transport,
                                             channel: channel, decoder: decoder, earlyFrames: extra)
+            connection.remoteAddrs = LinkConnection.addresses(in: theirHello)
             return (peer, connection)
         }
+    }
+
+    /// The plain addresses listed in a hello (`"addrs"`), at most eight.
+    static func addresses(in hello: JSONObject?) -> [String] {
+        guard let list = hello?["addrs"] as? [Any] else { return [] }
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_:"))
+        return list.prefix(8).compactMap { $0 as? String }.map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && $0.count <= 255 && !$0.hasPrefix("127.") && $0.unicodeScalars.allSatisfy { allowed.contains($0) } }
     }
 
     /// Read from the transport until at least ``count`` whole frames have arrived.

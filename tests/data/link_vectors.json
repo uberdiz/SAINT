@@ -97,5 +97,11 @@
    "initiator_first": "ae9cdf248711a385c314a50943ed7b92fb917b3b5123b64e1719023097ec24439c9ef3f9",
    "responder_first": "a0f250bb153bd29ec188b0d50f090dbb0b7fd20b6a756c90016217959630071a561a2464"
   }
- ]
+ ],
+ "pairing_code_short": {
+  "token": "0001020304",
+  "code": "AAAQ-EAYE",
+  "iterations": 20000,
+  "psk": "657f058815411f86b0263bc432d1d9b9b79fc7ca35aee7102a7189d041947543"
+ }
 }
