@@ -220,7 +220,8 @@ class ArtView(QWidget):
     def __init__(self, player: NowPlaying, shell, parent=None):
         super().__init__(parent)
         self.player = player
-        self.cover = CoverArt(120, radius=ART_RADIUS, parent=self)
+        self.cover = CoverArt(120, radius=ART_RADIUS, parent=self, fit="contain")
+        self._room = False                        # a tall card: the controls fit under the cover
         self.scrim = _Scrim(self)
         lay = QVBoxLayout(self.scrim)
         lay.setContentsMargins(12, 8, 10, 10)
@@ -260,7 +261,9 @@ class ArtView(QWidget):
         self.play.clicked.connect(player.play.click)
         self.next.clicked.connect(player.next.click)
         self.vol_icon.clicked.connect(player.vol_icon.click)
-        self.vol.sliderReleased.connect(lambda: player._set_volume(self.vol.value()))
+        # A click on the track, a drag or the keys all reach the player (and Spotify) — see NowPlaying.
+        self.vol.valueChanged.connect(player.user_volume)
+        self.vol.sliderReleased.connect(player._send_volume)
         for w in (self.prev, self.play, self.next):
             ctl.addWidget(w)
         ctl.addStretch()
@@ -279,7 +282,7 @@ class ArtView(QWidget):
         self._update_scrim()
 
     def _update_scrim(self):
-        self.scrim.setVisible(self._hovered or self._peek.isActive())
+        self.scrim.setVisible(self._hovered or self._room or self._peek.isActive())
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -288,11 +291,15 @@ class ArtView(QWidget):
         roomy = self.width() >= 170
         self.vol.setVisible(roomy)
         self.artist.setVisible(self.height() >= 120)
+        # Tall and narrow: the whole cover sits at the top and the title and controls stay
+        # visible underneath (it used to crop the art to a strip and hide everything).
+        self._room = self.height() - self.width() >= 96
+        self._update_scrim()
 
     def sync(self):
         """Copy what the player shows (called whenever it re-renders)."""
         p = self.player
-        self.cover.set_url(p.cover._url or "")
+        self.cover.set_url(p.cover._base or "", hires=p.cover._hires)
         title = p.title.text()
         self.title.setText(title)
         self.artist.setText(p.artist.text())
@@ -364,10 +371,6 @@ class SpotifyWidget(QWidget):
         self._tick = QTimer(self)
         self._tick.setInterval(500)
         self._tick.timeout.connect(self._tick_hidden_player)
-        self._vol_send = QTimer(self)             # scroll-wheel volume: send once the wheel stops
-        self._vol_send.setSingleShot(True)
-        self._vol_send.setInterval(260)
-        self._vol_send.timeout.connect(lambda: self.player._set_volume(self.player.vol.value()))
         self._save_size = QTimer(self)
         self._save_size.setSingleShot(True)
         self._save_size.setInterval(400)
@@ -566,6 +569,7 @@ class SpotifyWidget(QWidget):
 
     def showEvent(self, e):
         super().showEvent(e)
+        actions.spotify_fast_poll("mini-player", True)      # its slider follows Spotify's own volume
         self._update_tint()
         self.status.refresh()
         if self.lyrics.isVisible():
@@ -576,6 +580,8 @@ class SpotifyWidget(QWidget):
 
     def hideEvent(self, e):
         super().hideEvent(e)
+        actions.spotify_fast_poll("mini-player", False)
+        self.player._send_volume()
         self.lyrics.stop()
         self._tick.stop()
 
@@ -732,12 +738,8 @@ class SpotifyWidget(QWidget):
             self.set_opacity(self.windowOpacity() + step)
         elif self.player.vol_icon.isEnabled():                 # scroll = volume of what's playing
             vol = self.player.vol
-            vol.blockSignals(True)
-            vol.setValue(max(0, min(100, vol.value() + int(step * 100))))
-            vol.blockSignals(False)
-            self.player.vol_icon.set_icon("volume-x" if vol.value() == 0 else "volume")
+            self.player.user_volume(vol.value() + int(round(step * 100)))   # sent once the wheel stops
             self.status.note(f"Volume {vol.value()}%")
-            self._vol_send.start()
             self._content_changed()
         e.accept()
 

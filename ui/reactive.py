@@ -90,6 +90,8 @@ class UIBus(QObject):
         if sp.get("track"):
             return {"source": "spotify", "title": sp["track"], "artist": sp.get("artists", ""),
                     "album": sp.get("album", "") or "", "cover": sp.get("image_large") or sp.get("image") or "",
+                    "cover_hires": sp.get("image_hires", ""), "volume": sp.get("volume"),
+                    "supports_volume": sp.get("supports_volume", True),
                     "is_playing": bool(sp.get("is_playing")), "position_ms": sp.get("progress_ms", 0),
                     "duration_ms": sp.get("duration_ms") or 0, "at": self.spotify_at, "app": "Spotify",
                     "device": sp.get("device", ""), "can_next": True, "can_previous": True}

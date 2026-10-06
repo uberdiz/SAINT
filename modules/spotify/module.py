@@ -53,7 +53,27 @@ class SpotifyModule(BaseModule):
         self._poll_wake = threading.Event()   # poll now: the Spotify app changed track
         self._last_media_title = None
         self._last_error_code = ""
+        # Keys of on-screen controls that show Spotify's live volume (the mini player, the Music
+        # page): while any is visible the poller checks every few seconds, so a volume change made
+        # in Spotify or on the phone reaches SAINT's slider quickly (it used to wait up to 15 s).
+        self._fast = set()
+        self._last_full_poll = 0.0
         event_bus.subscribe(self._on_media)
+
+    def want_fast_poll(self, key: str, on: bool):
+        """A volume control appeared (``on``) or went away. Bounded: only while something is
+        on screen, and each fast check is one GET /me/player that publishes only on change."""
+        if on:
+            new = key not in self._fast
+            self._fast.add(key)
+            if new:
+                self._poll_wake.set()
+        else:
+            self._fast.discard(key)
+
+    @property
+    def fast_polling(self) -> bool:
+        return bool(self._fast)
 
     # ------------------------------------------------------------------ #
     def availability(self):
@@ -129,10 +149,19 @@ class SpotifyModule(BaseModule):
 
     def _poll_loop(self):
         while not self._poll_stop.is_set():
-            interval = max(5, int(config.get("spotify.poll_interval_sec", 15)))
+            normal = max(5, int(config.get("spotify.poll_interval_sec", 15)))
+            interval = normal
+            if self._fast:
+                interval = max(1, min(normal, int(config.get("spotify.poll_interval_fast_sec", 3))))
             if self.enabled and self.auth.is_configured() and self.is_connected():
                 try:
-                    self.tools.poll_once()
+                    if self._fast and time.time() - self._last_full_poll < normal:
+                        # Between the regular polls: only volume / play state / track, published
+                        # only when one of them changed (no event every 3 s in the log).
+                        self.tools.poll_light()
+                    else:
+                        self._last_full_poll = time.time()
+                        self.tools.poll_once()
                     if self._last_error_code:
                         log.info("spotify.poller.recovered")
                     self._last_error_code = ""

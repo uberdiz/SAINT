@@ -786,22 +786,61 @@ class StackBar(QWidget):
 
 
 # ---------------------------------------------------------------------- #
-# Album covers (shared cache; downloads off the GUI thread)
+# Album covers (shared cache; downloads and decoding off the GUI thread)
 # ---------------------------------------------------------------------- #
+COVER_MAX_PX = 1600          # hi-res covers are decoded at most this big (a 3000 px original is 36 MB)
+COVER_CACHE_PIXELS = 48_000_000
+
+
+def _decode_cover(data: bytes):
+    """Bytes -> QImage (thread-safe), shrunk to COVER_MAX_PX. None if it isn't an image."""
+    from PySide6.QtGui import QImage
+    img = QImage()
+    if not data or not img.loadFromData(data):
+        return None
+    if max(img.width(), img.height()) > COVER_MAX_PX:
+        img = img.scaled(COVER_MAX_PX, COVER_MAX_PX, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    return img
+
+
+def looks_like_icon(img) -> bool:
+    """A media session's "cover" that is really the app's icon (Chrome's logo when a site gives
+    Windows no artwork): small, or square with transparent corners. Album art and video
+    thumbnails are opaque. Drawn as a badge instead of stretched to fill the card."""
+    if img is None or img.isNull():
+        return False
+    w, h = img.width(), img.height()
+    if max(w, h) < 120:
+        return True
+    if not img.hasAlphaChannel() or abs(w - h) > max(w, h) * 0.1:
+        return False
+    corners = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 1), (1, h // 2)]
+    return sum(1 for x, y in corners if img.pixelColor(x, y).alpha() < 40) >= 3
+
+
 class CoverCache(QObject):
     def __init__(self):
         super().__init__()
         self._pix = OrderedDict()
         self._color = {}
+        self._icon = {}
         self._waiting = {}
         self._failed = set()          # never retried in a loop
 
-    def put(self, url: str, pm: QPixmap):
+    def _pixels(self) -> int:
+        return sum(pm.width() * pm.height() for pm in self._pix.values())
+
+    def put(self, url: str, pm: QPixmap, icon: bool = False):
         self._pix[url] = pm
         self._color[url] = _dominant(pm)
-        while len(self._pix) > 40:
+        self._icon[url] = icon
+        while len(self._pix) > 40 or (len(self._pix) > 1 and self._pixels() > COVER_CACHE_PIXELS):
             old, _ = self._pix.popitem(last=False)
             self._color.pop(old, None)
+            self._icon.pop(old, None)
+
+    def is_icon(self, url: str) -> bool:
+        return bool(self._icon.get(url))
 
     def get(self, url: str, cb: Callable):
         if not url:
@@ -822,20 +861,23 @@ class CoverCache(QObject):
         def fetch():
             if url.startswith("media://"):         # a thumbnail Windows gave us (modules/desktop/media.py)
                 from modules.desktop.media import media
-                return media.thumbnail(url)
-            import requests
-            r = requests.get(url, timeout=10)
-            r.raise_for_status()
-            return r.content
-        run_async(fetch, lambda data: self._loaded(url, data), lambda _e: self._loaded(url, b""))
+                data = media.thumbnail(url)
+            else:
+                import requests
+                r = requests.get(url, timeout=10)
+                r.raise_for_status()
+                data = r.content
+            img = _decode_cover(data)
+            return (img, looks_like_icon(img)) if img is not None else (None, False)
+        run_async(fetch, lambda res: self._loaded(url, *res), lambda _e: self._loaded(url, None, False))
 
     def color(self, url: str) -> Optional[QColor]:
         return self._color.get(url)
 
-    def _loaded(self, url, data):
-        pm = QPixmap()
-        if data and pm.loadFromData(data):
-            self.put(url, pm)
+    def _loaded(self, url, img, icon=False):
+        pm = QPixmap.fromImage(img) if img is not None else None
+        if pm is not None and not pm.isNull():
+            self.put(url, pm, icon)
         else:
             pm = None
             self._failed.add(url)
@@ -857,16 +899,28 @@ covers = CoverCache()
 
 
 class CoverArt(QWidget):
-    """Rounded album art that cross-fades between tracks."""
+    """Rounded album art that cross-fades between tracks.
 
-    def __init__(self, size: int = 72, radius: int = 10, parent=None):
+    ``fit="cover"`` fills the widget (cropping the middle); ``fit="contain"`` shows the whole
+    cover on a blurred copy of itself when the widget isn't square (a tall mini player used to
+    show only the middle strip of the art). A hi-res variant (``set_url(url, hires=...)``) is
+    fetched once the art is drawn bigger than the normal 640 px cover, falling back to ``url``."""
+
+    HIRES_FROM_PX = 600
+
+    def __init__(self, size: int = 72, radius: int = 10, parent=None, fit: str = "cover"):
         super().__init__(parent)
         self.setFixedSize(size, size)
         self._radius = radius
+        self._fit = fit
         self._url = None
+        self._base = None             # the normal URL (the fallback for the hi-res one)
+        self._hires = ""
         self._pm = None
         self._old = None
+        self._icon = False
         self._mix = 1.0
+        self._scaled = {}             # (pixmap key, w, h, dpr, mode) -> scaled pixmap
         self._anim = QVariantAnimation(self)
         self._anim.setDuration(motion.SLOW)
         self._anim.valueChanged.connect(self._set_mix)
@@ -876,9 +930,29 @@ class CoverArt(QWidget):
         self.setFixedSize(int(width), int(height or width))
         if radius:
             self._radius = radius
+        self._maybe_upgrade()
         self.update()
 
-    def set_url(self, url: str):
+    def set_fit(self, fit: str):
+        if fit != self._fit:
+            self._fit = fit
+            self.update()
+
+    def _wants_hires(self) -> bool:
+        return bool(self._hires) and \
+            max(self.width(), self.height()) * self.devicePixelRatioF() > self.HIRES_FROM_PX
+
+    def set_url(self, url: str, hires: str = ""):
+        if url == self._base and (hires or "") == self._hires:
+            return
+        self._base, self._hires = url, hires or ""
+        self._load(self._hires if self._wants_hires() else url)
+
+    def _maybe_upgrade(self):
+        if self._base and self._wants_hires() and self._url != self._hires:
+            self._load(self._hires)
+
+    def _load(self, url: str):
         if url == self._url:
             return
         self._url = url
@@ -887,7 +961,14 @@ class CoverArt(QWidget):
     def _arrived(self, url, pm):
         if url != self._url:
             return
+        if pm is None and url == self._hires and self._base and self._base != url:
+            self._url = None
+            self._load(self._base)              # no original-resolution cover: the 640 px one
+            return
+        if pm is not None and self._pm is not None and pm.cacheKey() == self._pm.cacheKey():
+            return
         self._old, self._pm = self._pm, pm
+        self._icon = covers.is_icon(url)
         if motion.enabled() and self._old is not None:
             self._anim.stop()
             self._anim.setStartValue(0.0)
@@ -901,6 +982,65 @@ class CoverArt(QWidget):
         if self._mix >= 1.0:
             self._old = None
         self.update()
+
+    def _scaled_pm(self, pm: QPixmap, w: float, h: float, mode) -> QPixmap:
+        """Scaled once per size (painting rescaled a 1600 px cover on every frame)."""
+        dpr = self.devicePixelRatioF()
+        key = (pm.cacheKey(), int(w), int(h), round(dpr, 2), int(mode.value if hasattr(mode, "value") else mode))
+        hit = self._scaled.get(key)
+        if hit is None:
+            if len(self._scaled) > 8:
+                self._scaled.clear()
+            hit = pm.scaled(QSize(max(1, int(w * dpr)), max(1, int(h * dpr))), mode, Qt.SmoothTransformation)
+            hit.setDevicePixelRatio(dpr)
+            self._scaled[key] = hit
+        return hit
+
+    def _backdrop(self, pm: QPixmap) -> QPixmap:
+        """A blurred copy of the cover to fill the space around it."""
+        key = (pm.cacheKey(), "blur", self.width(), self.height())
+        hit = self._scaled.get(key)
+        if hit is None:
+            tiny = pm.scaled(14, 14, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            side = max(1, self.width(), self.height())
+            big = tiny.scaled(side, side, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            # Proportional, then the middle cropped out (stretching it smeared the cover sideways).
+            hit = big.copy((big.width() - self.width()) // 2, (big.height() - self.height()) // 2,
+                           max(1, self.width()), max(1, self.height()))
+            self._scaled[key] = hit
+        return hit
+
+    def _draw(self, g: QPainter, pm: QPixmap, rect: QRectF, p):
+        dpr = self.devicePixelRatioF()
+        w, h = rect.width(), rect.height()
+        if self._icon:
+            # An app's logo standing in for artwork: a tinted backdrop and the icon small and sharp.
+            c = _dominant(pm)
+            grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+            grad.setColorAt(0, with_alpha(c, 90))
+            grad.setColorAt(1, QColor(p.surface2))
+            g.fillRect(rect, QColor(p.raised))
+            g.fillRect(rect, grad)
+            side = min(w, h) * 0.38
+            side = min(side, max(pm.width(), pm.height()) / dpr * 2)    # never blown up past 2x
+            s = self._scaled_pm(pm, side, side, Qt.KeepAspectRatio)
+            g.drawPixmap(QPointF(rect.center().x() - s.width() / dpr / 2,
+                                 rect.center().y() - s.height() / dpr / 2), s)
+            return
+        square = abs(w - h) <= max(w, h) * 0.12
+        if self._fit == "contain" and not square:
+            g.drawPixmap(rect.toRect(), self._backdrop(pm))
+            g.fillRect(rect, QColor(0, 0, 0, 110))
+            side = min(w, h)
+            s = self._scaled_pm(pm, side, side, Qt.KeepAspectRatio)
+            sw, sh = s.width() / dpr, s.height() / dpr
+            # Tall: the cover at the top (the controls sit underneath); wide: centred.
+            top = rect.top() if h > w else rect.top() + (h - sh) / 2
+            g.drawPixmap(QPointF(rect.left() + (w - sw) / 2, top), s)
+            return
+        s = self._scaled_pm(pm, w, h, Qt.KeepAspectRatioByExpanding)
+        # Centre the crop: a 16:9 video thumbnail shows its middle, not its left edge.
+        g.drawPixmap(QPointF(rect.left() + (w - s.width() / dpr) / 2, rect.top() + (h - s.height() / dpr) / 2), s)
 
     def paintEvent(self, _):
         p = current_palette()
@@ -917,19 +1057,13 @@ class CoverArt(QWidget):
             grad.setColorAt(1, QColor(p.surface2))
             g.fillRect(rect, grad)
             if self._old is None and self._pm is None:
-                s = int(self.width() * 0.36)
+                s = int(min(self.width(), self.height()) * 0.36)
                 g.drawPixmap(int((self.width() - s) / 2), int((self.height() - s) / 2),
                              icons.pixmap("music", p.faint, s))
         for pm, op in ((self._old, 1.0 - self._mix), (self._pm, self._mix)):
             if pm is not None and op > 0:
                 g.setOpacity(op)
-                scaled = pm.scaled(self.size() * self.devicePixelRatioF(), Qt.KeepAspectRatioByExpanding,
-                                   Qt.SmoothTransformation)
-                scaled.setDevicePixelRatio(self.devicePixelRatioF())
-                # Centre the crop: a 16:9 video thumbnail shows its middle, not its left edge.
-                dpr = self.devicePixelRatioF()
-                g.drawPixmap(int((self.width() - scaled.width() / dpr) / 2),
-                             int((self.height() - scaled.height() / dpr) / 2), scaled)
+                self._draw(g, pm, rect, p)
         g.setOpacity(1.0)
         g.setClipping(False)
         g.setPen(QPen(with_alpha("#ffffff" if p.dark else "#000000", 22), 1))

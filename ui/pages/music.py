@@ -121,8 +121,17 @@ class NowPlaying(QWidget):
         self.vol.setRange(0, 100)
         self.vol.setFixedWidth(120 if big else 80)
         self.vol.setToolTip("Spotify volume")
-        self.vol.sliderReleased.connect(lambda: self._set_volume(self.vol.value()))
-        self.vol.valueChanged.connect(lambda v: self.vol_label.setText(f"{v}%"))
+        # Every user change — a drag, a click on the track, the wheel, the arrow keys — goes to the
+        # player (a click on the track used to move the slider without telling Spotify, and the next
+        # update put it back at 100%, 2026-10-06). Programmatic updates block signals, so what
+        # Spotify reports is never sent back to it (no feedback loop).
+        self._pending_vol = None
+        self._vol_debounce = QTimer(self)
+        self._vol_debounce.setSingleShot(True)
+        self._vol_debounce.setInterval(220)
+        self._vol_debounce.timeout.connect(self._send_volume)
+        self.vol.valueChanged.connect(self.user_volume)
+        self.vol.sliderReleased.connect(self._send_volume)
         self.vol_label = QLabel("—")
         self.vol_label.setObjectName("Faint")
         self.vol_label.setFixedWidth(34)
@@ -225,19 +234,45 @@ class NowPlaying(QWidget):
         self.title.setText(st["track"])
         self.artist.setText(st.get("artists", ""))
         self.album.setText(st.get("album", "") or "")
-        self.cover.set_url(st.get("image_large") or st.get("image") or "")
+        self.cover.set_url(st.get("image_large") or st.get("image") or "", hires=st.get("image_hires", ""))
         playing = bool(st.get("is_playing"))
         self.play.set_icon("pause" if playing else "play")
         self.shuffle.setChecked(bool(st.get("shuffle")))
+        can = st.get("supports_volume", True) is not False
+        if not self._app_vol:
+            self.vol.setEnabled(can)
+            if not can:
+                self.vol.setToolTip(f"{st.get('device') or 'This device'} doesn't let Spotify change its volume")
         self._show_volume(st)
         set_chip(self.state_chip, ("Playing" if playing else "Paused")
                  + (f" on {st['device']}" if st.get("device") else ""), "accent" if playing else "")
         self.hint.setVisible(self._show_hint and playing and actions.hotwords_on())
         self._tick()
 
+    def user_volume(self, percent: int):
+        """The user moved a volume control (this slider, the mini player's, its scroll wheel)."""
+        percent = max(0, min(100, int(percent)))
+        if self.vol.value() != percent:
+            self.vol.blockSignals(True)
+            self.vol.setValue(percent)
+            self.vol.blockSignals(False)
+        self._pending_vol = percent
+        self._vol_hold = time.time() + 4
+        self.vol_label.setText(f"{percent}%")
+        self.vol_icon.set_icon("volume-x" if percent == 0 else "volume")
+        self._vol_debounce.start()
+        self.rendered.emit()
+
+    def _send_volume(self):
+        if self._pending_vol is None:
+            return
+        v, self._pending_vol = self._pending_vol, None
+        self._vol_debounce.stop()
+        self._set_volume(v)
+
     def _show_volume(self, st, force: bool = False):
         v = st.get("volume")
-        if v is None or self.vol.isSliderDown() or time.time() < self._vol_hold:
+        if v is None or self.vol.isSliderDown() or time.time() < self._vol_hold or self._pending_vol is not None:
             return
         if self._app_vol and not force:
             return                       # the slider shows another app's Windows volume right now
@@ -248,7 +283,7 @@ class NowPlaying(QWidget):
         self.vol_icon.set_icon("volume-x" if int(v) == 0 else "volume")
 
     def _set_volume(self, percent: int):
-        self._vol_hold = time.time() + 3
+        self._vol_hold = time.time() + 3       # until Spotify reports the new volume (then it follows it)
         self.vol_label.setText(f"{int(percent)}%")
         self.vol_icon.set_icon("volume-x" if int(percent) == 0 else "volume")
         if self._app_vol:
@@ -274,10 +309,16 @@ class NowPlaying(QWidget):
         if self.vol_icon.isHidden():
             return
         app = actions.app_stem(np)
-        if self._sp_ok and (str(np.get("source", "")).startswith("spotify") or app == "spotify"):
-            # Spotify's own volume (what its slider and phone app show), not the Windows mixer's
-            # level for Spotify.exe — that left the two out of sync (2026-10-06).
+        if str(np.get("source", "")).startswith("spotify") or app == "spotify" or np.get("is_spotify"):
+            # Spotify's own volume (what its slider and phone app show), never the Windows mixer's
+            # level for Spotify.exe — that left the two out of sync (2026-10-06). Without the
+            # Spotify connection the slider is off rather than quietly changing the mixer.
             app = ""
+            ok = self._sp_ok and ui_bus.spotify.get("supports_volume", True) is not False
+            self.vol.setEnabled(ok)
+            self.vol_icon.setEnabled(ok)
+            if not self._sp_ok:
+                self.vol.setToolTip("Connect Spotify (Settings › Spotify) to change its volume here")
         if app == self._app_vol:
             if not app:
                 self._show_volume(ui_bus.spotify)      # follow changes made in Spotify itself
@@ -328,7 +369,7 @@ class NowPlaying(QWidget):
         app = np.get("app") or ""
         self.artist.setText(f"{by} · {app}" if by and app and by != app else (by or app))
         self.album.setText(np.get("album", ""))
-        self.cover.set_url(np.get("cover", ""))
+        self.cover.set_url(np.get("cover", ""), hires=np.get("cover_hires", ""))
         playing = np.get("is_playing")
         self.play.set_icon("pause" if playing else "play")
         self.prev.setEnabled(np.get("can_previous", False))
@@ -401,10 +442,15 @@ class NowPlaying(QWidget):
         super().showEvent(e)
         self._timer.start()
         self.check()
+        if self._big:
+            actions.spotify_fast_poll(f"now-playing-{id(self)}", True)   # volume changed elsewhere shows fast
 
     def hideEvent(self, e):
         super().hideEvent(e)
         self._timer.stop()
+        self._send_volume()
+        if self._big:
+            actions.spotify_fast_poll(f"now-playing-{id(self)}", False)
 
 
 class GlowCard(QFrame):

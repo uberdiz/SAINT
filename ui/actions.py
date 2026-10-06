@@ -43,6 +43,17 @@ def spotify(tool: str, on_error=None, **kwargs):
               lambda e: on_error and on_error(str(e)))
 
 
+def spotify_fast_poll(key: str, on: bool):
+    """A Spotify volume control is on screen (``on``) or gone: poll Spotify every few seconds while
+    one is visible so changes made in Spotify or on the phone show up (modules/spotify/module.py)."""
+    try:
+        sp = _module("spotify")
+        if sp is not None and hasattr(sp, "want_fast_poll"):
+            sp.want_fast_poll(str(key), bool(on))
+    except Exception:
+        pass
+
+
 def play_pause(on_error=None):
     spotify("spotify.pause" if ui_bus.spotify.get("is_playing") else "spotify.play", on_error)
 

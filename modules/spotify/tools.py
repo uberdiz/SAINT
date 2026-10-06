@@ -135,6 +135,23 @@ def _artists(item: Dict[str, Any]) -> str:
     return ", ".join(a.get("name", "") for a in (item or {}).get("artists", []) if a and a.get("name"))
 
 
+# Spotify's image CDN names the size in the file id: ab67616d0000b273 = 640 px, ...00001e02 = 300 px,
+# ...00004851 = 64 px, and ...000082c1 = the cover as it was uploaded (usually 1400-3000 px).
+_COVER_SIZES = ("ab67616d0000b273", "ab67616d00001e02", "ab67616d00004851")
+_COVER_ORIGINAL = "ab67616d000082c1"
+
+
+def hires_cover_url(url: str) -> str:
+    """The original-resolution version of a Spotify album cover URL ("" if ``url`` isn't one).
+    Callers fall back to ``url`` itself when it can't be fetched."""
+    if not url or "i.scdn.co/image/" not in url:
+        return ""
+    for code in _COVER_SIZES:
+        if code in url:
+            return url.replace(code, _COVER_ORIGINAL, 1)
+    return ""
+
+
 def _items(data: Dict[str, Any], kind: str) -> List[Dict[str, Any]]:
     # Search results can contain null entries (removed items).
     return [x for x in ((data or {}).get(kind + "s") or {}).get("items", []) if x]
@@ -402,10 +419,24 @@ class SpotifyTools:
             "shuffle": data.get("shuffle_state"),
             "repeat": data.get("repeat_state"),
             "context_uri": (data.get("context") or {}).get("uri", ""),
+            # False on devices Spotify won't change the volume of (some speakers, a phone).
+            "supports_volume": (data.get("device") or {}).get("supports_volume", True) is not False,
             "image": images[-1]["url"] if images else "",
             "image_large": images[0]["url"] if images else "",      # Spotify lists 640px first
+            # The same cover at its original resolution (often 1400-2000 px) for big album art.
+            "image_hires": hires_cover_url(images[0]["url"]) if images else "",
             "item": item or None,
         }
+
+    def poll_light(self) -> Dict[str, Any]:
+        """A quick check between the regular polls (while a volume slider is on screen): publish
+        only when something the user can see changed — volume, play state, track or device."""
+        st = self._state(force=True)
+        sig = (st.get("id"), st.get("is_playing"), st.get("volume"), st.get("device"), st.get("shuffle"))
+        if sig != getattr(self, "_light_sig", None):
+            self._light_sig = sig
+            self._publish(st)
+        return st
 
     def current(self):
         st = self._state()
@@ -415,6 +446,8 @@ class SpotifyTools:
         return st
 
     def _publish(self, st: Dict[str, Any]):
+        self._light_sig = (st.get("id"), st.get("is_playing"), st.get("volume"), st.get("device"),
+                           st.get("shuffle"))
         event_bus.emit_event(EventType.SPOTIFY_PLAYBACK_CHANGED,
                              {k: v for k, v in st.items() if k != "item"})
         if st.get("track"):
