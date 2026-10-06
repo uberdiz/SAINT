@@ -46,6 +46,10 @@ winrt-Windows.Media.Control>=3.0
 winrt-Windows.Foundation>=3.0
 winrt-Windows.Foundation.Collections>=3.0
 winrt-Windows.Storage.Streams>=3.0
+# Reading text on screen when an app exposes none (agent observation): Windows' own OCR, local
+winrt-Windows.Media.Ocr>=3.0
+winrt-Windows.Graphics.Imaging>=3.0
+winrt-Windows.Globalization>=3.0
 
 # Spotify login tokens are stored in the Windows Credential Manager
 keyring>=25.0.0
