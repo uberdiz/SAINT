@@ -101,8 +101,14 @@ def run_meta(meta: Meta) -> str:
     from modules.voice.output_policy import output_policy
     if meta.kind in ("stop", "stop_all"):
         cancel.trip("all" if meta.kind == "stop_all" else "current")
+        from modules.agent.autonomy.manager import agent_tasks
+        stopped = agent_tasks.stop_active("you said stop")      # a running task (it can be continued)
         confirmations.clear("dismissed")
         choices.clear()
+        if stopped:
+            from modules.learning.lesson import lessons
+            lessons.stop()
+            return stopped
         from modules.learning.lesson import lessons
         if lessons.stop() and meta.kind == "stop":
             return "Okay, I stopped."
@@ -110,7 +116,8 @@ def run_meta(meta: Meta) -> str:
             return "Stopped everything."
         return "Okay."
     if meta.kind == "status":
-        return activity.describe()
+        from modules.agent.autonomy.manager import agent_tasks
+        return agent_tasks.describe() or activity.describe()
     if meta.kind == "silent_on":
         output_policy.set_silent(meta.minutes)
         mins = int(round(meta.minutes))

@@ -173,6 +173,10 @@ def parse_task(text: str) -> Optional[Intent]:
 def _status() -> Reply:
     from modules.agent.task_memory import task_memory
     from core.activity import activity
+    from modules.agent.autonomy.manager import agent_tasks
+    agent_now = agent_tasks.describe() or agent_tasks.where()
+    if agent_now:
+        return Reply(agent_now)
     now = activity.describe()
     if now and not now.lower().startswith(("i'm not", "nothing")):
         return Reply(now)
@@ -181,6 +185,10 @@ def _status() -> Reply:
 
 def _continue() -> Reply:
     from modules.agent.task_memory import task_memory
+    from modules.agent.autonomy.manager import agent_tasks
+    resumed = agent_tasks.resume()                 # an agent task (v0.4) first, then a plain plan
+    if resumed:
+        return Reply(resumed)
     task = task_memory.resumable()
     if task is None:
         last = task_memory.current()

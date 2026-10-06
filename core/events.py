@@ -141,6 +141,8 @@ class EventType:
     STARTUP_STATUS="startup.status"
     # The active multi-step task changed (modules/agent/task_memory.py)
     TASK_STATE="task.state"
+    # An agent task changed (modules/agent/autonomy): payload is AgentTask.summary()
+    AGENT_TASK="agent.task"
     # SAINT Link (modules/link): a device paired / connected / sent a file, an approval is waiting, ...
     # The payload's "event" says which ("link.connected", "link.file", "link.approval", ...).
     LINK="link"

@@ -185,11 +185,13 @@ class ConversationController:
         """Explicit stop (UI button)."""
         self._handle_interrupt("button")
 
-    def announce(self, text: str, source: str = "system", wait: bool = True):
+    def announce(self, text: str, source: str = "system", wait: bool = True, expects_reply: bool = False):
         """Speak a message that did not come from a user turn (e.g. a reminder).
 
         ``wait=False`` speaks right away over a busy turn (used for "what are
-        you doing?" while a long plan runs)."""
+        you doing?" while a long plan runs). ``expects_reply``: it's a question
+        (a background task asking before a risky step): the answer is heard
+        without the wake word, like after any question SAINT asks in a turn."""
         text = (text or "").strip()
         if not text:
             return
@@ -214,18 +216,21 @@ class ConversationController:
             self._active_turn_id = turn_id
             event_bus.emit_event(EventType.UI_CHAT_RENDER, {
                 "turn_id": turn_id, "role": "assistant", "text": text, "source": source})
-            if not self._tts or not speak:
-                return
-            assistant_state.begin_turn()
-            self._speak_chunk(text, f"announce_{turn_id}", turn_id)
-            time.sleep(0.05)
-            while self._tts.is_speaking() or not self._tts_queue.empty():
+            if self._tts and (speak or expects_reply):
+                assistant_state.begin_turn()
+                self._speak_chunk(text, f"announce_{turn_id}", turn_id)
                 time.sleep(0.05)
-                if self._active_turn_id != turn_id:
-                    break
-            if self._get_state() == ConvState.SPEAKING:
-                self._set_state(ConvState.IDLE)
-            assistant_state.end_turn()
+                while self._tts.is_speaking() or not self._tts_queue.empty():
+                    time.sleep(0.05)
+                    if self._active_turn_id != turn_id:
+                        break
+                if self._get_state() == ConvState.SPEAKING:
+                    self._set_state(ConvState.IDLE)
+                assistant_state.end_turn()
+            if expects_reply:
+                event_bus.emit_event(EventType.CONVERSATION_TURN_END, {
+                    "turn_id": turn_id, "user_text": "", "response": text, "expects_reply": True,
+                    "was_action": False})
 
         threading.Thread(target=run, daemon=True, name="announce").start()
 
@@ -253,6 +258,11 @@ class ConversationController:
             log.info("voice.stop.detected text=%r → stopping", text)
             from core.cancel import cancel
             cancel.trip("all" if meta and meta.kind == "stop_all" else "current")
+            try:
+                from modules.agent.autonomy.manager import agent_tasks
+                agent_tasks.stop_active("you said stop")        # the task SAINT is working on, too
+            except Exception:
+                log.exception("conversation.stop_task_failed")
             self._cancel_current()
             self._set_state(ConvState.IDLE)
             with self._turn_id_lock:

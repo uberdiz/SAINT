@@ -55,6 +55,12 @@ def call(tool: str, **kwargs) -> ToolResult:
 def run_tool(tool: str, describe: str, on_ok: Callable[[object], str], **kwargs) -> Reply:
     """Execute a tool; handle confirmation-required and errors uniformly."""
     res = call(tool, **kwargs)
+    if res.error_code == "CONFIRM_REQUIRED":
+        from modules.agent.autonomy.policy import preapproved
+        if preapproved(tool):
+            # The user just approved this exact agent step ("…delete the build folder. OK?"): no
+            # second question for the same thing (tools that always ask still do).
+            res = get_tool_registry().execute(tool, _confirmed=True, **kwargs)
     if res.success:
         return Reply(on_ok(res.result))
     if res.error_code == "CONFIRM_REQUIRED":

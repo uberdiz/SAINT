@@ -52,6 +52,7 @@ NOISY_EVENTS = frozenset({
     "tts.generation.end",
     "spotify.playback.changed",
     "system.stats",
+    "agent.task",                  # every task state change: the trail goes to logs/tasks.log instead
 })
 
 _ERROR_EVENTS = frozenset({"error", "ai.error", "module.crash", "tool.failed",
@@ -151,6 +152,13 @@ def init_logger(level="Normal", debug=False):
     root.addHandler(log_ring)
     if root.level == logging.NOTSET or root.level > logging.WARNING:
         root.setLevel(logging.WARNING)
+
+    # The agent's activity trail ("15:03:24 task=ab12 ACTION Open VS Code"): its own file as well,
+    # so a task can be followed start to finish (modules/agent/autonomy/manager.py).
+    trail = RotatingFileHandler(os.path.join(LOG_DIR, "tasks.log"), maxBytes=1_000_000, backupCount=3,
+                                encoding="utf-8")
+    trail.setFormatter(logging.Formatter("%(message)s"))
+    logging.getLogger("saint.agent.trail").addHandler(trail)
 
     _quiet_third_party()
     apply_level(level, debug)

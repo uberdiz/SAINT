@@ -65,6 +65,15 @@ class Agent:
     def handle(self, text: str) -> Optional[AgentResult]:
         if not config.get("agent.enabled", True):
             return None
+        if getattr(self._literal, "on", False):
+            return self._handle(text)
+        # A task running in the background waits at its next step while the user talks to SAINT,
+        # so a new instruction ("actually use the other monitor") never races a step halfway through.
+        from modules.agent.autonomy.manager import agent_tasks
+        with agent_tasks.user_turn():
+            return self._handle(text)
+
+    def _handle(self, text: str) -> Optional[AgentResult]:
         # "Hey SAINT, write an email to Mr Norton" heard without the wake detector (a barge-in,
         # a follow-up, typed) kept its greeting and became "I haven't learned how to hey saint
         # write an email..." (2026-10-05). Only a greeted name is stripped: "Saint Louis weather" stays.
@@ -117,6 +126,16 @@ class Agent:
             log.info("agent.intent meta.%s", meta.kind)
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": f"meta.{meta.kind}", "text": text[:80]})
             return AgentResult(reply, f"meta.{meta.kind}")
+
+        # About the task SAINT is working on: pause, continue, "what's next?", "why did that fail?",
+        # "actually use the other monitor", "remember how I just did that" (modules/agent/autonomy).
+        if not literal:
+            from modules.agent.autonomy import control
+            ctl = control.handle(text)
+            if ctl is not None:
+                log.info("agent.intent %s", ctl["intent"])
+                event_bus.emit_event(EventType.AGENT_INTENT, {"intent": ctl["intent"], "text": text[:80]})
+                return AgentResult(ctl["text"], ctl["intent"], ok=ctl["ok"], expects_reply=ctl["expects_reply"])
 
         # Being walked through a task, or running one that was taught that way:
         # the next utterance is the next step / the answer to SAINT's question.
@@ -230,6 +249,18 @@ class Agent:
                     reply = Reply("Something went wrong running that, so I stopped.", ok=False)
             return self._lesson_result(text, reply, t0, emit=False)
 
+        # A job rather than a command — a learned procedure, a built-in goal ("set up my coding
+        # workspace", "run the tests"), or several steps with "tell me when it's ready": the agent
+        # task loop observes, acts, verifies and recovers on its own thread (modules/agent/autonomy).
+        if not literal:
+            from modules.agent.autonomy.manager import agent_tasks
+            started = agent_tasks.try_start(text)
+            if started is not None:
+                log.info("agent.intent agent.task %r", text[:80])
+                event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "agent.task", "text": text[:80]})
+                return AgentResult(started["text"], "agent.task", ok=started.get("ok", True),
+                                   expects_reply=started.get("expects_reply", False))
+
         from modules.learning.skills import skills, run_steps
         skill = skills.match(text)
         if skill is not None:
@@ -261,6 +292,15 @@ class Agent:
             log.info("agent.intent learning.lesson_offer text=%r", text[:80])
             event_bus.emit_event(EventType.AGENT_INTENT, {"intent": "learning.lesson_offer", "text": text[:80]})
             return self._lesson_result(text, lessons.offer(text), t0, emit=False)
+        if intent is None and not literal:
+            from modules.agent.autonomy import planner as task_planner
+            if task_planner.should_task(text):
+                from modules.agent.autonomy.manager import agent_tasks
+                started = agent_tasks.try_start(text, allow_model=True)
+                if started is not None:
+                    log.info("agent.intent agent.task (model plan) %r", text[:80])
+                    return AgentResult(started["text"], "agent.task", ok=started.get("ok", True),
+                                       expects_reply=started.get("expects_reply", False))
         if intent is None:
             from modules.learning import planner
             if planner.worth_planning(text):
