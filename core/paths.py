@@ -55,12 +55,22 @@ def installed_exe() -> Optional[Path]:
     return exe if exe.exists() else None
 
 
+def has_user_data(folder: Path) -> bool:
+    """Does ``folder`` hold a SAINT user's data (settings or memory), not just shipped models?"""
+    try:
+        return (folder / "config.json").is_file() or (folder / "memory").is_dir()
+    except OSError:
+        return False
+
+
 def base_data_dir() -> Path:
     """The real data folder (no profile): where the big model files live for every profile."""
     override = os.environ.get("SAINT_DATA_DIR", "").strip()
     if override:
         path = Path(override)
-    elif FROZEN or installed_exe() is not None:
+    elif FROZEN or installed_exe() is not None or has_user_data(_local_app_data() / "SAINT"):
+        # v0.4: a run from source also uses %LOCALAPPDATA%\SAINT once SAINT has data there, so a new
+        # checkout never starts with an empty SAINT (core/migration.py brings older data across).
         path = _local_app_data() / "SAINT"
     else:
         path = PROJECT_ROOT / "data"

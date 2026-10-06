@@ -61,8 +61,12 @@ if _profile_from_args() and not os.environ.get("SAINT_DATA_DIR"):
     from core import profiles as _profiles
     _profiles.ensure(_profile_from_args())
 
-from core.config import config
-from core.logger import init_logger
+# Bring older SAINT data forward before anything reads it (backed up first; never deletes).
+from core import migration as _migration  # noqa: E402
+_migration_report = _migration.run()
+
+from core.config import config  # noqa: E402
+from core.logger import init_logger  # noqa: E402
 
 init_logger(config.get("logging.level", "Normal"), config.get("logging.debug", False))
 
@@ -75,6 +79,8 @@ from core.paths import data_path          # noqa: E402
 from core.setup import run_first_run_setup, SetupWizard  # noqa: E402
 
 log = logging.getLogger("saint.app")
+if _migration_report.get("applied") or _migration_report.get("error"):
+    log.info("migration %s", _migration_report)
 
 
 def show_setup_dialog():
@@ -145,6 +151,12 @@ def main():
         window.show()
     if setup_result.get("first_run") and not setup_result.get("skipped"):
         QTimer.singleShot(800, show_setup_dialog)
+    if _migration_report.get("backup"):
+        from core.events import event_bus, EventType
+        QTimer.singleShot(2500, lambda: event_bus.emit_event(EventType.NOTIFY, {
+            "title": "SAINT was upgraded",
+            "message": "Your settings, memory, skills and history came across. A backup of the old data is in "
+                       + _migration_report["backup"]}))
 
     code = app.exec()
     runtime.shutdown()
