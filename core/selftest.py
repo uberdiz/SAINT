@@ -116,7 +116,7 @@ def _qr():
     from modules.link.service import qr_matrix
     from ui.components.qr_view import MIN_MODULE_PX, module_px
     m = qr_matrix(PairingOffer(os.urandom(5), "own", 9e12).uri("192.168.1.20", 8765, "PC",
-                                                               alternates=["100.64.1.2", "2601:18c::1"]))
+                                                               alternates=["100.64.1.2", "2001:db8::1"]))
     if not m:
         raise RuntimeError("segno produced no QR code")
     cell = module_px(260, len(m))

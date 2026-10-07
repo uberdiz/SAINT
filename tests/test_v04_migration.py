@@ -52,7 +52,7 @@ def v03(tmp_path):
          "steps": [{"label": "moving", "text": "move saint to my second monitor", "status": "pending"}]}]}))
     (root / "history.jsonl").write_text('{"t": 1, "text": "play my gym playlist"}\n' * 50)
     (root / "scenes.json").write_text(json.dumps([{"name": "Gaming mode", "steps": ["pause the music"]}]))
-    (root / "link" / "identity.json").write_text(json.dumps({"device_id": "pc-1", "name": "COMPUTAH"}))
+    (root / "link" / "identity.json").write_text(json.dumps({"device_id": "pc-1", "name": "HOME-PC1"}))
     (root / "link" / "peers.json").write_text(json.dumps([{"id": "iphone", "name": "iPhone", "public_key": "ab"}]))
     (root / "models" / "hf" / "big.bin").write_bytes(b"\x00" * 100_000)
     (root / "saint.lock").write_text("123")

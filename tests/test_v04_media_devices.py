@@ -218,8 +218,8 @@ def test_qr_view_asks_for_enough_room_to_stay_scannable(app):
     from modules.link.service import qr_matrix
     from modules.link.identity import PairingOffer
     offer = PairingOffer(os.urandom(5), "own", 9e12)
-    uri = offer.uri("192.168.1.214", 8765, "COMPUTAH", alternates=[
-        "10.0.0.37", "computah.tail1234.ts.net", "2601:18c:8380:3b10:9d2c:1f4b:7e3a:55c1", "73.142.201.17"])
+    uri = offer.uri("192.168.1.123", 8765, "HOME-PC1", alternates=[
+        "10.0.0.37", "home-pc1.tail1234.ts.net", "2001:db8:8380:3b10:9d2c:1f4b:7e3a:55c1", "203.0.113.170"])
     m = qr_matrix(uri)
     if m is None:
         pytest.skip("segno not installed")
