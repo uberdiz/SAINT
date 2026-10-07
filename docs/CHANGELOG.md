@@ -3,6 +3,90 @@
 Moved out of the README on 2026-10-05; newest first.
 
 
+**0.4.0 — 2026-10-07 — SAINT does whole tasks and checks its work:**
+
+SAINT's version now starts again at 0.4.0. Your data is migrated automatically on first start (see the end of
+this entry).
+
+- **Agent tasks.** A request with several parts ("set up my coding workspace for SAINT, open Discord and put
+  Spotify on my second monitor", "start the dev server and tell me when it's ready") becomes a task SAINT runs
+  step by step: it observes first, plans (a procedure it learned → a built-in goal → your own clauses → the
+  local model only when nothing else fits), acts through the same tools and permission checks as speech, checks
+  each step really happened (window, process, port, web page, file, monitor, Spotify, the browser's address, text
+  on screen), and recovers within limits (2 retries per step, 6 per task, 15 minutes). Simple requests still go
+  straight to one tool with no planner and no model call.
+- **Talk to the task.** "Pause", "continue", "what's next?", "why did that fail?", "do that again", "actually put
+  Spotify on my main monitor" — only while there is a task (a bare "pause" with music playing is still the
+  music). A question in the middle of a task ("which window?") waits for your answer and carries on from that
+  step. A task interrupted by a restart comes back paused.
+- **Risk levels and permission modes.** Every step is low, medium or high risk. Safe runs only low steps;
+  Confirm (the default) asks once for a plan with medium steps and at each high one; Autonomous asks only for
+  high ones. Deleting, uninstalling, shell commands, power and payments are always high.
+- **Recovery that finds another way.** An app it can't find is looked up again among your installed apps; a
+  missing window is opened first; Spotify with no device is opened and retried; a dev server that crashed has
+  its output read — missing packages are installed (asks first in Confirm mode) and a busy port is rechecked. Only
+  then is the local model asked, with a few lines instead of the whole conversation, and its answer must be a
+  command SAINT understands.
+- **Learning procedures.** A finished task is saved as a procedure (its steps stay in `skills.json`, so it shows on
+  Automations › Learned and older SAINT versions still run it). A procedure only changes when a real run proves
+  the change: a recovery that passed its check, or a step you corrected mid-task. "Remember how I just did that"
+  saves the last task.
+- **Development helper.** Finds a project, works out how to start, test and install it, runs tests with the
+  failures summarised, starts and stops dev servers (output kept, URL detected, stopped when SAINT quits),
+  diagnoses why something won't start, installs dependencies, clones a repository and finds a definition. Commands
+  that run things are medium risk; nothing edits your code on its own.
+- **Reading the screen locally.** Windows' built-in OCR reads text on screen before any vision model is used:
+  app/API data → windows and processes → UI Automation → OCR → a vision model (only when allowed).
+
+**The interface, redesigned around tasks:**
+
+- **Overview** (the current task card with its steps and checks, what needs your attention, devices, health),
+  **Tasks** (current and past tasks, with pause / continue / cancel) and **Activity** (each tool call and its
+  result, in plain words). Home now opens Overview.
+- **Your layout.** Settings → Appearance → Layout: hide and reorder sidebar pages and Overview panels, turn the
+  status bar off, choose the monitor SAINT opens on. Applied without a restart.
+- **Health panel** on Overview and System: microphone, wake word, speech, voice, model, Spotify, Link, with what
+  to do when one is down. Device cards show each device's connection (Wi-Fi, Tailscale, internet) and latency.
+- A consistent design system (spacing, type, status colours) and reusable components behind every page.
+- The window fits on smaller screens (down to 760 × 520) and opens on the monitor you chose.
+
+**Fixed:**
+
+- **The pairing QR code was cut off** on smaller or scaled screens. The cause was the inbox folder path on the
+  Devices page, which never wrapped and pushed the page wider than the window. The QR now draws whole at any
+  scaling, with sharp edges and its quiet zone, and opens full size when clicked; the code and address have Copy
+  buttons.
+- **Mini player volume didn't change Spotify** — moving the slider dipped and then jumped back to full. The slider,
+  mouse wheel and Now Playing page now set Spotify's own volume (after a short pause while you drag), never the
+  Windows mixer, and follow changes made in Spotify or on your phone within a few seconds while a player is
+  open. Devices whose volume Spotify can't control say so instead of pretending.
+- **Blurry album art.** Covers are loaded at Spotify's highest resolution (falling back to the normal size),
+  decoded off the interface thread and scaled once. A site's app icon (Chrome's logo for a YouTube video) is
+  no longer stretched across the mini player as if it were album art.
+- Task steps that were removed stayed painted on top of new ones, and rebuilt Overview panels could be squeezed
+  to a few pixels high.
+
+**Upgrading from an earlier SAINT:**
+
+- On first start SAINT backs up every file in `%LOCALAPPDATA%\SAINT` to
+  `%LOCALAPPDATA%\SAINT-backups\before-v0.4.0-<time>` (and checks the copy), then migrates: settings to version 8
+  (every value kept, new defaults added), older tasks into the Tasks page, learned skills into procedures, and a
+  version marker. Each step is recorded, so an interrupted upgrade resumes where it stopped; nothing is deleted.
+  Data from an older SAINT folder is imported when the new one is empty. `python -m core.migration --check` lists
+  what's pending.
+- A source checkout now uses `%LOCALAPPDATA%\SAINT` once SAINT has data there, so a new checkout no longer starts
+  empty (`SAINT_DATA_DIR` still overrides it).
+
+**Packaging:**
+
+- `SAINT.exe --selftest report.json` checks an install without a microphone or window: libraries, bundled models,
+  the data folder, every page, the pairing QR, OCR, the agent and (optionally) a full voice round trip. The build
+  runs it on the packaged app with a fresh data folder and no Python on `PATH`, and fails if a required check fails.
+- The installer was tested end to end: silent install, the self-test from the installed folder, uninstall
+  (program folder, Start menu entry and uninstall entry removed; `%LOCALAPPDATA%\SAINT` kept).
+- 1,432 automated tests pass (1,343 before this release).
+
+
 **2026-10-06 — your phone from anywhere without Tailscale, every device's log on your PC:**
 
 - **Reach this PC from anywhere.** Devices → *Away from home*: SAINT forwards its port on your router (UPnP),
